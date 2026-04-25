@@ -1,31 +1,52 @@
 (function () {
+  const MODAL_MAP = {
+    "edit-config-id": "edit-config-id-modal",
+    "config-name": "config-name-modal",
+    "config-type": "config-type-modal",
+    "api-base": "api-base-modal",
+    "api-key": "api-key-modal",
+    "model-name": "model-name-modal",
+    "config-desc": "config-desc-modal",
+    "test-result": "test-result-modal",
+    "config-list-body": "config-list-body-modal",
+    "form-title": "form-title-modal",
+    "new-config-btn": "new-config-btn-modal",
+    "save-config-btn": "save-config-btn-modal",
+    "reset-form-btn": "reset-form-btn-modal",
+    "test-config-btn": "test-config-btn-modal"
+  };
+
   document.addEventListener("DOMContentLoaded", () => {
     bindConfigEvents();
     if ((window.GLOBAL?.configList || []).length) renderConfigList();
   });
 
+  function getEl(id) {
+    return document.getElementById(MODAL_MAP[id] || id);
+  }
+
   function bindConfigEvents() {
     if (document._configEventsBound) return;
     document._configEventsBound = true;
 
-    document.getElementById("new-config-btn")?.addEventListener("click", (e) => {
+    getEl("new-config-btn")?.addEventListener("click", (e) => {
       e.preventDefault();
       resetForm();
     });
-    document.getElementById("save-config-btn")?.addEventListener("click", async (e) => {
+    getEl("save-config-btn")?.addEventListener("click", async (e) => {
       e.preventDefault();
       await saveConfig();
     });
-    document.getElementById("reset-form-btn")?.addEventListener("click", (e) => {
+    getEl("reset-form-btn")?.addEventListener("click", (e) => {
       e.preventDefault();
       resetForm();
     });
-    document.getElementById("test-config-btn")?.addEventListener("click", async (e) => {
+    getEl("test-config-btn")?.addEventListener("click", async (e) => {
       e.preventDefault();
       await testConfig();
     });
 
-    const tbody = document.getElementById("config-list-body");
+    const tbody = getEl("config-list-body");
     if (tbody && !tbody._delegated) {
       tbody.addEventListener("click", async (e) => {
         const editBtn = e.target.closest(".cfg-edit");
@@ -43,7 +64,7 @@
   }
 
   function renderConfigList() {
-    const tbody = document.getElementById("config-list-body");
+    const tbody = getEl("config-list-body");
     if (!tbody) return;
     const list = window.GLOBAL?.configList || [];
 
@@ -71,13 +92,13 @@
 
   function collectForm() {
     return {
-      id: (document.getElementById("edit-config-id")?.value || "").trim(),
-      name: (document.getElementById("config-name")?.value || "").trim(),
-      config_type: document.getElementById("config-type")?.value || "chat",
-      api_base: (document.getElementById("api-base")?.value || "").trim(),
-      api_key: (document.getElementById("api-key")?.value || "").trim(),
-      model_name: (document.getElementById("model-name")?.value || "").trim(),
-      description: (document.getElementById("config-desc")?.value || "").trim(),
+      id: (getEl("edit-config-id")?.value || "").trim(),
+      name: (getEl("config-name")?.value || "").trim(),
+      config_type: getEl("config-type")?.value || "chat",
+      api_base: (getEl("api-base")?.value || "").trim(),
+      api_key: (getEl("api-key")?.value || "").trim(),
+      model_name: (getEl("model-name")?.value || "").trim(),
+      description: (getEl("config-desc")?.value || "").trim(),
     };
   }
 
@@ -94,7 +115,7 @@
   function resetForm() {
     setFormTitle("新增配置");
     setFormValues({ id: "", name: "", config_type: "chat", api_base: "", api_key: "", model_name: "", description: "" });
-    const testResult = document.getElementById("test-result");
+    const testResult = getEl("test-result");
     if (testResult) testResult.textContent = "";
   }
 
@@ -109,11 +130,11 @@
       model_name: cfg.model_name || "",
       description: cfg.description || cfg.desc || "",
     });
-    window.activateTab && window.activateTab("config");
+    window.openConfigModal && window.openConfigModal();
   }
 
   function setFormTitle(title) {
-    const titleEl = document.getElementById("form-title");
+    const titleEl = getEl("form-title");
     if (titleEl) titleEl.innerHTML = `<i class="fa fa-edit"></i> ${escapeHtml(title)}`;
   }
 
@@ -128,7 +149,7 @@
       "config-desc": values.description,
     };
     Object.entries(map).forEach(([id, val]) => {
-      const el = document.getElementById(id);
+      const el = getEl(id);
       if (el) el.value = val || "";
     });
   }
@@ -161,6 +182,7 @@
       renderConfigList();
       alert(data.id ? "配置已更新" : "配置已创建");
       resetForm();
+      window.closeConfigModal && window.closeConfigModal();
     } catch (e) {
       console.error("[保存配置] 错误：", e);
       alert(`保存失败：${e.message}`);
@@ -187,7 +209,7 @@
     const err = validateForm(data);
     if (err) return alert(err);
 
-    const resultEl = document.getElementById("test-result");
+    const resultEl = getEl("test-result");
     if (resultEl) {
       resultEl.style.color = "#94A3B8";
       resultEl.textContent = "测试中...";

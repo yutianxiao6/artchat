@@ -19,6 +19,7 @@
 
   document.addEventListener("DOMContentLoaded", async () => {
     bindTabClicksOnce();
+    bindConfigModal();
 
     const negativePromptInput = document.getElementById("negative-prompt");
     if (negativePromptInput && !negativePromptInput.value) {
@@ -28,12 +29,41 @@
     bindSelects();
     await loadAllConfigs();
 
-    const activeBtn = document.querySelector(".tab-nav .tab-btn.active") || document.querySelector(".tab-nav .tab-btn");
-    activateTab(activeBtn?.getAttribute("data-tab") || "config", { force: true });
+    activateTab("chat", { force: true });
     updateButtonStatus();
+    const hasConfigs = Array.isArray(GLOBAL.configList) && GLOBAL.configList.length > 0;
+    if (!hasConfigs) openConfigModal();
   });
 
-  function bindSelects() {
+  function bindConfigModal() {
+    const openBtn = document.getElementById("open-config-modal-btn");
+    const closeBtn = document.getElementById("close-config-modal-btn");
+    const modal = document.getElementById("config-modal");
+    if (openBtn && !openBtn._bound) {
+      openBtn.addEventListener("click", () => openConfigModal());
+      openBtn._bound = true;
+    }
+    if (closeBtn && !closeBtn._bound) {
+      closeBtn.addEventListener("click", () => closeConfigModal());
+      closeBtn._bound = true;
+    }
+    if (modal && !modal._bound) {
+      modal.addEventListener("click", (e) => {
+        if (e.target === modal) closeConfigModal();
+      });
+      modal._bound = true;
+    }
+  }
+
+  function openConfigModal() {
+    document.getElementById("config-modal")?.classList.add("active");
+    window.renderConfigList && window.renderConfigList();
+  }
+
+  function closeConfigModal() {
+    document.getElementById("config-modal")?.classList.remove("active");
+  }
+
     const chatSelect = document.getElementById("chat-config-select");
     const imageSelect = document.getElementById("image-config-select");
 
@@ -87,6 +117,10 @@
       requestAnimationFrame(() => {
         window.initImageModule && window.initImageModule();
         updateButtonStatus();
+      });
+    } else if (tabId === "assets") {
+      requestAnimationFrame(() => {
+        window.initImageModule && window.initImageModule();
       });
     }
 
@@ -172,4 +206,6 @@
   window.loadAllConfigs = loadAllConfigs;
   window.updateConfigSelectOptions = updateConfigSelectOptions;
   window.updateButtonStatus = updateButtonStatus;
+  window.openConfigModal = openConfigModal;
+  window.closeConfigModal = closeConfigModal;
 })();

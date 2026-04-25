@@ -72,6 +72,7 @@
             font-size: 24px;
         }
         .tab-nav { display: flex; gap: 8px; }
+        .header-actions{display:flex;align-items:center;gap:10px}.icon-btn{width:40px;height:40px;border-radius:12px;border:none;background:transparent;color:var(--text-secondary);cursor:pointer;display:inline-flex;align-items:center;justify-content:center;font-size:18px;transition:var(--transition)}.icon-btn:hover{background:var(--bg-hover);color:var(--text-primary)}
         .tab-btn {
             padding: 8px 20px;
             border-radius: var(--border-radius);
@@ -254,6 +255,7 @@
         }
         .chat-input:focus { border-color: var(--primary-color); box-shadow: 0 0 0 2px rgba(22, 93, 255, 0.2); }
         .chat-send-btn { position: absolute; right: 12px; bottom: 12px; padding: 8px 20px; height: 38px; }
+        .modal-mask{position:fixed;inset:0;background:rgba(2,6,23,.76);backdrop-filter:blur(4px);display:none;align-items:center;justify-content:center;z-index:9999;padding:24px}.modal-mask.active{display:flex}.modal-card{width:min(980px,100%);max-height:calc(100vh - 48px);overflow:auto;background:var(--bg-card);border:1px solid var(--border-color);border-radius:16px;box-shadow:var(--shadow-md)}.modal-card .card{margin:0;box-shadow:none;border:none;background:transparent}.modal-stack{display:grid;gap:16px}
 
         /* 图片生成界面样式 */
         .image-toolbar { background-color: var(--bg-card); border-bottom: 1px solid var(--border-color); padding: 16px 24px; overflow-x: auto; }
@@ -316,11 +318,7 @@
             API 模型调用客户端
         </div>
         <nav class="tab-nav">
-            <button class="tab-btn active" data-tab="config">
-                <i class="fa fa-cog"></i>
-                <span>配置管理</span>
-            </button>
-            <button class="tab-btn" data-tab="chat">
+            <button class="tab-btn active" data-tab="chat">
                 <i class="fa fa-comments"></i>
                 <span>聊天对话</span>
             </button>
@@ -328,14 +326,18 @@
                 <i class="fa fa-picture-o"></i>
                 <span>无限画布</span>
             </button>
-            
         </nav>
+        <div class="header-actions">
+            <button class="icon-btn" id="open-config-modal-btn" title="配置">
+                <i class="fa fa-cog"></i>
+            </button>
+        </div>
     </header>
 
     <!-- 主内容区 -->
     <main class="main-container">
         <!-- 1. 配置管理标签页 -->
-        <div id="config" class="tab-content active custom-scrollbar">
+        <div id="config" class="tab-content custom-scrollbar" style="display:none;">
             <div class="card" style="max-width: 1000px; margin: 24px auto;">
                 <div class="card-header">
                     <h2 class="card-title">
@@ -490,6 +492,53 @@
             </div>
         </div>
     </main>
+
+    <div class="modal-mask" id="config-modal">
+        <div class="modal-card custom-scrollbar">
+            <div class="card-header">
+                <h2 class="card-title"><i class="fa fa-cog"></i> 配置管理</h2>
+                <button class="btn btn-default" id="close-config-modal-btn">关闭</button>
+            </div>
+            <div class="card-body modal-stack">
+                <div class="card">
+                    <div class="card-header">
+                        <h2 class="card-title"><i class="fa fa-wrench"></i> 模型配置管理</h2>
+                        <button class="btn btn-primary" id="new-config-btn-modal"><i class="fa fa-plus"></i> 新增配置</button>
+                    </div>
+                    <div class="card-body">
+                        <div class="table-container">
+                            <table class="table" id="config-table-modal">
+                                <thead><tr><th>配置名称</th><th>配置类型</th><th>模型名称</th><th style="text-align: right;">操作</th></tr></thead>
+                                <tbody id="config-list-body-modal"></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+                <div class="card">
+                    <div class="card-header">
+                        <h2 class="card-title" id="form-title-modal"><i class="fa fa-edit"></i> 新增配置</h2>
+                    </div>
+                    <div class="card-body">
+                        <input type="hidden" id="edit-config-id-modal">
+                        <div class="form-grid">
+                            <div class="form-group"><label class="form-label">配置名称</label><input type="text" class="form-input" id="config-name-modal"></div>
+                            <div class="form-group"><label class="form-label">配置类型</label><select class="form-select" id="config-type-modal"><option value="chat">仅聊天模型</option><option value="image">仅图片模型</option><option value="both">聊天+图片通用</option></select></div>
+                        </div>
+                        <div class="form-group"><label class="form-label">API Base 地址</label><input type="text" class="form-input" id="api-base-modal"></div>
+                        <div class="form-group"><label class="form-label">API Key 秘钥</label><input type="password" class="form-input" id="api-key-modal"></div>
+                        <div class="form-group"><label class="form-label">模型名称</label><input type="text" class="form-input" id="model-name-modal"></div>
+                        <div class="form-group"><label class="form-label">配置描述（可选）</label><textarea class="form-textarea" id="config-desc-modal" rows="2"></textarea></div>
+                        <div class="btn-group">
+                            <button class="btn btn-success" id="test-config-btn-modal"><i class="fa fa-check"></i> 测试连接</button>
+                            <button class="btn btn-primary" id="save-config-btn-modal"><i class="fa fa-save"></i> 保存配置</button>
+                            <button class="btn btn-default" id="reset-form-btn-modal"><i class="fa fa-refresh"></i> 重置表单</button>
+                        </div>
+                        <div id="test-result-modal" style="margin-top: 12px; font-size: 14px;"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
 
     <!-- JS模块引入 -->
     <script src="/static/js/main.js?v=20260425k"></script>
