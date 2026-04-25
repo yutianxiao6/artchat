@@ -85,6 +85,7 @@
     refresh();
   }
 
+  function renderConfigList() {
     const tbody = getEl("config-list-body");
     if (!tbody) return;
     const list = window.GLOBAL?.configList || [];
