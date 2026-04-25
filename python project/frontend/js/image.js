@@ -699,8 +699,10 @@
     if (categoryModalSelect) { categoryModalSelect.style.display = STATE.categoryModal.mode === 'move' ? 'block' : 'none'; categoryModalSelect.innerHTML = moveOptions; categoryModalSelect.value = STATE.categoryModal.category || DEFAULT_CATEGORY; }
     if (history) history.innerHTML = sortedHistory.length ? sortedHistory.map((item) => `<article class="canvas-history-item ${item.id === STATE.currentHistoryId ? "active" : ""}"><div class="canvas-history-body"><div class="canvas-item-title">${escapeHtml(item.title || "未命名会话")}</div><div class="canvas-item-meta">${escapeHtml(item.summary || "空白画布")}</div><div class="canvas-item-actions"><button class="btn btn-default" data-open-history="${item.id}">打开</button></div></div></article>`).join("") : `<div class="canvas-empty-card">还没有历史会话。<br>当前画布会自动保存为第一条记录。</div>`;
 
-    document.getElementById('create-asset-category-btn-modal')?.onclick = (event) => { event.preventDefault(); event.stopPropagation(); openCategoryModal('create'); };
-    document.getElementById('confirm-asset-category-modal-btn')?.onclick = (event) => { event.preventDefault(); event.stopPropagation(); confirmCategoryModal(); };
+    const createCategoryBtn = document.getElementById('create-asset-category-btn-modal');
+    if (createCategoryBtn) createCategoryBtn.onclick = (event) => { event.preventDefault(); event.stopPropagation(); openCategoryModal('create'); };
+    const confirmCategoryBtn = document.getElementById('confirm-asset-category-modal-btn');
+    if (confirmCategoryBtn) confirmCategoryBtn.onclick = (event) => { event.preventDefault(); event.stopPropagation(); confirmCategoryModal(); };
     document.querySelectorAll('[data-close-category-modal]').forEach((el) => {
       el.onclick = (event) => { event.preventDefault(); event.stopPropagation(); closeCategoryModal(); };
     });
