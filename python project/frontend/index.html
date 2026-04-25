@@ -326,8 +326,9 @@
             </button>
             <button class="tab-btn" data-tab="image">
                 <i class="fa fa-picture-o"></i>
-                <span>图片生成</span>
+                <span>无限画布</span>
             </button>
+            
         </nav>
     </header>
 
@@ -475,112 +476,25 @@
         </div>
 
         <!-- 3. 图片生成标签页 -->
-        <div id="image" class="tab-content">
-            <div class="image-toolbar custom-scrollbar">
-                <div class="toolbar-grid">
-                    <div>
-                        <label class="form-label">选择图片配置</label>
-                        <select class="form-select" id="image-config-select">
-                            <option value="">请先在配置管理中创建图片模型配置</option>
-                        </select>
-                    </div>
-                    <div>
-                        <label class="form-label">生成模式</label>
-                        <select class="form-select" id="image-mode">
-                            <option value="text2image">文生图</option>
-                            <option value="image2image">图生图</option>
-                        </select>
-                    </div>
-                    <div>
-                        <label class="form-label">尺寸比例</label>
-                        <select class="form-select" id="image-size">
-                            <option value="1024x1024">1:1 (1024x1024) - 推荐</option>
-                            <option value="1536x1024">16:9 (1536x1024) 横屏</option>
-                            <option value="1024x1536">9:16 (1024x1536) 竖屏</option>
-                            <option value="2048x2048">2K (2048x2048)</option>
-                            <option value="2048x1152">2K横屏 (2048x1152)</option>
-                            <option value="3840x2160">4K横屏 (3840x2160)</option>
-                            <option value="2160x3840">4K竖屏 (2160x3840)</option>
-                            <option value="custom">自定义尺寸</option>
-                        </select>
-                    </div>
-                    <div>
-                        <label class="form-label">生成数量</label>
-                        <input type="number" class="form-input" id="image-count" min="1" max="4" value="1">
-                    </div>
+        <div id="image" class="tab-content" style="height: calc(100vh - 64px); overflow: hidden;">
+        </div>
+
+        <div id="assets" class="tab-content custom-scrollbar">
+            <div class="card" style="max-width: 1200px; margin: 24px auto;">
+                <div class="card-header">
+                    <h2 class="card-title"><i class="fa fa-folder-open-o"></i> 素材库</h2>
                 </div>
-            </div>
-
-            <div class="image-main custom-scrollbar">
-                <div class="image-container">
-                    <!-- 图生图上传区 -->
-                    <div class="upload-area" id="image-upload-area">
-                        <input type="file" id="image-upload" accept="image/*" hidden>
-                        <div id="upload-preview">
-                            <i class="fa fa-cloud-upload" style="font-size: 48px; color: var(--text-disabled);"></i>
-                            <p style="margin-top: 12px; color: var(--text-secondary);">点击或拖拽图片到此处上传参考图</p>
-                        </div>
-                        <button class="btn btn-default" id="upload-btn" style="margin-top: 12px;">选择图片</button>
-                    </div>
-
-                    <!-- 自定义尺寸区 -->
-                    <div class="card custom-size-area" id="custom-size-area">
-                        <div class="card-body">
-                            <div class="form-grid">
-                                <div class="form-group" style="margin-bottom: 0;">
-                                    <label class="form-label">宽度 (px) - 必须是16的倍数</label>
-                                    <input type="number" class="form-input" id="image-width" value="1024" min="256" max="3840" step="16">
-                                </div>
-                                <div class="form-group" style="margin-bottom: 0;">
-                                    <label class="form-label">高度 (px) - 必须是16的倍数</label>
-                                    <input type="number" class="form-input" id="image-height" value="1024" min="256" max="3840" step="16">
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- 提示词区 -->
-                    <div class="card prompt-card">
-                        <div class="card-body">
-                            <div class="form-group">
-                                <label class="form-label">正向提示词</label>
-                                <textarea class="form-textarea" id="prompt" rows="4" placeholder="详细描述你想要生成的图片内容，越详细效果越好"></textarea>
-                            </div>
-                            <div class="form-group" style="margin-bottom: 0;">
-                                <label class="form-label">反向提示词（已默认配置）</label>
-                                <textarea class="form-textarea" id="negative-prompt" rows="3"></textarea>
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- 生成按钮 -->
-                    <div class="generate-btn-wrap">
-                        <button class="btn btn-primary generate-btn" id="generate-image-btn" disabled>
-                            <i class="fa fa-magic"></i>
-                            生成图片
-                        </button>
-                        <div class="loading-tip" id="generate-loading">
-                            <i class="fa fa-spinner fa-spin"></i>
-                            正在生成图片，请稍候...
-                        </div>
-                    </div>
-
-                    <!-- 图片结果区 -->
-                    <div class="image-grid" id="image-result">
-                        <div class="empty-tip" style="grid-column: 1 / -1;" id="image-empty-tip">
-                            <i class="fa fa-picture-o"></i>
-                            <p>生成的图片将在这里显示</p>
-                        </div>
-                    </div>
+                <div class="card-body">
+                    <div id="assets-library-root"></div>
                 </div>
             </div>
         </div>
     </main>
 
     <!-- JS模块引入 -->
-    <script src="/static/js/main.js"></script>
-    <script src="/static/js/config.js"></script>
-    <script src="/static/js/chat.js"></script>
-    <script src="/static/js/image.js"></script>
+    <script src="/static/js/main.js?v=20260425k"></script>
+    <script src="/static/js/config.js?v=20260425k"></script>
+    <script src="/static/js/chat.js?v=20260425k"></script>
+    <script src="/static/js/image.js?v=20260425k"></script>
 </body>
 </html>
