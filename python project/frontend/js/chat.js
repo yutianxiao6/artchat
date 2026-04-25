@@ -60,6 +60,7 @@ function getProviderBadge(modelName = "") {
   return { label: "AI", cls: "default" };
 }
 
+function escapeHtml(str = "") {
   return String(str)
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
