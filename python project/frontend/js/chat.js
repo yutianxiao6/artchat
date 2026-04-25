@@ -42,7 +42,24 @@ async function loadDeps() {
   } catch {}
 }
 
-function escapeHtml(str = "") {
+function getConfigMap() {
+  const list = window.GLOBAL?.configList || [];
+  return Object.fromEntries(list.map((cfg) => [String(cfg.id), cfg]));
+}
+
+function getProviderBadge(modelName = "") {
+  const name = String(modelName || "").toLowerCase();
+  if (name.includes("gpt") || name.includes("o3") || name.includes("dall")) return { label: "OA", cls: "openai" };
+  if (name.includes("claude")) return { label: "CL", cls: "claude" };
+  if (name.includes("gemini") || name.includes("imagen")) return { label: "GM", cls: "gemini" };
+  if (name.includes("deepseek")) return { label: "DS", cls: "deepseek" };
+  if (name.includes("qwen")) return { label: "QW", cls: "qwen" };
+  if (name.includes("glm")) return { label: "GL", cls: "glm" };
+  if (name.includes("flux")) return { label: "FX", cls: "flux" };
+  if (name.includes("sdxl") || name.includes("stable")) return { label: "SD", cls: "sd" };
+  return { label: "AI", cls: "default" };
+}
+
   return String(str)
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
@@ -269,9 +286,12 @@ function renderMessageItem(m, index) {
       ${m.images.map((img, i) => `<a class="oc-image-card" href="${escapeHtml(img.url)}" target="_blank" rel="noreferrer"><img src="${escapeHtml(img.url)}" alt="image-${i + 1}"></a>`).join("")}
     </div>
   ` : "";
+  const selectedChatId = document.getElementById("chat-config-select")?.value || "";
+  const cfg = (window.GLOBAL?.configList || []).find((item) => String(item.id) === String(selectedChatId));
+  const badge = isUser ? { label: "我", cls: "user" } : getProviderBadge(cfg?.model_name || "");
   return `
     <div class="oc-msg-row ${isUser ? "user" : "assistant"}" data-idx="${index}" data-role="${m.role}" data-streaming="${m.streaming ? "1" : "0"}">
-      <div class="oc-avatar">${isUser ? "我" : "AI"}</div>
+      <div class="oc-avatar ${isUser ? "" : `provider-${badge.cls}`} ">${badge.label}</div>
       <div class="oc-bubble ${isUser ? "user" : "assistant"}">
         <div class="oc-markdown">${html || (!isUser ? '<span class="oc-dim">...</span>' : "")}</div>
         ${images}
@@ -686,6 +706,7 @@ function injectStyles() {
     .oc-avatar { width:34px; height:34px; border-radius:999px; display:flex; align-items:center; justify-content:center; font-size:12px; font-weight:800; flex-shrink:0; }
     .oc-msg-row.user .oc-avatar { background:#dbeafe; color:#1d4ed8; }
     .oc-msg-row.assistant .oc-avatar { background:#111827; color:#fff; }
+    .oc-avatar.provider-openai{background:linear-gradient(135deg,#10b981,#065f46);color:#fff}.oc-avatar.provider-claude{background:linear-gradient(135deg,#fb923c,#9a3412);color:#fff}.oc-avatar.provider-gemini{background:linear-gradient(135deg,#60a5fa,#4f46e5);color:#fff}.oc-avatar.provider-deepseek{background:linear-gradient(135deg,#38bdf8,#0f766e);color:#fff}.oc-avatar.provider-qwen{background:linear-gradient(135deg,#a78bfa,#6d28d9);color:#fff}.oc-avatar.provider-glm{background:linear-gradient(135deg,#f472b6,#be185d);color:#fff}.oc-avatar.provider-flux,.oc-avatar.provider-sd{background:linear-gradient(135deg,#f59e0b,#b45309);color:#fff}.oc-avatar.provider-default{background:#111827;color:#fff}
     .oc-bubble { max-width:min(78%, 760px); border-radius:20px; padding:14px 16px; box-shadow:0 6px 20px rgba(15,23,42,.06); overflow:hidden; }
     .oc-bubble.user { background:linear-gradient(135deg,#1677ff,#3b82f6); color:#fff; border-bottom-right-radius:8px; }
     .oc-bubble.assistant { background:#fff; color:#0f172a; border:1px solid #e7edf4; border-bottom-left-radius:8px; }

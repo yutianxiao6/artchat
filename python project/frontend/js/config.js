@@ -1,4 +1,5 @@
 (function () {
+  const MODEL_PRESETS = window.MODEL_PRESETS || { chat: [], image: [] };
   const MODAL_MAP = {
     "edit-config-id": "edit-config-id-modal",
     "config-name": "config-name-modal",
@@ -28,6 +29,8 @@
   function bindConfigEvents() {
     if (document._configEventsBound) return;
     document._configEventsBound = true;
+
+    bindModelPresetControls();
 
     getEl("new-config-btn")?.addEventListener("click", (e) => {
       e.preventDefault();
@@ -63,7 +66,25 @@
     }
   }
 
-  function renderConfigList() {
+  function bindModelPresetControls() {
+    const modelInput = getEl("model-name");
+    const typeSelect = getEl("config-type");
+    if (!modelInput || !typeSelect) return;
+    if (document.getElementById("model-name-preset")) return;
+    const wrap = document.createElement("div");
+    wrap.className = "form-group";
+    wrap.innerHTML = `<label class="form-label">主流模型快捷选择</label><select class="form-select" id="model-name-preset"><option value="">选择一个常用模型</option></select>`;
+    modelInput.parentNode.insertAdjacentElement("beforebegin", wrap);
+    const presetSelect = wrap.querySelector("select");
+    const refresh = () => {
+      const kind = typeSelect.value === "image" ? "image" : "chat";
+      presetSelect.innerHTML = `<option value="">选择一个常用模型</option>` + (MODEL_PRESETS[kind] || []).map((name) => `<option value="${name}">${name}</option>`).join("");
+    };
+    typeSelect.addEventListener("change", refresh);
+    presetSelect.addEventListener("change", () => { if (presetSelect.value) modelInput.value = presetSelect.value; });
+    refresh();
+  }
+
     const tbody = getEl("config-list-body");
     if (!tbody) return;
     const list = window.GLOBAL?.configList || [];

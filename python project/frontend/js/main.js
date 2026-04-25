@@ -1,4 +1,13 @@
 (function () {
+  window.MODEL_PRESETS = {
+    chat: [
+      "gpt-4o","gpt-4.1","gpt-4.1-mini","o3","claude-3-7-sonnet","claude-sonnet-4","gemini-2.5-pro","gemini-2.5-flash","deepseek-chat","deepseek-reasoner","qwen-max","qwen-plus","glm-4.5"
+    ],
+    image: [
+      "gpt-image-1","dall-e-3","flux.1-dev","flux.1-schnell","sdxl","recraft-v3","imagen-3"
+    ]
+  };
+
   window.GLOBAL = window.GLOBAL || {
     configList: [],
     chatMessages: [],
