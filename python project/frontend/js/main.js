@@ -64,6 +64,7 @@
     document.getElementById("config-modal")?.classList.remove("active");
   }
 
+  function bindSelects() {
     const chatSelect = document.getElementById("chat-config-select");
     const imageSelect = document.getElementById("image-config-select");
 
