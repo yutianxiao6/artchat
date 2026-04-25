@@ -69,7 +69,7 @@
     const list = window.GLOBAL?.configList || [];
 
     if (!list.length) {
-      tbody.innerHTML = `<tr><td colspan="4"><div class="empty-tip"><i class="fa fa-folder-open-o"></i><p>暂无配置，点击「新增配置」创建</p></div></td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="4"><div class="empty-tip"><i class="fa fa-folder-open-o"></i><p>还没有配置，先为流绘添加一个模型入口</p></div></td></tr>`;
       return;
     }
 
