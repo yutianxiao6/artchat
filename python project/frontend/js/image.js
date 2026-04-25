@@ -679,24 +679,24 @@
       return String(b.updatedAt || "").localeCompare(String(a.updatedAt || ""));
     });
     const categoryOptions = ["全部", ...categories].map((name) => `<option value="${escapeHtml(name)}" ${name === STATE.activeAssetCategory ? "selected" : ""}>${escapeHtml(name)}</option>`).join("");
-    const moveOptions = categories.map((name) => `<option value="${escapeHtml(name)}" ${name === (STATE.categoryModal.category || DEFAULT_CATEGORY) ? "selected" : ""}>${escapeHtml(name)}</option>`).join("");
+    const moveOptions = categories.map((name) => `<option value="${escapeHtml(name)}" ${name === (STATE.categoryModal.category || DEFAULT_ASSET_CATEGORY) ? "selected" : ""}>${escapeHtml(name)}</option>`).join("");
     if (categoryFilter) categoryFilter.innerHTML = categoryOptions;
     if (modalFilter) modalFilter.innerHTML = categoryOptions;
     if (library) library.innerHTML = `<button class="btn btn-default" type="button" data-open-asset-library="1" style="justify-content:flex-start;width:100%;padding:14px 16px;"><i class="fa fa-folder-open-o"></i> 打开素材库</button><div class="canvas-empty-card">素材库改为弹窗浏览。<br>点击上方入口按分类查看素材，并将素材加入画布或移动分类。</div>`;
     if (assetsRoot) assetsRoot.innerHTML = `<div class="canvas-empty-card">素材库已迁移为弹窗入口。<br>请在图片画布左侧点击「打开素材库」进行浏览和操作。</div>`;
     if (folderList) folderList.innerHTML = ["全部", ...categories].map((name) => {
-      const count = name === "全部" ? STATE.assetLibrary.length : STATE.assetLibrary.filter((item) => (item.category || DEFAULT_CATEGORY) === name).length;
+      const count = name === "全部" ? STATE.assetLibrary.length : STATE.assetLibrary.filter((item) => (item.category || DEFAULT_ASSET_CATEGORY) === name).length;
       const renameBtn = name !== "全部" ? `<button class="btn btn-default" type="button" data-rename-asset-category="${escapeHtml(name)}">重命名</button>` : "";
       return `<div class="asset-folder-item ${name === STATE.activeAssetCategory ? "active" : ""}"><button type="button" style="all:unset;cursor:pointer;flex:1;display:flex;align-items:center;justify-content:space-between;gap:10px;" data-select-asset-category="${escapeHtml(name)}"><span><i class="fa fa-folder-open-o"></i> ${escapeHtml(name)}</span><span class="badge">${count}</span></button>${renameBtn}</div>`;
     }).join("");
     if (currentFolder) currentFolder.textContent = `${STATE.activeAssetCategory || "全部"} · ${filteredAssets.length} 个素材`;
-    if (assetGrid) assetGrid.innerHTML = filteredAssets.length ? filteredAssets.map((item) => `<article class="asset-card">${item.imageUrl ? `<img src="${item.imageUrl}" alt="${escapeHtml(item.title || "素材")}">` : ""}<div class="asset-card-body"><div class="canvas-item-title">${escapeHtml(item.title || "未命名素材")}</div><div class="canvas-item-meta">${escapeHtml(item.category || DEFAULT_CATEGORY)} · ${escapeHtml(item.source || item.type || "素材")}</div><div class="canvas-item-actions"><button class="btn btn-default" data-add-asset="${item.id}">加入画布</button><button class="btn btn-default" type="button" data-move-asset="${item.id}" data-asset-category="${escapeHtml(item.category || DEFAULT_CATEGORY)}">移动分类</button><button class="btn btn-default" type="button" data-image-preview="${item.imageUrl || ""}">预览</button></div></div></article>`).join("") : `<div class="canvas-empty-card">当前分类还没有素材。<br>上传图片或把生成结果加入素材库后，这里会出现。</div>`;
+    if (assetGrid) assetGrid.innerHTML = filteredAssets.length ? filteredAssets.map((item) => `<article class="asset-card">${item.imageUrl ? `<img src="${item.imageUrl}" alt="${escapeHtml(item.title || "素材")}">` : ""}<div class="asset-card-body"><div class="canvas-item-title">${escapeHtml(item.title || "未命名素材")}</div><div class="canvas-item-meta">${escapeHtml(item.category || DEFAULT_ASSET_CATEGORY)} · ${escapeHtml(item.source || item.type || "素材")}</div><div class="canvas-item-actions"><button class="btn btn-default" data-add-asset="${item.id}">加入画布</button><button class="btn btn-default" type="button" data-move-asset="${item.id}" data-asset-category="${escapeHtml(item.category || DEFAULT_ASSET_CATEGORY)}">移动分类</button><button class="btn btn-default" type="button" data-image-preview="${item.imageUrl || ""}">预览</button></div></div></article>`).join("") : `<div class="canvas-empty-card">当前分类还没有素材。<br>上传图片或把生成结果加入素材库后，这里会出现。</div>`;
     if (modal) modal.classList.toggle("hidden", !STATE.isAssetLibraryOpen);
     if (categoryModal) categoryModal.classList.toggle("hidden", !STATE.categoryModal.visible);
     if (categoryModalTitle) categoryModalTitle.textContent = STATE.categoryModal.mode === 'rename' ? '重命名分类' : (STATE.categoryModal.mode === 'move' ? '移动素材分类' : '新建分类');
     if (categoryModalSubtitle) categoryModalSubtitle.textContent = STATE.categoryModal.mode === 'rename' ? '输入新的分类名称，界面与本地文件夹都会同步更新。' : (STATE.categoryModal.mode === 'move' ? '选择一个目标分类，素材文件会移动到对应本地文件夹。' : '输入新的分类名称并确认。');
     if (categoryModalInput) { categoryModalInput.style.display = STATE.categoryModal.mode === 'move' ? 'none' : 'block'; categoryModalInput.value = STATE.categoryModal.initialValue || ''; }
-    if (categoryModalSelect) { categoryModalSelect.style.display = STATE.categoryModal.mode === 'move' ? 'block' : 'none'; categoryModalSelect.innerHTML = moveOptions; categoryModalSelect.value = STATE.categoryModal.category || DEFAULT_CATEGORY; }
+    if (categoryModalSelect) { categoryModalSelect.style.display = STATE.categoryModal.mode === 'move' ? 'block' : 'none'; categoryModalSelect.innerHTML = moveOptions; categoryModalSelect.value = STATE.categoryModal.category || DEFAULT_ASSET_CATEGORY; }
     if (history) history.innerHTML = sortedHistory.length ? sortedHistory.map((item) => `<article class="canvas-history-item ${item.id === STATE.currentHistoryId ? "active" : ""}"><div class="canvas-history-body"><div class="canvas-item-title">${escapeHtml(item.title || "未命名会话")}</div><div class="canvas-item-meta">${escapeHtml(item.summary || "空白画布")}</div><div class="canvas-item-actions"><button class="btn btn-default" data-open-history="${item.id}">打开</button></div></div></article>`).join("") : `<div class="canvas-empty-card">还没有历史会话。<br>当前画布会自动保存为第一条记录。</div>`;
 
     const createCategoryBtn = document.getElementById('create-asset-category-btn-modal');
@@ -711,7 +711,7 @@
   function openAssetLibraryModal() { STATE.isAssetLibraryOpen = true; renderLeftPanel(); }
   function closeAssetLibraryModal() { STATE.isAssetLibraryOpen = false; renderLeftPanel(); }
   function openCategoryModal(mode = 'create', payload = {}) {
-    STATE.categoryModal = { visible: true, mode, targetImageUrl: payload.imageUrl || '', targetTitle: payload.title || '', targetAssetId: payload.assetId || '', initialValue: payload.category || '', category: payload.category || DEFAULT_CATEGORY };
+    STATE.categoryModal = { visible: true, mode, targetImageUrl: payload.imageUrl || '', targetTitle: payload.title || '', targetAssetId: payload.assetId || '', initialValue: payload.category || '', category: payload.category || DEFAULT_ASSET_CATEGORY };
     renderLeftPanel();
     requestAnimationFrame(() => {
       const input = document.getElementById('asset-category-modal-input');
@@ -720,7 +720,7 @@
       else input?.focus();
     });
   }
-  function closeCategoryModal() { STATE.categoryModal = { visible: false, mode: 'create', targetImageUrl: '', targetTitle: '', targetAssetId: '', initialValue: '', category: DEFAULT_CATEGORY }; renderLeftPanel(); }
+  function closeCategoryModal() { STATE.categoryModal = { visible: false, mode: 'create', targetImageUrl: '', targetTitle: '', targetAssetId: '', initialValue: '', category: DEFAULT_ASSET_CATEGORY }; renderLeftPanel(); }
   async function confirmCategoryModal() {
     const confirmBtn = document.getElementById('confirm-asset-category-modal-btn');
     if (confirmBtn) confirmBtn.disabled = true;
@@ -752,7 +752,7 @@
       return persistCanvasState();
     }
     if (STATE.categoryModal.mode === 'move') {
-      const targetCategory = document.getElementById('asset-category-modal-select')?.value || DEFAULT_CATEGORY;
+      const targetCategory = document.getElementById('asset-category-modal-select')?.value || DEFAULT_ASSET_CATEGORY;
       const res = await fetch('/api/canvas/assets/move', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ asset_id: STATE.categoryModal.targetAssetId, target_category: targetCategory }) });
       const result = await res.json();
       if (!res.ok || result.code !== 0) return alert(result.detail || result.message || '素材移动失败');
