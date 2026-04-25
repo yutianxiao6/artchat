@@ -552,6 +552,19 @@ function enhanceCodeBlocks(container) {
   });
 }
 
+function refreshModelPills() {
+  const chatSel = document.getElementById("chat-config-select");
+  const imageSel = document.getElementById("image-config-select");
+  const chatCfg = (window.GLOBAL?.configList || []).find((item) => String(item.id) === String(chatSel?.value || ""));
+  const imageCfg = (window.GLOBAL?.configList || []).find((item) => String(item.id) === String(imageSel?.value || ""));
+  const chatBadge = getProviderBadge(chatCfg?.model_name || "");
+  const imageBadge = getProviderBadge(imageCfg?.model_name || "");
+  const chatPill = document.getElementById("chat-model-pill");
+  const imagePill = document.getElementById("image-model-pill");
+  if (chatPill) chatPill.style.borderColor = chatBadge.cls === 'default' ? '#e6ebf2' : 'rgba(59,130,246,.25)';
+  if (imagePill) imagePill.style.borderColor = imageBadge.cls === 'default' ? '#e6ebf2' : 'rgba(16,185,129,.25)';
+}
+
 function bindEvents() {
   const sendBtn = document.getElementById("send-chat-btn");
   const input = document.getElementById("chat-input");
@@ -560,6 +573,17 @@ function bindEvents() {
   const sessionList = document.getElementById("chat-session-list");
   const msgWrap = document.getElementById("chat-message-list");
   const newBtn = document.getElementById("chat-new-session-btn");
+  const chatSelect = document.getElementById("chat-config-select");
+  const imageSelect = document.getElementById("image-config-select");
+
+  if (chatSelect && !chatSelect._pillBound) {
+    chatSelect.addEventListener("change", () => { refreshModelPills(); renderMessages(); });
+    chatSelect._pillBound = true;
+  }
+  if (imageSelect && !imageSelect._pillBound) {
+    imageSelect.addEventListener("change", refreshModelPills);
+    imageSelect._pillBound = true;
+  }
 
   if (sendBtn && !sendBtn._bound) {
     sendBtn.addEventListener("click", send);
@@ -631,7 +655,7 @@ function buildChatUI() {
     <div class="oc-chat-shell">
       <aside class="oc-sidebar">
         <div class="oc-sidebar-top">
-          <div class="oc-brand">AI Chat</div>
+          <div class="oc-brand">流绘</div>
           <button class="oc-new-chat" id="chat-new-session-btn" type="button">+ 新建会话</button>
         </div>
         <div class="oc-session-list" id="chat-session-list"></div>
@@ -643,9 +667,13 @@ function buildChatUI() {
             <div class="oc-subtitle">主流 AI 聊天布局 · 稳定多轮对话 · 支持图片与文件任务</div>
           </div>
           <div class="oc-toolbar">
-            <div class="oc-field-inline">
+            <div class="oc-field-inline model-pill" id="chat-model-pill">
               <label>聊天模型</label>
               <select id="chat-config-select" class="form-select"></select>
+            </div>
+            <div class="oc-field-inline model-pill" id="image-model-pill">
+              <label>绘图模型</label>
+              <select id="image-config-select" class="form-select"></select>
             </div>
             <div class="oc-field-inline small">
               <label>温度</label>
@@ -694,6 +722,7 @@ function injectStyles() {
     .oc-field-inline { min-width:220px; }
     .oc-field-inline.small { min-width:110px; }
     .oc-field-inline label { display:block; font-size:12px; color:#64748b; margin-bottom:6px; font-weight:600; }
+    .oc-field-inline.model-pill{padding:10px 12px;border:1px solid #e6ebf2;border-radius:14px;background:rgba(255,255,255,.86);box-shadow:0 10px 24px rgba(15,23,42,.04)}
     .oc-filebar { padding:12px 22px 0; background:transparent; }
     .oc-file-list { display:flex; flex-wrap:wrap; gap:8px; margin-top:10px; }
     .oc-file-chip { display:inline-flex; align-items:center; gap:8px; padding:7px 10px; border-radius:999px; border:1px solid #d6e4ff; background:#edf4ff; color:#1d4ed8; font-size:12px; font-weight:700; }
@@ -755,6 +784,7 @@ function initChatModule() {
   bindEvents();
   renderSessionList();
   renderMessages();
+  refreshModelPills();
   updateHeaderTitle();
   updateSendBtnState();
   autoResizeTextarea();

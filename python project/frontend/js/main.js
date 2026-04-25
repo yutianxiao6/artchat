@@ -1,7 +1,17 @@
 (function () {
   window.MODEL_PRESETS = {
     chat: [
-      "gpt-4o","gpt-4.1","gpt-4.1-mini","o3","claude-3-7-sonnet","claude-sonnet-4","gemini-2.5-pro","gemini-2.5-flash","deepseek-chat","deepseek-reasoner","qwen-max","qwen-plus","glm-4.5"
+      "gpt-3.5-turbo","gpt-4","gpt-4-turbo","gpt-4o","o1","o3",
+      "claude-2","claude-2.1","claude-3-haiku","claude-3-sonnet","claude-3-opus",
+      "gemini-pro","gemini-ultra","gemini-2.5-pro","gemini-3.1",
+      "grok-2","grok-3","grok-4",
+      "command-r","command-r-plus",
+      "llama-2-7b","llama-2-13b","llama-2-70b","llama-3-8b","llama-3-70b","llama-4-moe",
+      "mistral-7b","mixtral-8x7b","mistral-large-latest","dbrx","gpt-neo","gpt-neox","pythia",
+      "ernie-4.0","ernie-5.0","ernie-6.0","qwen-3.5","qwen-4","qwen-plus","doubao-pro","hunyuan-3.0",
+      "glm-4","glm-4.5","glm-5.1","kimi-k2","spark-x2","pangu","360gpt-pro","sensechat","abab6.5",
+      "deepseek-6.7b","deepseek-67b","deepseek-v3","baichuan-7b","baichuan-13b","baichuan-4",
+      "internlm2","internlm2.5","minicpm","yi-6b","yi-34b","zi-dong-tai-chu"
     ],
     image: [
       "gpt-image-1","dall-e-3","flux.1-dev","flux.1-schnell","sdxl","recraft-v3","imagen-3"
