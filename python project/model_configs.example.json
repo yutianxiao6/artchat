@@ -1,0 +1,11 @@
+[
+  {
+    "id": "example-chat-config",
+    "name": "示例聊天配置",
+    "config_type": "chat",
+    "api_base": "https://your-api-base.example/v1",
+    "api_key": "your-api-key-here",
+    "model_name": "your-chat-model",
+    "description": "请复制后填写你自己的配置"
+  }
+]
