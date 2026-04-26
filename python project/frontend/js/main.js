@@ -24,6 +24,9 @@
     currentImageBase64: "",
     isGenerating: false,
     isChatting: false,
+    selectedChatConfigId: localStorage.getItem("flowdraw:selectedChatConfigId") || "",
+    selectedImageConfigId: localStorage.getItem("flowdraw:selectedImageConfigId") || "",
+    linkedUniversalConfigId: localStorage.getItem("flowdraw:linkedUniversalConfigId") || "",
     defaultNegativePrompt:
       "低分辨率, 模糊, 画质差, 噪点, 水印, 文字, 签名, 变形, 畸形, 肢体残缺, 多余手指, 多余肢体, 五官错位, 面部扭曲, 过曝, 欠曝, 色差, 构图混乱, 丑陋, 低俗, 卡通, 手绘, 二次元, 非写实, 低细节, 虚化背景, 模糊边缘",
     uuid: {
@@ -88,11 +91,44 @@
     const imageSelect = document.getElementById("image-config-select");
 
     if (chatSelect && !chatSelect._bound) {
-      chatSelect.addEventListener("change", updateButtonStatus, { passive: true });
+      chatSelect.addEventListener("change", () => {
+        GLOBAL.selectedChatConfigId = chatSelect.value || "";
+        localStorage.setItem("flowdraw:selectedChatConfigId", GLOBAL.selectedChatConfigId);
+        const cfg = (GLOBAL.configList || []).find((c) => String(c.id) === String(chatSelect.value || ""));
+        if (cfg && ["both", "chat"].includes(cfg.config_type)) {
+          GLOBAL.linkedUniversalConfigId = cfg.id || "";
+          localStorage.setItem("flowdraw:linkedUniversalConfigId", String(GLOBAL.linkedUniversalConfigId || ""));
+          const bothImage = (GLOBAL.configList || []).find((c) => String(c.id) === String(cfg.id) && ["both", "image"].includes(c.config_type));
+          if (bothImage && imageSelect) {
+            imageSelect.value = String(bothImage.id);
+            GLOBAL.selectedImageConfigId = String(bothImage.id);
+            localStorage.setItem("flowdraw:selectedImageConfigId", GLOBAL.selectedImageConfigId);
+          }
+        }
+        updateButtonStatus();
+        window.refreshModelPills && window.refreshModelPills();
+      }, { passive: true });
       chatSelect._bound = true;
     }
     if (imageSelect && !imageSelect._bound) {
-      imageSelect.addEventListener("change", updateButtonStatus, { passive: true });
+      imageSelect.addEventListener("change", () => {
+        GLOBAL.selectedImageConfigId = imageSelect.value || "";
+        localStorage.setItem("flowdraw:selectedImageConfigId", GLOBAL.selectedImageConfigId);
+        const cfg = (GLOBAL.configList || []).find((c) => String(c.id) === String(imageSelect.value || ""));
+        if (cfg && ["both", "image"].includes(cfg.config_type)) {
+          GLOBAL.linkedUniversalConfigId = cfg.id || "";
+          localStorage.setItem("flowdraw:linkedUniversalConfigId", String(GLOBAL.linkedUniversalConfigId || ""));
+          const bothChat = (GLOBAL.configList || []).find((c) => String(c.id) === String(cfg.id) && ["both", "chat"].includes(c.config_type));
+          if (bothChat && chatSelect) {
+            chatSelect.value = String(bothChat.id);
+            GLOBAL.selectedChatConfigId = String(bothChat.id);
+            localStorage.setItem("flowdraw:selectedChatConfigId", GLOBAL.selectedChatConfigId);
+          }
+        }
+        updateButtonStatus();
+        window.refreshModelPills && window.refreshModelPills();
+        if (window.initImageModule) requestAnimationFrame(() => window.initImageModule());
+      }, { passive: true });
       imageSelect._bound = true;
     }
   }
@@ -184,24 +220,34 @@
   }
 
   function updateConfigSelectOptions() {
+    if (window.ensureModelBrandStyles) window.ensureModelBrandStyles();
     const chatSelect = document.getElementById("chat-config-select");
     if (chatSelect) {
       const chatConfigs = GLOBAL.configList.filter((c) => ["chat", "both"].includes(c.config_type));
       const preferredChatId = getPreferredChatConfigId(chatConfigs);
-      const previousValue = chatSelect.value;
+      const previousValue = GLOBAL.selectedChatConfigId || chatSelect.value;
       chatSelect.innerHTML = chatConfigs.length
         ? chatConfigs.map((c) => `<option value="${c.id}">${escapeHtml(c.name)} (${escapeHtml(c.model_name)})</option>`).join("")
         : `<option value="">请先在配置管理中创建聊天模型配置</option>`;
-      chatSelect.value = chatConfigs.some((c) => c.id === previousValue) ? previousValue : preferredChatId;
+      chatSelect.value = chatConfigs.some((c) => String(c.id) === String(previousValue)) ? String(previousValue) : String(preferredChatId || "");
+      GLOBAL.selectedChatConfigId = chatSelect.value || "";
+      localStorage.setItem("flowdraw:selectedChatConfigId", GLOBAL.selectedChatConfigId);
     }
 
     const imageSelect = document.getElementById("image-config-select");
     if (imageSelect) {
       const imageConfigs = GLOBAL.configList.filter((c) => ["image", "both"].includes(c.config_type));
+      const previousValue = GLOBAL.selectedImageConfigId || imageSelect.value;
       imageSelect.innerHTML = imageConfigs.length
         ? imageConfigs.map((c) => `<option value="${c.id}">${escapeHtml(c.name)} (${escapeHtml(c.model_name)})</option>`).join("")
         : `<option value="">请先在配置管理中创建图片模型配置</option>`;
+      imageSelect.value = imageConfigs.some((c) => String(c.id) === String(previousValue)) ? String(previousValue) : String(imageConfigs[0]?.id || "");
+      GLOBAL.selectedImageConfigId = imageSelect.value || "";
+      localStorage.setItem("flowdraw:selectedImageConfigId", GLOBAL.selectedImageConfigId);
     }
+
+    if (window.refreshModelPills) window.refreshModelPills();
+    if (window.initImageModule) requestAnimationFrame(() => window.initImageModule());
   }
 
   function updateButtonStatus() {

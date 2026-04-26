@@ -30,6 +30,7 @@
     if (document._configEventsBound) return;
     document._configEventsBound = true;
 
+    injectConfigStyles();
     bindModelPresetControls();
 
     getEl("new-config-btn")?.addEventListener("click", (e) => {
@@ -70,19 +71,48 @@
     const modelInput = getEl("model-name");
     const typeSelect = getEl("config-type");
     if (!modelInput || !typeSelect) return;
+    if (window.ensureModelBrandStyles) window.ensureModelBrandStyles();
     if (document.getElementById("model-name-preset")) return;
     const wrap = document.createElement("div");
-    wrap.className = "form-group";
-    wrap.innerHTML = `<label class="form-label">主流模型快捷选择</label><select class="form-select" id="model-name-preset"><option value="">选择一个常用模型</option></select>`;
+    wrap.className = "form-group config-model-preset-group";
+    wrap.innerHTML = `<label class="form-label">主流模型快捷选择</label><select class="form-select" id="model-name-preset"><option value="">选择一个常用模型</option></select><div id="model-preset-preview" class="config-model-preview" style="margin-top:10px;"></div>`;
     modelInput.parentNode.insertAdjacentElement("beforebegin", wrap);
     const presetSelect = wrap.querySelector("select");
+    const preview = wrap.querySelector("#model-preset-preview");
+    const refreshPreview = () => {
+      const current = presetSelect.value || modelInput.value || "";
+      const usageText = typeSelect.value === "image" ? "绘图模型" : typeSelect.value === "both" ? "通用模型" : "聊天模型";
+      if (preview) {
+        preview.innerHTML = current
+          ? (window.renderModelChip ? window.renderModelChip(current, { text: current, subtext: usageText, iconSize: 20 }) : escapeHtml(current))
+          : `<span class="config-model-preview-empty">选择后会在这里显示当前模型标识</span>`;
+      }
+    };
     const refresh = () => {
       const kind = typeSelect.value === "image" ? "image" : "chat";
       presetSelect.innerHTML = `<option value="">选择一个常用模型</option>` + (MODEL_PRESETS[kind] || []).map((name) => `<option value="${name}">${name}</option>`).join("");
+      refreshPreview();
     };
     typeSelect.addEventListener("change", refresh);
-    presetSelect.addEventListener("change", () => { if (presetSelect.value) modelInput.value = presetSelect.value; });
+    modelInput.addEventListener("input", refreshPreview);
+    presetSelect.addEventListener("change", () => { if (presetSelect.value) modelInput.value = presetSelect.value; refreshPreview(); });
     refresh();
+  }
+
+  function injectConfigStyles() {
+    if (document.getElementById("oc-config-enhance-style")) return;
+    const style = document.createElement("style");
+    style.id = "oc-config-enhance-style";
+    style.textContent = `
+      .config-model-preset-group{padding:14px;border:1px solid rgba(226,232,240,.95);border-radius:16px;background:linear-gradient(180deg,#ffffff,#f8fafc)}
+      .config-model-preview{min-height:44px;display:flex;align-items:center}
+      .config-model-preview-empty{font-size:12px;color:#94a3b8;font-weight:600}
+      #config-modal .table td .oc-model-chip,#config .table td .oc-model-chip{min-width:220px;max-width:100%;background:rgba(248,250,252,.92);border-color:rgba(226,232,240,.95)}
+      #config-modal .table-container,#config .table-container{border:1px solid rgba(226,232,240,.95);border-radius:16px;background:#fff}
+      #config-modal .table td,#config .table td{vertical-align:middle}
+      #config-modal .card-body.modal-stack{gap:18px}
+    `;
+    document.head.appendChild(style);
   }
 
   function renderConfigList() {
@@ -97,11 +127,14 @@
 
     tbody.innerHTML = list.map((c) => {
       const typeMap = { chat: "仅聊天模型", image: "仅图片模型", both: "聊天+图片通用" };
+      const modelChip = window.renderModelChip
+        ? window.renderModelChip(c.model_name || c.name || "", { text: c.model_name || "-", subtext: c.name || typeMap[c.config_type] || "模型配置", iconSize: 18 })
+        : escapeHtml(c.model_name || "-");
       return `
         <tr>
           <td>${escapeHtml(c.name || `配置 ${c.id}`)}</td>
           <td>${escapeHtml(typeMap[c.config_type] || c.config_type || "-")}</td>
-          <td>${escapeHtml(c.model_name || "-")}</td>
+          <td>${modelChip}</td>
           <td>
             <div class="table-action">
               <button class="table-btn edit cfg-edit" data-id="${c.id}"><i class="fa fa-pencil"></i> 编辑</button>

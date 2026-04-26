@@ -3,8 +3,8 @@
   const RATIO_PRESETS = ["1:1", "4:3", "3:4", "16:9", "9:16", "3:2", "2:3"];
   const DEFAULT_NEGATIVE_PROMPT = "low quality, blurry, distorted, bad anatomy, extra fingers, watermark, text, cropped, artifacts";
   const NODE_WIDTH = 360;
-  const PORT_RADIUS = 18;
-  const SNAP_DISTANCE = 120;
+  const PORT_RADIUS = 11;
+  const SNAP_DISTANCE = 86;
   const MIN_ZOOM = 0.45;
   const MAX_ZOOM = 1.8;
   const DEFAULT_ASSET_CATEGORY = "未分类";
@@ -33,7 +33,6 @@
     historySessions: [],
     currentHistoryId: null,
     clipboardNode: null,
-    undoStack: [],
     activeAssetCategory: "全部",
     pendingAssetCategory: DEFAULT_ASSET_CATEGORY,
     measuredNodeCenters: {},
@@ -119,27 +118,6 @@
     style.id = "image-canvas-style";
     style.textContent = " = `\n      #image{height:calc(100vh - 64px);overflow:hidden}\n      .canvas-shell{display:flex;height:100%;background:#0b1020;color:#e5e7eb}.canvas-left{width:320px;border-right:1px solid rgba(148,163,184,.18);background:#0f172a;padding:16px;display:flex;flex-direction:column;gap:14px;overflow:hidden}\n      .canvas-title{font-size:18px;font-weight:800;color:#fff}.canvas-subtitle{font-size:12px;color:#94a3b8;line-height:1.6}.canvas-panel{border:1px solid rgba(148,163,184,.12);background:rgba(15,23,42,.78);border-radius:16px;padding:14px;min-height:0;display:flex;flex-direction:column}\n      .canvas-panel-header{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px}.canvas-panel-title{font-size:14px;font-weight:700;color:#fff;display:flex;align-items:center;gap:8px}.canvas-panel-subtitle{font-size:12px;color:#94a3b8;line-height:1.6;margin-bottom:10px}\n      .canvas-library-toolbar{display:grid;gap:8px;margin-bottom:10px}.canvas-library-toolbar .form-select,.canvas-library-toolbar .form-input{background:#0b1220;border:1px solid rgba(148,163,184,.18);color:#fff}.canvas-library-list,.canvas-history-list{display:flex;flex-direction:column;gap:10px;overflow:auto;min-height:0}\n      .canvas-library-item,.canvas-history-item{border:1px solid rgba(148,163,184,.12);border-radius:14px;background:#111827;transition:all .2s ease}.canvas-library-item:hover,.canvas-history-item:hover{border-color:rgba(96,165,250,.28);transform:translateY(-1px)}\n      .canvas-library-thumb{width:100%;aspect-ratio:1.35/1;object-fit:cover;display:block;background:#0b1220;border-top-left-radius:14px;border-top-right-radius:14px}.canvas-library-body,.canvas-history-body{padding:10px 12px;display:grid;gap:6px}.canvas-item-title{font-size:13px;font-weight:700;color:#e5e7eb}\n      .canvas-item-meta{font-size:12px;color:#94a3b8}.canvas-item-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:2px}.canvas-item-actions .btn{padding:8px 12px;font-size:12px}.canvas-history-item.active{border-color:#60a5fa;box-shadow:0 0 0 1px rgba(96,165,250,.18)}\n      .canvas-empty-card{border:1px dashed rgba(148,163,184,.18);border-radius:14px;padding:16px;text-align:center;color:#94a3b8;font-size:12px;line-height:1.7;background:rgba(15,23,42,.5)}.canvas-main{flex:1;display:flex;flex-direction:column;min-width:0}\n      .canvas-topbar{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 18px;background:#111827;border-bottom:1px solid rgba(148,163,184,.14)}.canvas-topbar .left,.canvas-topbar .right{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.canvas-topbar .badge{font-size:12px;padding:6px 10px;border-radius:999px;background:rgba(59,130,246,.16);color:#bfdbfe;border:1px solid rgba(96,165,250,.22)}\n      .node-grid-two{display:grid;grid-template-columns:1fr 1fr;gap:8px}.node-model-row{display:grid;gap:8px}.node-mini-field{display:grid;gap:4px}.node-mini-field label{font-size:11px;margin-bottom:0}.node-mini-field select,.node-mini-field input{padding:9px 10px;font-size:12px;border-radius:12px}\n      .canvas-toast{position:fixed;top:84px;right:20px;z-index:2000;padding:10px 14px;border-radius:12px;background:rgba(15,23,42,.96);color:#fff;border:1px solid rgba(96,165,250,.28);box-shadow:0 16px 36px rgba(0,0,0,.28);font-size:13px;opacity:0;transform:translateY(-8px);pointer-events:none;transition:opacity .18s ease,transform .18s ease}.canvas-toast.show{opacity:1;transform:translateY(0)}\n      .canvas-board-wrap{position:relative;flex:1;overflow:hidden;background:radial-gradient(circle at 1px 1px, rgba(148,163,184,.16) 1px, transparent 0) 0 0/24px 24px,linear-gradient(180deg,#0b1020,#0a0f1b)}.canvas-board{position:absolute;inset:0;overflow:hidden;cursor:grab;user-select:none}.canvas-board.panning{cursor:grabbing}.canvas-world{position:absolute;left:0;top:0;transform-origin:0 0;width:5000px;height:3600px;will-change:transform}\n      .canvas-selection-box{position:absolute;border:1px solid rgba(96,165,250,.95);background:rgba(96,165,250,.14);pointer-events:none;z-index:25;border-radius:10px}.node.multi-selected{box-shadow:0 0 0 2px rgba(96,165,250,.95),0 24px 70px rgba(15,23,42,.55)}\n      .asset-library-modal.hidden{display:none}.asset-library-modal{position:fixed;inset:0;z-index:1600}.asset-library-backdrop{position:absolute;inset:0;background:rgba(2,6,23,.7);backdrop-filter:blur(4px)}.asset-library-panel{position:relative;width:min(1100px,calc(100vw - 48px));height:min(760px,calc(100vh - 48px));margin:24px auto;background:#0f172a;border:1px solid rgba(148,163,184,.18);border-radius:20px;box-shadow:0 30px 80px rgba(0,0,0,.45);display:grid;grid-template-columns:280px 1fr;overflow:hidden}.asset-library-panel.draggable{cursor:default}.asset-library-sidebar{padding:18px;border-right:1px solid rgba(148,163,184,.14);display:flex;flex-direction:column;gap:12px;background:#111827;min-height:0}.asset-library-content{padding:18px;display:flex;flex-direction:column;gap:14px;min-width:0;min-height:0}.asset-folder-list,.asset-grid{display:grid;gap:10px;overflow:auto}.asset-folder-list{flex:1;min-height:0;padding-right:4px}.asset-grid{display:flex;flex-direction:column;gap:10px;flex:1;min-height:0;padding-right:4px}.asset-card{display:flex;gap:12px;border:1px solid rgba(148,163,184,.12);border-radius:16px;overflow:hidden;background:#111827;min-height:124px}.asset-card img{width:180px;height:124px;object-fit:cover;background:#0b1220;flex:0 0 180px}.asset-card-body{padding:12px;display:flex;flex-direction:column;gap:8px;flex:1;min-width:0;justify-content:center}.asset-modal-header{display:flex;align-items:center;justify-content:space-between;gap:12px}.asset-modal-header.drag-handle{cursor:move;user-select:none;padding-bottom:4px;border-bottom:1px solid rgba(148,163,184,.1)}.asset-folder-actions{display:flex;gap:6px;align-items:center}.asset-folder-actions .btn{padding:6px 10px;font-size:12px}.asset-modal-actions{display:flex;gap:8px;flex-wrap:wrap}\n      .canvas-debug{position:absolute;right:14px;bottom:14px;z-index:30;min-width:260px;max-width:360px;padding:10px 12px;border-radius:14px;background:rgba(2,6,23,.82);border:1px solid rgba(148,163,184,.22);box-shadow:0 14px 36px rgba(0,0,0,.35);font-size:12px;line-height:1.55;color:#cbd5e1;backdrop-filter:blur(8px)}.canvas-debug strong{color:#fff}.canvas-debug code{color:#93c5fd;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}\n      .canvas-svg{position:absolute;left:0;top:0;width:5000px;height:3600px;overflow:visible;z-index:1;pointer-events:none}.edge-hit{stroke:transparent;stroke-width:28;fill:none;pointer-events:none;cursor:pointer}.edge-visible{fill:none;stroke-linecap:round;pointer-events:none}.edge-selected{stroke:#f59e0b!important}.canvas-node-layer{position:absolute;left:0;top:0;width:5000px;height:3600px;z-index:3}.edge-dom-layer{position:absolute;left:0;top:0;width:5000px;height:3600px;z-index:2;pointer-events:none}.edge-dom-hit{position:absolute;height:28px;transform-origin:left center;pointer-events:auto;cursor:pointer;background:transparent}.edge-dom-hit.edge-selected{outline:2px solid rgba(245,158,11,.95);outline-offset:0;border-radius:999px}\n      .node{position:absolute;width:${NODE_WIDTH}px;background:#111827;border:1px solid rgba(148,163,184,.16);border-radius:22px;box-shadow:0 18px 40px rgba(0,0,0,.28);overflow:visible}.node.selected{border-color:#60a5fa;box-shadow:0 0 0 2px rgba(96,165,250,.55),0 0 0 8px rgba(59,130,246,.14),0 22px 48px rgba(0,0,0,.38)}.node-link-highlight{border-color:rgba(52,211,153,.75)!important;box-shadow:0 0 0 1px rgba(52,211,153,.18),0 18px 40px rgba(0,0,0,.32)!important}\n      .node-shell{position:relative;border-radius:22px;overflow:hidden;background:#111827}.node-image-wrap{position:relative;background:#0b1220;min-height:240px;display:flex;align-items:center;justify-content:center;cursor:move}.node-image-wrap img{width:100%;height:100%;display:block;object-fit:cover;cursor:default}\n      .node-image-overlay{position:absolute;inset:0;background:linear-gradient(to top, rgba(2,6,23,.62), rgba(2,6,23,.12) 45%, rgba(2,6,23,0));display:flex;align-items:flex-end;justify-content:flex-end;padding:12px;opacity:0;transition:opacity .18s ease;pointer-events:none}.node-image-top-actions{position:absolute;top:10px;right:10px;display:flex;gap:8px;opacity:0;transition:opacity .18s ease;z-index:4}\n      .node-image-wrap:hover .node-image-overlay,.node-image-wrap:hover .node-image-top-actions,.output-card:hover .node-image-overlay{opacity:1}.node-image-toolbar{display:flex;gap:8px;pointer-events:auto}.node-image-toolbar .btn,.node-image-top-actions .btn{padding:8px 12px;background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.18);backdrop-filter:blur(6px)}\n      .node-image-empty{padding:18px;text-align:center;color:#64748b;line-height:1.7;font-size:13px}.node-image-actions{position:absolute;left:12px;right:12px;bottom:12px;display:flex;gap:8px;flex-wrap:wrap;z-index:3}.node-image-actions .btn{flex:1;min-width:110px;justify-content:center;cursor:pointer}\n      .node-linked-banner{position:absolute;left:12px;right:12px;top:12px;padding:10px 12px;border-radius:12px;background:rgba(15,23,42,.82);border:1px solid rgba(52,211,153,.24);color:#d1fae5;font-size:12px;backdrop-filter:blur(4px);z-index:3}\n      .node-divider{height:1px;background:rgba(148,163,184,.14)}.node-body{padding:14px 16px 16px;display:grid;gap:12px}.node-row{display:grid;gap:8px}.node-body label{display:block;font-size:12px;color:#94a3b8;margin-bottom:4px}\n      .node-body input,.node-body textarea,.node-body select{width:100%;border:1px solid rgba(148,163,184,.16);background:#0f172a;color:#fff;border-radius:12px;padding:10px 12px;outline:none;pointer-events:auto;cursor:text}.node-body textarea{resize:vertical;min-height:92px;user-select:text}.node-body select{cursor:pointer}\n      .node-body input,.node-body textarea,.node-body select,.node-body button,.node-image-actions button,.node-image-actions a,.output-card-actions a,.output-card-actions button,.node-image-toolbar button{position:relative;z-index:3}.node-grid-two{display:grid;grid-template-columns:1fr 1fr;gap:8px}.node-mini-field{display:grid;gap:4px}.node-mini-field label{font-size:11px;margin-bottom:0}.node-mini-field select,.node-mini-field input{padding:9px 10px;font-size:12px;border-radius:12px}\n      .node-actions{display:flex;gap:8px;flex-wrap:wrap}.node-actions button{flex:1;min-width:120px;cursor:pointer}.output-gallery{display:grid;grid-template-columns:1fr 1fr;gap:10px}.output-card{position:relative;border:1px solid rgba(148,163,184,.14);border-radius:14px;overflow:hidden;background:#0b1220}.output-card img{width:100%;display:block;aspect-ratio:1/1;object-fit:cover;cursor:default}\n      .output-card-actions{display:flex;gap:8px;padding:10px;flex-wrap:wrap}.output-card-actions a,.output-card-actions button{flex:1;text-align:center;text-decoration:none}.port-handle{position:absolute;width:${PORT_RADIUS * 2}px;height:${PORT_RADIUS * 2}px;border-radius:999px;background:#111827;border:2px solid #34d399;box-shadow:0 0 0 4px rgba(52,211,153,.12);cursor:crosshair;z-index:5}\n      .canvas-empty{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;pointer-events:none;color:#94a3b8;font-size:14px;text-align:center;line-height:1.8}.canvas-context-menu{position:absolute;z-index:60;min-width:180px;background:#0f172a;border:1px solid rgba(148,163,184,.18);border-radius:14px;box-shadow:0 18px 45px rgba(0,0,0,.35);padding:8px}.canvas-context-menu button{width:100%;background:transparent;border:none;color:#e5e7eb;text-align:left;padding:10px 12px;border-radius:10px;cursor:pointer;font-size:13px}.canvas-context-menu button:hover{background:rgba(30,41,59,.95)}\n      .image-preview-modal{position:fixed;inset:0;background:rgba(2,6,23,.82);display:flex;align-items:center;justify-content:center;z-index:9999;padding:24px}.image-preview-modal.hidden{display:none}.image-preview-backdrop{position:absolute;inset:0}.image-preview-panel{position:relative;z-index:1;max-width:min(92vw,1400px);max-height:92vh}.image-preview-panel img{max-width:100%;max-height:92vh;display:block;border-radius:18px;box-shadow:0 20px 60px rgba(0,0,0,.45)}.image-preview-close{position:absolute;top:-14px;right:-14px;width:40px;height:40px;border:none;border-radius:999px;background:#111827;color:#fff;cursor:pointer;box-shadow:0 10px 30px rgba(0,0,0,.35)}\n      @media (max-width:1100px){.canvas-left{display:none}.node{width:320px}.output-gallery{grid-template-columns:1fr}.node-mini-row{grid-template-columns:1fr}}\n    ";
     document.head.appendChild(style);
-
-    const patch = document.createElement("style");
-    patch.id = "image-canvas-style-patch-node-media";
-    patch.textContent = `
-      .node{width:${NODE_WIDTH}px !important;min-width:${NODE_WIDTH}px !important;max-width:${NODE_WIDTH}px !important;box-sizing:border-box !important;}
-      .node-shell{width:100%;}
-      .node-image-wrap{width:100% !important;min-height:0 !important;height:auto !important;aspect-ratio:1 / 1 !important;max-height:360px !important;overflow:hidden !important;display:flex !important;align-items:center !important;justify-content:center !important;background:#0b1220 !important;}
-      .node-image-wrap img{width:100% !important;height:100% !important;max-width:100% !important;max-height:100% !important;object-fit:contain !important;object-position:center !important;display:block !important;}
-      .canvas-svg{z-index:6 !important;pointer-events:auto !important;overflow:visible !important;}
-      .canvas-node-layer{z-index:7 !important;}
-      .edge-dom-layer,.edge-dom-hit{display:none !important;}
-      .edge-hit{stroke:rgba(255,255,255,0.001);stroke-width:72;fill:none;pointer-events:stroke;cursor:pointer !important;}
-      .edge-visible{pointer-events:none !important;}
-      .port-handle{position:absolute !important;display:flex !important;align-items:center !important;justify-content:center !important;width:40px !important;height:40px !important;border:none !important;background:transparent !important;box-shadow:none !important;z-index:12 !important;overflow:visible !important;}
-      .port-handle::before{content:"";position:absolute;inset:0;border-radius:999px;background:rgba(52,211,153,.12);border:2px solid rgba(52,211,153,.24);box-shadow:0 0 18px rgba(52,211,153,.16);}
-      .port-handle::after{content:"";position:absolute;width:14px;height:14px;border-radius:999px;background:#34d399;border:3px solid #0f172a;box-shadow:0 0 0 5px rgba(52,211,153,.14),0 0 10px rgba(52,211,153,.16);}
-      .port-handle:hover::before{background:rgba(52,211,153,.20);border-color:rgba(52,211,153,.40);}
-      body.debug-canvas-hit .port-handle{background:rgba(239,68,68,.18) !important;}
-      body.debug-canvas-hit .edge-hit{stroke:rgba(250,204,21,.35) !important;}
-    `;
-    document.head.appendChild(patch);
   }
 
   function buildImageWorkbench() {
@@ -153,7 +131,7 @@
           <section class="canvas-panel" style="flex:0.9;"><div class="canvas-panel-header"><div class="canvas-panel-title"><i class="fa fa-history"></i> 历史会话记录</div><button class="btn btn-default" id="new-canvas-session-btn">新建</button></div><div class="canvas-panel-subtitle">所有画布记录都会保存到本地文件。</div><div class="canvas-history-list custom-scrollbar" id="canvas-history-list"></div></section>
         </aside>
         <section class="canvas-main">
-          <div class="canvas-topbar"><div class="left"><span class="badge">双击创建节点</span><span class="badge">滚轮缩放</span><span class="badge">Ctrl+C / Ctrl+V / Ctrl+Z / Delete</span></div><div class="right"><button class="btn btn-default" id="quick-add-node-btn">新建节点</button><span class="badge" id="canvas-zoom-badge">100%</span><button class="btn btn-default" id="reset-canvas-btn">清空画布</button></div></div>
+          <div class="canvas-topbar"><div class="left"><span class="badge">双击创建节点</span><span class="badge">滚轮缩放</span><span class="badge">Ctrl+C / Ctrl+V / Delete</span></div><div class="right"><button class="btn btn-default" id="quick-add-node-btn">新建节点</button><span class="badge" id="canvas-zoom-badge">100%</span><button class="btn btn-default" id="reset-canvas-btn">清空画布</button></div></div>
           <div class="canvas-board-wrap" id="canvas-board-wrap"><div class="canvas-board" id="canvas-board"><div class="canvas-world" id="canvas-world"><svg class="canvas-svg" id="canvas-svg"></svg><div id="edge-dom-layer" class="edge-dom-layer"></div><div id="canvas-node-layer" class="canvas-node-layer"></div></div><div class="canvas-empty" id="canvas-empty-tip">双击画布、右键画布或直接粘贴图片来创建节点</div><div class="canvas-selection-box" id="canvas-selection-box" style="display:none"></div></div><div id="canvas-context-menu-root"></div></div>
         </section>
       </div>
@@ -175,12 +153,6 @@
         event.stopPropagation();
         return;
       }
-      if (target.closest("#toggle-canvas-debug-btn")) {
-        document.body.classList.toggle("debug-canvas-hit");
-        const badge = document.getElementById("canvas-debug-badge");
-        if (badge) badge.style.display = document.body.classList.contains("debug-canvas-hit") ? "inline-flex" : "none";
-        return;
-      }
       if (target.closest("#reset-canvas-btn")) return resetCanvas();
       if (target.closest("#quick-add-node-btn")) { const rect = getBoardRect(); const point = clientToCanvasPoint(rect.left + rect.width / 2, rect.top + Math.max(180, rect.height / 2)); return addNodeAt(point.x - NODE_WIDTH / 2, point.y - 120); }
       if (target.closest("#new-canvas-session-btn")) return createNewHistorySession();
@@ -200,7 +172,7 @@
         return runGenerateNode(runGenerate.getAttribute("data-run-generate"));
       }
 
-      const edgeHit = target instanceof SVGElement ? target.closest(".edge-hit[data-edge-id]") : target.closest(".edge-hit[data-edge-id]");
+      const edgeHit = target.closest("[data-edge-id]");
       if (edgeHit) {
         event.preventDefault();
         event.stopPropagation();
@@ -309,10 +281,9 @@
         showImageContextMenu(event.clientX, event.clientY, imageEl.getAttribute("data-context-image"), imageEl.getAttribute("data-image-title") || "图片素材");
         return;
       }
-      const edgeHit = target instanceof SVGElement ? target.closest(".edge-hit[data-edge-id]") : target.closest(".edge-hit[data-edge-id]");
+      const edgeHit = target.closest("[data-edge-id]");
       if (edgeHit) {
         event.preventDefault();
-        event.stopPropagation();
         STATE.selectedEdgeId = edgeHit.getAttribute("data-edge-id");
         STATE.selectedNodeId = null;
         renderCanvas();
@@ -347,7 +318,7 @@
         event.stopPropagation();
         return;
       }
-      const edgeHit = target instanceof SVGElement ? target.closest(".edge-hit[data-edge-id]") : target.closest(".edge-hit[data-edge-id]");
+      const edgeHit = target.closest("[data-edge-id]");
       if (edgeHit) {
         event.preventDefault();
         event.stopPropagation();
@@ -492,11 +463,6 @@
           return;
         }
       }
-      if (meta && event.key.toLowerCase() === "z" && !typing && inImageTab) {
-        event.preventDefault();
-        undoCanvas();
-        return;
-      }
       if (meta && event.key.toLowerCase() === "c" && STATE.selectedNodeId && !typing) {
         const node = getNode(STATE.selectedNodeId);
         if (node) STATE.clipboardNode = JSON.parse(JSON.stringify(node));
@@ -552,10 +518,9 @@
       throw error;
     }
   }
-  function resetCanvas() { pushUndoSnapshot(); STATE.nodes = []; STATE.edges = []; STATE.selectedNodeId = null; STATE.selectedEdgeId = null; persistCanvasState(); renderCanvas(); renderLeftPanel(); }
-  function addNodeAt(x, y) { pushUndoSnapshot(); const node = createNode(x, y); STATE.nodes.push(node); STATE.selectedNodeId = node.id; STATE.selectedEdgeId = null; persistCanvasState(); renderCanvas(); renderLeftPanel(); }
+  function resetCanvas() { STATE.nodes = []; STATE.edges = []; STATE.selectedNodeId = null; STATE.selectedEdgeId = null; persistCanvasState(); renderCanvas(); renderLeftPanel(); }
+  function addNodeAt(x, y) { const node = createNode(x, y); STATE.nodes.push(node); STATE.selectedNodeId = node.id; STATE.selectedEdgeId = null; persistCanvasState(); renderCanvas(); renderLeftPanel(); }
   function createNode(x, y) { return { id: makeId(), x: Math.round(x), y: Math.round(y), prompt: "", negativePrompt: DEFAULT_NEGATIVE_PROMPT, resolution: RESOLUTION_PRESETS[0], ratio: RATIO_PRESETS[0], count: 1, modelId: String(getDefaultImageConfigId() || ""), imageUrl: "", imageBase64: "", assetId: "", outputImages: [], busy: false }; }
-  function createResultNodeFromSource(sourceNode, imageUrl, index, total) { const node = createNode(sourceNode.x + 460, sourceNode.y + (index * 80)); node.prompt = sourceNode.prompt || ""; node.negativePrompt = sourceNode.negativePrompt || DEFAULT_NEGATIVE_PROMPT; node.resolution = sourceNode.resolution || RESOLUTION_PRESETS[0]; node.ratio = sourceNode.ratio || RATIO_PRESETS[0]; node.modelId = String(sourceNode.modelId || getDefaultImageConfigId() || ""); node.outputImages = imageUrl ? [imageUrl] : []; node.imageUrl = ""; node.imageBase64 = ""; return node; }
   function getDefaultImageConfigId() { const list = getImageConfigList(); return String(list[0]?.id || ""); }
   function syncNodeModelDefaults() {
     const defaultId = getDefaultImageConfigId();
@@ -613,7 +578,6 @@
   function deleteSelectedNodes() {
     const ids = new Set(STATE.selectedNodeIds);
     if (!ids.size) return;
-    pushUndoSnapshot();
     STATE.nodes = STATE.nodes.filter((node) => !ids.has(node.id));
     STATE.edges = STATE.edges.filter((edge) => !ids.has(edge.from) && !ids.has(edge.to));
     STATE.selectedNodeIds = [];
@@ -625,17 +589,14 @@
   function updateNodeField(nodeId, field, value, options = {}) {
     const node = getNode(nodeId);
     if (!node) return;
-    const previousValue = node[field];
     if (field === "modelId") value = String(value || "");
-    if (String(previousValue ?? "") === String(value ?? "")) return;
-    pushUndoSnapshot();
     node[field] = value;
     persistCurrentHistory();
     persistCanvasState();
     if (options.rerender !== false || field === "modelId") renderCanvas();
   }
-  function deleteNode(nodeId) { pushUndoSnapshot(); STATE.nodes = STATE.nodes.filter((node) => node.id !== nodeId); STATE.edges = STATE.edges.filter((edge) => edge.from !== nodeId && edge.to !== nodeId); if (STATE.selectedNodeId === nodeId) STATE.selectedNodeId = null; persistCanvasState(); renderCanvas(); renderLeftPanel(); }
-  function deleteEdge(edgeId) { pushUndoSnapshot(); STATE.edges = STATE.edges.filter((edge) => edge.id !== edgeId); if (STATE.selectedEdgeId === edgeId) STATE.selectedEdgeId = null; persistCanvasState(); renderCanvas(); }
+  function deleteNode(nodeId) { STATE.nodes = STATE.nodes.filter((node) => node.id !== nodeId); STATE.edges = STATE.edges.filter((edge) => edge.from !== nodeId && edge.to !== nodeId); if (STATE.selectedNodeId === nodeId) STATE.selectedNodeId = null; persistCanvasState(); renderCanvas(); renderLeftPanel(); }
+  function deleteEdge(edgeId) { STATE.edges = STATE.edges.filter((edge) => edge.id !== edgeId); if (STATE.selectedEdgeId === edgeId) STATE.selectedEdgeId = null; persistCanvasState(); renderCanvas(); }
 
   async function loadImageToNode(nodeId, file) {
     const base64Payload = await fileToBase64(file);
@@ -680,7 +641,7 @@
     renderCanvas();
   }
   function updateConnectionDrag(clientX, clientY) { if (!STATE.connectionDrag) return; const point = clientToCanvasPoint(clientX, clientY); STATE.connectionDrag.current = point; const nearest = findNearestInputPort(point, STATE.connectionDrag.fromNodeId); STATE.connectionDrag.targetNodeId = nearest ? nearest.nodeId : null; renderCanvas(); }
-  function finishConnectionDrag(clientX, clientY) { if (!STATE.connectionDrag) return; updateConnectionDrag(clientX, clientY); const fromNodeId = STATE.connectionDrag.fromNodeId; let targetNodeId = STATE.connectionDrag.targetNodeId; const releasePoint = clientToCanvasPoint(clientX, clientY); if (!targetNodeId) { pushUndoSnapshot(); const newNode = createNode(releasePoint.x, releasePoint.y - 120); STATE.nodes.push(newNode); targetNodeId = newNode.id; } if (targetNodeId && targetNodeId !== fromNodeId) { const exists = STATE.edges.some((edge) => edge.from === fromNodeId && edge.to === targetNodeId); if (!exists) { pushUndoSnapshot(); STATE.edges.push({ id: makeId(), from: fromNodeId, to: targetNodeId }); } STATE.selectedNodeId = targetNodeId; STATE.selectedEdgeId = null; persistCanvasState(); } STATE.connectionDrag = null; renderCanvas(); renderLeftPanel(); }
+  function finishConnectionDrag(clientX, clientY) { if (!STATE.connectionDrag) return; updateConnectionDrag(clientX, clientY); const fromNodeId = STATE.connectionDrag.fromNodeId; let targetNodeId = STATE.connectionDrag.targetNodeId; const releasePoint = clientToCanvasPoint(clientX, clientY); if (!targetNodeId) { const newNode = createNode(releasePoint.x, releasePoint.y - 120); STATE.nodes.push(newNode); targetNodeId = newNode.id; } if (targetNodeId && targetNodeId !== fromNodeId) { const exists = STATE.edges.some((edge) => edge.from === fromNodeId && edge.to === targetNodeId); if (!exists) STATE.edges.push({ id: makeId(), from: fromNodeId, to: targetNodeId }); STATE.selectedNodeId = targetNodeId; STATE.selectedEdgeId = null; persistCanvasState(); } STATE.connectionDrag = null; renderCanvas(); renderLeftPanel(); }
   function findNearestInputPort(point, excludeNodeId) { let best = null; for (const node of STATE.nodes) { if (node.id === excludeNodeId) continue; const port = getPortPosition(node, "input"); const distance = Math.hypot(point.x - port.x, point.y - port.y); if (distance <= SNAP_DISTANCE && (!best || distance < best.distance)) best = { nodeId: node.id, distance }; } return best; }
   function getLinkedImageNodes(nodeId) {
     return STATE.edges
@@ -703,49 +664,24 @@
     if (!node || node.busy) { console.log("[生成] 提前返回: node不存在或正忙"); return; }
     if (!node.prompt?.trim()) { console.log("[生成] 提示词为空，弹出alert"); return alert("请先输入提示词"); }
     if (!node.modelId) { console.log("[生成] modelId为空，弹出alert"); return alert("请先配置图片模型"); }
-    pushUndoSnapshot();
     node.busy = true;
     renderCanvas();
     const { width, height } = resolveCanvasSize(node.resolution, node.ratio);
     const linkedImageNodes = getLinkedImageNodes(node.id);
     const linkedImageNode = linkedImageNodes[0] || null;
     const refImages = [...linkedImageNodes.map((item) => item.imageBase64 || extractBase64(item.imageUrl)).filter(Boolean), ...(node.imageBase64 ? [node.imageBase64] : [])];
-    const alreadyDisplayingImage = Boolean((node.outputImages && node.outputImages.length) || node.imageUrl);
-    console.log("[生成][参考图] 上游节点数:", linkedImageNodes.length, "本节点自带参考图:", Boolean(node.imageBase64), "最终 refImages 数量:", refImages.length, "image_base64_list_lengths:", refImages.map((item) => (item || "").length));
+    const refImage = refImages[0] || "";
     try {
-      const totalCount = Math.max(1, Number(node.count || 1));
-      const jobs = Array.from({ length: totalCount }).map(async (_, index) => {
-        console.log("[生成] 发起请求到 /api/image/generate, config_id:", node.modelId, "prompt:", node.prompt.slice(0, 60), "job:", index + 1, "/", totalCount);
-        const res = await fetch("/api/image/generate", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ config_id: node.modelId, prompt: node.prompt, negative_prompt: node.negativePrompt || DEFAULT_NEGATIVE_PROMPT, width, height, image_base64: refImages[0] || null, image_base64_list: refImages, n: 1 }),
-        });
-        console.log("[生成] 响应状态:", res.status, "job:", index + 1);
-        const result = await res.json();
-        if (!res.ok || result.code !== 0) throw new Error(result.detail || result.message || `生成失败（第${index + 1}张）`);
-        const images = (result.data || []).map((item) => normalizeImageResult(item)).filter(Boolean);
-        const imageUrl = images[0] || "";
-        if (!imageUrl) throw new Error(`生成结果为空（第${index + 1}张）`);
-        if (alreadyDisplayingImage) {
-          const resultNode = createResultNodeFromSource(node, imageUrl, index, totalCount);
-          STATE.nodes.push(resultNode);
-          STATE.edges.push({ id: makeId(), from: node.id, to: resultNode.id });
-          STATE.selectedNodeId = resultNode.id;
-        } else if (index === 0) {
-          node.outputImages = [imageUrl];
-          STATE.selectedNodeId = node.id;
-        } else {
-          const resultNode = createResultNodeFromSource(node, imageUrl, index, totalCount);
-          STATE.nodes.push(resultNode);
-          STATE.edges.push({ id: makeId(), from: node.id, to: resultNode.id });
-          STATE.selectedNodeId = resultNode.id;
-        }
-        renderCanvas();
-        renderLeftPanel();
-        return imageUrl;
+      console.log("[生成] 发起请求到 /api/image/generate, config_id:", node.modelId, "prompt:", node.prompt.slice(0, 60));
+      const res = await fetch("/api/image/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ config_id: node.modelId, prompt: node.prompt, negative_prompt: node.negativePrompt || DEFAULT_NEGATIVE_PROMPT, width, height, image_base64: refImage || null, image_base64_list: refImages, n: Number(node.count || 1) }),
       });
-      await Promise.all(jobs);
+      console.log("[生成] 响应状态:", res.status);
+      const result = await res.json();
+      if (!res.ok || result.code !== 0) throw new Error(result.detail || result.message || "生成失败");
+      node.outputImages = (result.data || []).map((item) => normalizeImageResult(item)).filter(Boolean);
       persistCanvasState();
     } catch (error) {
       alert(error.message || "生成失败");
@@ -962,10 +898,7 @@ function downloadImage(imageUrl) {
     const distance = Math.max(140, Math.abs(to.x - from.x) * 0.42);
     const c1x = from.x + distance, c2x = to.x - distance;
     const d = `M ${from.x} ${from.y} C ${c1x} ${from.y}, ${c2x} ${to.y}, ${to.x} ${to.y}`;
-    const selected = STATE.selectedEdgeId === edge.id;
-    const stroke = selected ? "#f59e0b" : "#60a5fa";
-    const strokeWidth = selected ? 5 : 3.2;
-    return `<path class="edge-hit" data-edge-id="${edge.id}" d="${d}"></path><path class="edge-visible ${selected ? 'edge-selected' : ''}" d="${d}" stroke="${stroke}" stroke-width="${strokeWidth}"></path>`;
+    return `<path class="edge-hit" data-edge-id="${edge.id}" d="${d}"></path><path class="edge-visible ${STATE.selectedEdgeId === edge.id ? 'edge-selected' : ''}" d="${d}" stroke="#60a5fa" stroke-width="3"></path>`;
   }
 
   function renderEdgeDomHit(edge) {
@@ -1024,8 +957,6 @@ function downloadImage(imageUrl) {
     return `<div class="canvas-context-menu" style="left:${STATE.contextMenu.x}px;top:${STATE.contextMenu.y}px;"><button data-context-create-node="1"><i class="fa fa-plus-circle"></i> 新建节点</button></div>`;
   }
   function createNodeFromContextMenu() { const point = STATE.contextMenu.canvasPoint || { x: 180, y: 160 }; hideContextMenu(false); addNodeAt(point.x, point.y); }
-  function pushUndoSnapshot() { STATE.undoStack.push(snapshotState()); if (STATE.undoStack.length > 50) STATE.undoStack.shift(); }
-  function undoCanvas() { const snapshot = STATE.undoStack.pop(); if (!snapshot) return; restoreSnapshot(snapshot, { focus: false }); STATE.selectedNodeId = null; STATE.selectedEdgeId = null; STATE.selectedNodeIds = []; persistCanvasState(); renderCanvas(); renderLeftPanel(); }
   async function loadPersistedCanvasState() {
     const stateUrl = `${window.location.origin}/api/canvas/state`;
     STATE.debugInfo.loadStateUrl = stateUrl;

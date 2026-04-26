@@ -48,16 +48,8 @@ function getConfigMap() {
 }
 
 function getProviderBadge(modelName = "") {
-  const name = String(modelName || "").toLowerCase();
-  if (name.includes("gpt") || name.includes("o3") || name.includes("dall")) return { label: "OA", cls: "openai" };
-  if (name.includes("claude")) return { label: "CL", cls: "claude" };
-  if (name.includes("gemini") || name.includes("imagen")) return { label: "GM", cls: "gemini" };
-  if (name.includes("deepseek")) return { label: "DS", cls: "deepseek" };
-  if (name.includes("qwen")) return { label: "QW", cls: "qwen" };
-  if (name.includes("glm")) return { label: "GL", cls: "glm" };
-  if (name.includes("flux")) return { label: "FX", cls: "flux" };
-  if (name.includes("sdxl") || name.includes("stable")) return { label: "SD", cls: "sd" };
-  return { label: "AI", cls: "default" };
+  const brand = window.detectModelBrand ? window.detectModelBrand(modelName) : { shortLabel: "AI", key: "default", label: "AI" };
+  return { label: brand.shortLabel || "AI", cls: brand.key || "default", brand };
 }
 
 function escapeHtml(str = "") {
@@ -144,11 +136,12 @@ function getMsg() {
   return getCurrentSession()?.messages || [];
 }
 
-function setMsg(msgs) {
+function setMsg(msgs, meta = {}) {
   const sessions = getSessions();
   const session = sessions[currentSessionId];
   if (!session) return;
   session.messages = msgs;
+  if (meta.model_name) session.model_name = meta.model_name;
   const firstUser = msgs.find((m) => m.role === "user" && (m.content || "").trim());
   if (firstUser) session.title = firstUser.content.trim().replace(/\n/g, " ").slice(0, 24) || "新会话";
   setSessions(sessions);
@@ -176,6 +169,7 @@ function switchSession(id) {
   }
   currentSessionId = id;
   renderSessionList();
+  refreshModelPills();
   renderMessages();
   updateHeaderTitle();
 }
@@ -288,11 +282,16 @@ function renderMessageItem(m, index) {
     </div>
   ` : "";
   const selectedChatId = document.getElementById("chat-config-select")?.value || "";
+  const session = getSessions()?.[currentSessionId] || {};
+  const modelHint = m.model_name || session.model_name || ((window.GLOBAL?.configList || []).find((item) => String(item.id) === String(selectedChatId))?.model_name) || "";
   const cfg = (window.GLOBAL?.configList || []).find((item) => String(item.id) === String(selectedChatId));
-  const badge = isUser ? { label: "我", cls: "user" } : getProviderBadge(cfg?.model_name || "");
+  const badge = isUser ? { label: "我", cls: "user" } : getProviderBadge(modelHint || cfg?.model_name || "");
+  const assistantAvatar = !isUser && window.renderModelIcon
+    ? window.renderModelIcon(modelHint || cfg?.model_name || "", { size: 34, title: badge.brand?.label || modelHint || cfg?.model_name || "AI" })
+    : `<div class="oc-avatar ${isUser ? "" : `provider-${badge.cls}`} ">${badge.label}</div>`;
   return `
     <div class="oc-msg-row ${isUser ? "user" : "assistant"}" data-idx="${index}" data-role="${m.role}" data-streaming="${m.streaming ? "1" : "0"}">
-      <div class="oc-avatar ${isUser ? "" : `provider-${badge.cls}`} ">${badge.label}</div>
+      ${isUser ? `<div class="oc-avatar">${badge.label}</div>` : assistantAvatar}
       <div class="oc-bubble ${isUser ? "user" : "assistant"}">
         <div class="oc-markdown">${html || (!isUser ? '<span class="oc-dim">...</span>' : "")}</div>
         ${images}
@@ -365,10 +364,11 @@ function finishLastAssistantMessage(text, extra = {}) {
       msgs[i].content = text;
       msgs[i].streaming = false;
       if (extra.images) msgs[i].images = extra.images;
+      if (extra.model_name) msgs[i].model_name = extra.model_name;
       break;
     }
   }
-  setMsg(msgs);
+  setMsg(msgs, { model_name: extra.model_name });
   renderMessages();
 }
 
@@ -440,7 +440,6 @@ async function send() {
   const ipt = document.getElementById("chat-input");
   const chatSel = document.getElementById("chat-config-select");
   const imageSel = document.getElementById("image-config-select");
-  const tempInput = document.getElementById("temperature");
   const text = ipt?.value.trim();
   if (!ipt || !chatSel) return;
   if (!text) return toast("请输入内容");
@@ -449,10 +448,12 @@ async function send() {
   await collectSmartFiles();
 
   const prevMsgs = getMsg();
+  const currentCfg = (window.GLOBAL?.configList || []).find((item) => String(item.id) === String(chatSel.value));
+  const currentModelName = currentCfg?.model_name || currentCfg?.name || "";
   const isImageIntent = /(生成|画|绘制|做一张|来一张|图片|海报|插画|头像|壁纸|配图)/.test(text);
   const placeholder = isImageIntent ? "正在识别任务并生成图片，请稍等..." : "";
-  const nextMsgs = [...prevMsgs, { role: "user", content: text }, { role: "assistant", content: placeholder, streaming: true }];
-  setMsg(nextMsgs);
+  const nextMsgs = [...prevMsgs, { role: "user", content: text }, { role: "assistant", content: placeholder, streaming: true, model_name: currentModelName }];
+  setMsg(nextMsgs, { model_name: currentModelName });
   ipt.value = "";
   autoResizeTextarea();
   renderMessages();
@@ -475,7 +476,6 @@ async function send() {
         messages: payloadMessages,
         chat_config_id: chatSel.value,
         image_config_id: imageSel?.value || null,
-        temperature: Number(tempInput?.value || 0.7),
         stream: true,
         files: smartFiles
       }),
@@ -495,15 +495,15 @@ async function send() {
         if (result.code !== 0 || imageCount === 0) {
           finishLastAssistantMessage(result?.message || "图片接口返回成功，但没有解析到可显示图片。");
         } else {
-          finishLastAssistantMessage(`我已经判断这是图片生成任务，并直接帮你生成好了。\n\n提示词：${result?.data?.prompt || text}\n尺寸：${result?.data?.image_size || "1024x1024"}\n数量：${result?.data?.image_count || imageCount || 1}\n\n共返回 ${imageCount} 张图片。`, { images: result?.data?.images || [] });
+          finishLastAssistantMessage(`我已经判断这是图片生成任务，并直接帮你生成好了。\n\n提示词：${result?.data?.prompt || text}\n尺寸：${result?.data?.image_size || "1024x1024"}\n数量：${result?.data?.image_count || imageCount || 1}\n\n共返回 ${imageCount} 张图片。`, { images: result?.data?.images || [], model_name: currentModelName });
         }
       } else {
         const textResult = result?.data?.choices?.[0]?.message?.content || result?.message || "处理完成";
-        finishLastAssistantMessage(textResult);
+        finishLastAssistantMessage(textResult, { model_name: currentModelName });
       }
     } else {
       const finalText = res.body ? await readStreamResponse(res, (fullText) => patchLastAssistantMessage(fullText, true)) : "";
-      finishLastAssistantMessage(finalText || "无返回内容");
+      finishLastAssistantMessage(finalText || "无返回内容", { model_name: currentModelName });
     }
 
     smartFiles = [];
@@ -561,8 +561,16 @@ function refreshModelPills() {
   const imageBadge = getProviderBadge(imageCfg?.model_name || "");
   const chatPill = document.getElementById("chat-model-pill");
   const imagePill = document.getElementById("image-model-pill");
-  if (chatPill) chatPill.style.borderColor = chatBadge.cls === 'default' ? '#e6ebf2' : 'rgba(59,130,246,.25)';
-  if (imagePill) imagePill.style.borderColor = imageBadge.cls === 'default' ? '#e6ebf2' : 'rgba(16,185,129,.25)';
+  if (window.ensureModelBrandStyles) window.ensureModelBrandStyles();
+  if (chatPill) {
+    chatPill.dataset.brand = chatBadge.cls;
+    chatPill.style.borderColor = chatBadge.cls === 'default' ? '#e6ebf2' : 'rgba(59,130,246,.25)';
+  }
+  if (imagePill) {
+    imagePill.dataset.brand = imageBadge.cls;
+    imagePill.style.borderColor = imageBadge.cls === 'default' ? '#e6ebf2' : 'rgba(16,185,129,.25)';
+  }
+  if (window.updateButtonStatus) window.updateButtonStatus();
 }
 
 function bindEvents() {
@@ -574,15 +582,10 @@ function bindEvents() {
   const msgWrap = document.getElementById("chat-message-list");
   const newBtn = document.getElementById("chat-new-session-btn");
   const chatSelect = document.getElementById("chat-config-select");
-  const imageSelect = document.getElementById("image-config-select");
 
   if (chatSelect && !chatSelect._pillBound) {
     chatSelect.addEventListener("change", () => { refreshModelPills(); renderMessages(); });
     chatSelect._pillBound = true;
-  }
-  if (imageSelect && !imageSelect._pillBound) {
-    imageSelect.addEventListener("change", refreshModelPills);
-    imageSelect._pillBound = true;
   }
 
   if (sendBtn && !sendBtn._bound) {
@@ -667,19 +670,19 @@ function buildChatUI() {
             <div class="oc-subtitle">主流 AI 聊天布局 · 稳定多轮对话 · 支持图片与文件任务</div>
           </div>
           <div class="oc-toolbar">
-            <div class="oc-field-inline model-pill" id="chat-model-pill">
-              <label>聊天模型</label>
-              <select id="chat-config-select" class="form-select"></select>
+            <div class="oc-field-inline model-pill compact" id="chat-model-pill">
+              <label>当前模型</label>
+              <div class="oc-model-pill-head">
+                <div class="oc-model-select-wrap"><select id="chat-config-select" class="form-select"></select></div>
+              </div>
             </div>
-            <div class="oc-field-inline model-pill" id="image-model-pill">
-              <label>绘图模型</label>
-              <select id="image-config-select" class="form-select"></select>
+            <div class="oc-field-inline model-pill compact" id="image-model-pill">
+              <label>图片模型</label>
+              <div class="oc-model-pill-head">
+                <div class="oc-model-select-wrap"><select id="image-config-select" class="form-select"></select></div>
+              </div>
             </div>
-            <div class="oc-field-inline small">
-              <label>温度</label>
-              <input type="number" class="form-input" id="temperature" min="0" max="2" step="0.1" value="0.7">
-            </div>
-            <button class="btn btn-danger" id="clear-chat-btn" type="button">清空对话</button>
+            <button class="oc-toolbar-btn ghost" id="clear-chat-btn" type="button">清空</button>
           </div>
         </div>
         <div class="oc-filebar">
@@ -718,11 +721,21 @@ function injectStyles() {
     .oc-topbar { padding:18px 22px; border-bottom:1px solid #e6ebf2; background:rgba(255,255,255,.92); display:flex; align-items:flex-end; justify-content:space-between; gap:16px; }
     .oc-title { font-size:18px; font-weight:800; color:#0f172a; }
     .oc-subtitle { font-size:12px; color:#64748b; margin-top:4px; }
-    .oc-toolbar { display:flex; align-items:flex-end; gap:12px; flex-wrap:wrap; }
-    .oc-field-inline { min-width:220px; }
+    .oc-toolbar { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+    .oc-field-inline { min-width:220px; display:flex; flex-direction:column; }
     .oc-field-inline.small { min-width:110px; }
     .oc-field-inline label { display:block; font-size:12px; color:#64748b; margin-bottom:6px; font-weight:600; }
-    .oc-field-inline.model-pill{padding:10px 12px;border:1px solid #e6ebf2;border-radius:14px;background:rgba(255,255,255,.86);box-shadow:0 10px 24px rgba(15,23,42,.04)}
+    .oc-field-inline .form-select,.oc-field-inline .form-input{height:42px;border-radius:12px}
+    .oc-field-inline.model-pill{padding:10px 12px;border:1px solid #e6ebf2;border-radius:16px;background:linear-gradient(180deg,rgba(255,255,255,.96),rgba(248,250,252,.92));box-shadow:0 12px 28px rgba(15,23,42,.05);min-width:250px}
+    .oc-field-inline.model-pill.compact{padding:8px 10px;min-width:240px}
+    .oc-model-pill-head{display:flex;align-items:center;gap:10px}
+    .oc-model-select-wrap{flex:1;min-width:140px}
+    .oc-model-select-wrap .form-select{height:40px}
+    .oc-model-inline-preview{display:none}
+    .oc-model-pill-empty{font-size:12px;color:#94a3b8;font-weight:600}
+    .oc-toolbar-btn{height:38px;border:none;border-radius:12px;padding:0 12px;font-size:13px;font-weight:700;cursor:pointer;display:inline-flex;align-items:center;justify-content:center}
+    .oc-toolbar-btn.ghost{background:#f8fafc;color:#475569;border:1px solid #e2e8f0}
+    .oc-toolbar-btn.ghost:hover{background:#eef2f7;color:#0f172a}
     .oc-filebar { padding:12px 22px 0; background:transparent; }
     .oc-file-list { display:flex; flex-wrap:wrap; gap:8px; margin-top:10px; }
     .oc-file-chip { display:inline-flex; align-items:center; gap:8px; padding:7px 10px; border-radius:999px; border:1px solid #d6e4ff; background:#edf4ff; color:#1d4ed8; font-size:12px; font-weight:700; }
@@ -736,7 +749,6 @@ function injectStyles() {
     .oc-avatar { width:34px; height:34px; border-radius:999px; display:flex; align-items:center; justify-content:center; font-size:12px; font-weight:800; flex-shrink:0; }
     .oc-msg-row.user .oc-avatar { background:#dbeafe; color:#1d4ed8; }
     .oc-msg-row.assistant .oc-avatar { background:#111827; color:#fff; }
-    .oc-avatar.provider-openai{background:linear-gradient(135deg,#10b981,#065f46);color:#fff}.oc-avatar.provider-claude{background:linear-gradient(135deg,#fb923c,#9a3412);color:#fff}.oc-avatar.provider-gemini{background:linear-gradient(135deg,#60a5fa,#4f46e5);color:#fff}.oc-avatar.provider-deepseek{background:linear-gradient(135deg,#38bdf8,#0f766e);color:#fff}.oc-avatar.provider-qwen{background:linear-gradient(135deg,#a78bfa,#6d28d9);color:#fff}.oc-avatar.provider-glm{background:linear-gradient(135deg,#f472b6,#be185d);color:#fff}.oc-avatar.provider-flux,.oc-avatar.provider-sd{background:linear-gradient(135deg,#f59e0b,#b45309);color:#fff}.oc-avatar.provider-default{background:#111827;color:#fff}
     .oc-bubble { max-width:min(78%, 760px); border-radius:20px; padding:14px 16px; box-shadow:0 6px 20px rgba(15,23,42,.06); overflow:hidden; }
     .oc-bubble.user { background:linear-gradient(135deg,#1677ff,#3b82f6); color:#fff; border-bottom-right-radius:8px; }
     .oc-bubble.assistant { background:#fff; color:#0f172a; border:1px solid #e7edf4; border-bottom-left-radius:8px; }
@@ -779,6 +791,7 @@ function injectStyles() {
 
 function initChatModule() {
   injectStyles();
+  if (window.ensureModelBrandStyles) window.ensureModelBrandStyles();
   buildChatUI();
   initSessions();
   bindEvents();
