@@ -1,0 +1,16 @@
+{
+  "name": "liuhui-android-app",
+  "version": "0.1.0",
+  "private": true,
+  "description": "流绘 Android shell (WebView/Capacitor)",
+  "scripts": {
+    "cap:init": "npx cap sync android",
+    "cap:open": "npx cap open android"
+  },
+  "devDependencies": {
+    "@capacitor/android": "^7.4.2",
+    "@capacitor/cli": "^7.4.2",
+    "@capacitor/core": "^7.4.2",
+    "typescript": "^6.0.3"
+  }
+}

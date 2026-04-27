@@ -1,0 +1,20 @@
+[
+  {
+    "id": "678bff83-1444-46e1-83e4-17ce598fda70",
+    "name": "gpt image2",
+    "config_type": "image",
+    "api_base": "https://ai.t8star.cn/v1",
+    "api_key": "sk-mhpWE0ygZI2EZtEknMs7IafneIwHSPEyIMouB1ZkkM4WVFql",
+    "model_name": "gpt-image-2",
+    "description": ""
+  },
+  {
+    "id": "27e3f2cd-b84d-4239-a8f6-1230db974756",
+    "name": "gpt",
+    "config_type": "chat",
+    "api_base": "https://ai.t8star.cn/v1",
+    "api_key": "sk-mhpWE0ygZI2EZtEknMs7IafneIwHSPEyIMouB1ZkkM4WVFql",
+    "model_name": "gpt-5.4",
+    "description": ""
+  }
+]

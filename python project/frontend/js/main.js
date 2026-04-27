@@ -2,7 +2,7 @@
   window.MODEL_PRESETS = {
     chat: [
       "gpt-3.5-turbo","gpt-4","gpt-4-turbo","gpt-4o","o1","o3",
-      "claude-2","claude-2.1","claude-3-haiku","claude-3-sonnet","claude-3-opus",
+      "claude-2","claude-2.1","claude-3-haiku","claude-3-sonnet","claude-opus-4-7",
       "gemini-pro","gemini-ultra","gemini-2.5-pro","gemini-3.1",
       "grok-2","grok-3","grok-4",
       "command-r","command-r-plus",

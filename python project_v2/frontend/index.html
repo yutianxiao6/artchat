@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Nebula AI Studio</title>
+    <link href="https://cdn.jsdelivr.net/npm/font-awesome@4.7.0/css/font-awesome.min.css" rel="stylesheet">
+        <link rel="stylesheet" href="/static/css/main.css">
+
+</head>
+<body>
+    <!-- 顶部导航 -->
+    <header class="header">
+        <div class="header-logo">
+            <i class="fa fa-robot"></i>
+            API 模型调用客户端
+        </div>
+        <nav class="tab-nav">
+            <button class="tab-btn active" data-tab="config">
+                <i class="fa fa-cog"></i>
+                <span>配置管理</span>
+            </button>
+            <button class="tab-btn" data-tab="chat">
+                <i class="fa fa-comments"></i>
+                <span>聊天对话</span>
+            </button>
+            <button class="tab-btn" data-tab="image">
+                <i class="fa fa-picture-o"></i>
+                <span>图片生成</span>
+            </button>
+        </nav>
+    </header>
+
+    <!-- 主内容区 -->
+    <main class="main-container">
+        <!-- 1. 配置管理标签页 -->
+        <div id="config" class="tab-content active custom-scrollbar">
+            <section class="hero-grid">
+                <div class="hero-panel">
+                    <span class="pill"><i class="fa fa-bolt"></i> 更快配置 · 更稳对话 · 更好看界面</span>
+                    <div class="hero-title">一个更像现代 AI 产品的工作台</div>
+                    <p class="hero-desc">集中管理模型配置、对话会话和图片生成。支持聊天模型、文生图、图生图，并针对图片上传链路做了修复和强化。</p>
+                </div>
+                <div class="hero-stats">
+                    <div class="stat-card"><b>Chat</b><span>流式响应 / 多会话</span></div>
+                    <div class="stat-card"><b>Image</b><span>文生图 / 图生图 / 上传预览</span></div>
+                    <div class="stat-card"><b>Config</b><span>统一配置保存与测试</span></div>
+                </div>
+            </section>
+            <section class="section-shell section-grid">
+            <div class="card">
+                <div class="card-header">
+                    <h2 class="card-title">
+                        <i class="fa fa-wrench"></i>
+                        模型配置管理
+                    </h2>
+                    <button class="btn btn-primary" id="new-config-btn">
+                        <i class="fa fa-plus"></i>
+                        新增配置
+                    </button>
+                </div>
+                <div class="card-body">
+                    <!-- 配置列表 -->
+                    <div class="table-container">
+                        <table class="table" id="config-table">
+                            <thead>
+                                <tr>
+                                    <th>配置名称</th>
+                                    <th>配置类型</th>
+                                    <th>模型名称</th>
+                                    <th style="text-align: right;">操作</th>
+                                </tr>
+                            </thead>
+                            <tbody id="config-list-body">
+                                <tr>
+                                    <td colspan="4">
+                                        <div class="empty-tip" id="config-empty-tip">
+                                            <i class="fa fa-folder-open-o"></i>
+                                            <p>暂无配置，点击「新增配置」创建</p>
+                                        </div>
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 配置编辑表单 -->
+            <div class="card config-form-sticky">
+                <div class="card-header">
+                    <h2 class="card-title" id="form-title">
+                        <i class="fa fa-edit"></i>
+                        新增配置
+                    </h2>
+                </div>
+                <div class="card-body">
+                    <input type="hidden" id="edit-config-id">
+                    <div class="form-grid">
+                        <div class="form-group">
+                            <label class="form-label">配置名称</label>
+                            <input type="text" class="form-input" id="config-name" placeholder="例如：OpenAI-GPT4o">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">配置类型</label>
+                            <select class="form-select" id="config-type">
+                                <option value="chat">仅聊天模型</option>
+                                <option value="image">仅图片模型</option>
+                                <option value="both">聊天+图片通用</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">API Base 地址</label>
+                        <input type="text" class="form-input" id="api-base" placeholder="例如：https://api.openai.com/v1">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">API Key 秘钥</label>
+                        <input type="password" class="form-input" id="api-key" placeholder="输入你的API秘钥">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">模型名称</label>
+                        <input type="text" class="form-input" id="model-name" placeholder="例如：gpt-4o、gpt-image-2、dall-e-3">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">配置描述（可选）</label>
+                        <textarea class="form-textarea" id="config-desc" rows="2" placeholder="备注配置用途、限制等"></textarea>
+                    </div>
+                    <div class="btn-group">
+                        <button class="btn btn-success" id="test-config-btn">
+                            <i class="fa fa-check"></i>
+                            测试连接
+                        </button>
+                        <button class="btn btn-primary" id="save-config-btn">
+                            <i class="fa fa-save"></i>
+                            保存配置
+                        </button>
+                        <button class="btn btn-default" id="reset-form-btn">
+                            <i class="fa fa-refresh"></i>
+                            重置表单
+                        </button>
+                    </div>
+                    <div id="test-result" style="margin-top: 12px; font-size: 14px;"></div>
+                </div>
+            </div>
+        </section>
+        </div>
+
+        <!-- 2. 聊天对话标签页 -->
+        <div id="chat" class="tab-content">
+            <div class="chat-shell">
+                <aside class="chat-sidebar">
+                    <div>
+                        <div class="card-title"><i class="fa fa-comments-o"></i> 对话控制台</div>
+                        <div class="section-subtitle">选择模型配置并开始流式对话</div>
+                    </div>
+                    <button class="btn btn-primary" id="new-session-btn" style="width:100%; justify-content:center;">
+                        <i class="fa fa-plus"></i>
+                        新建会话
+                    </button>
+                    <div class="chat-header">
+                        <div class="chat-header-content" style="max-width:none; margin:0; display:block;">
+                    <div class="chat-config-wrap">
+                        <label class="form-label">选择聊天配置</label>
+                        <select class="form-select" id="chat-config-select">
+                            <option value="">请先在配置管理中创建聊天模型配置</option>
+                        </select>
+                    </div>
+                    <div style="width: 120px;">
+                        <label class="form-label">温度系数</label>
+                        <input type="number" class="form-input" id="temperature" min="0" max="2" step="0.1" value="0.7">
+                    </div>
+                    <button class="btn btn-danger" id="clear-chat-btn" style="width:100%; justify-content:center; margin-top:8px;">
+                        <i class="fa fa-trash"></i>
+                        清空对话
+                    </button>
+                </div>
+            </div>
+                    <div id="session-list" class="session-list custom-scrollbar"></div>
+                </aside>
+
+                <section class="chat-main-panel">
+            <div class="chat-messages custom-scrollbar" id="chat-messages">
+                <div class="messages-container" id="messages-container">
+                    <div class="empty-tip" id="chat-empty-tip">
+                        <i class="fa fa-comments-o"></i>
+                        <p>选择配置后，开始对话吧</p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="chat-input-wrap">
+                <div class="chat-input-container">
+                    <textarea class="chat-input" id="chat-input" rows="3" placeholder="输入你的问题，Shift+Enter换行，Enter发送"></textarea>
+                    <button class="btn btn-primary chat-send-btn" id="send-chat-btn" disabled>发送</button>
+                </div>
+            </div>
+                </section>
+            </div>
+        </div>
+
+        <!-- 3. 图片生成标签页 -->
+        <div id="image" class="tab-content">
+            <div class="image-shell">
+                <aside class="image-settings">
+                    <div class="card-title"><i class="fa fa-picture-o"></i> 图像工作台</div>
+                    <div class="section-subtitle">支持文生图、图生图、上传预览与结果下载</div>
+                    <div class="image-toolbar custom-scrollbar" style="margin-top:16px;">
+                        <div class="toolbar-grid">
+                    <div>
+                        <label class="form-label">选择图片配置</label>
+                        <select class="form-select" id="image-config-select">
+                            <option value="">请先在配置管理中创建图片模型配置</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="form-label">生成模式</label>
+                        <select class="form-select" id="image-mode">
+                            <option value="text2image">文生图</option>
+                            <option value="image2image">图生图</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="form-label">尺寸比例</label>
+                        <select class="form-select" id="image-size">
+                            <option value="1024x1024">1:1 (1024x1024) - 推荐</option>
+                            <option value="1536x1024">16:9 (1536x1024) 横屏</option>
+                            <option value="1024x1536">9:16 (1024x1536) 竖屏</option>
+                            <option value="2048x2048">2K (2048x2048)</option>
+                            <option value="2048x1152">2K横屏 (2048x1152)</option>
+                            <option value="3840x2160">4K横屏 (3840x2160)</option>
+                            <option value="2160x3840">4K竖屏 (2160x3840)</option>
+                            <option value="custom">自定义尺寸</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="form-label">生成数量</label>
+                        <input type="number" class="form-input" id="image-count" min="1" max="4" value="1">
+                    </div>
+                </div>
+            </div>
+                </aside>
+
+                <section class="image-workspace">
+            <div class="image-main custom-scrollbar">
+                <div class="image-container">
+                    <!-- 图生图上传区 -->
+                    <div class="upload-area" id="image-upload-area">
+                        <input type="file" id="image-upload" accept="image/*" hidden>
+                        <div id="upload-preview">
+                            <i class="fa fa-cloud-upload" style="font-size: 48px; color: var(--text-disabled);"></i>
+                            <p style="margin-top: 12px; color: var(--text-secondary);">点击或拖拽图片到此处上传参考图</p>
+                        </div>
+                        <button class="btn btn-default" id="upload-btn" style="margin-top: 12px;">选择图片</button>
+                    </div>
+
+                    <!-- 自定义尺寸区 -->
+                    <div class="card custom-size-area" id="custom-size-area">
+                        <div class="card-body">
+                            <div class="form-grid">
+                                <div class="form-group" style="margin-bottom: 0;">
+                                    <label class="form-label">宽度 (px) - 必须是16的倍数</label>
+                                    <input type="number" class="form-input" id="image-width" value="1024" min="256" max="3840" step="16">
+                                </div>
+                                <div class="form-group" style="margin-bottom: 0;">
+                                    <label class="form-label">高度 (px) - 必须是16的倍数</label>
+                                    <input type="number" class="form-input" id="image-height" value="1024" min="256" max="3840" step="16">
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 提示词区 -->
+                    <div class="card prompt-card">
+                        <div class="card-body">
+                            <div class="form-group">
+                                <label class="form-label">正向提示词</label>
+                                <textarea class="form-textarea" id="prompt" rows="4" placeholder="详细描述你想要生成的图片内容，越详细效果越好"></textarea>
+                            </div>
+                            <div class="form-group" style="margin-bottom: 0;">
+                                <label class="form-label">反向提示词（已默认配置）</label>
+                                <textarea class="form-textarea" id="negative-prompt" rows="3"></textarea>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 生成按钮 -->
+                    <div class="generate-btn-wrap">
+                        <button class="btn btn-primary generate-btn" id="generate-image-btn" disabled>
+                            <i class="fa fa-magic"></i>
+                            生成图片
+                        </button>
+                        <div class="loading-tip" id="generate-loading">
+                            <i class="fa fa-spinner fa-spin"></i>
+                            正在生成图片，请稍候...
+                        </div>
+                    </div>
+
+                    <!-- 图片结果区 -->
+                    <div class="image-grid" id="image-result">
+                        <div class="empty-tip" style="grid-column: 1 / -1;" id="image-empty-tip">
+                            <i class="fa fa-picture-o"></i>
+                            <p>生成的图片将在这里显示</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+                </section>
+            </div>
+        </div>
+    </main>
+
+    <!-- JS模块引入 -->
+    <script src="/static/js/main.js"></script>
+    <script src="/static/js/config.js"></script>
+    <script src="/static/js/chat.js"></script>
+    <script src="/static/js/image.js"></script>
+</body>
+</html>
