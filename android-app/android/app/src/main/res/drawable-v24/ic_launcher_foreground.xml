@@ -1,0 +1,44 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportHeight="108"
+    android:viewportWidth="108">
+
+    <!-- Paintbrush body - diagonal stroke -->
+    <path
+        android:pathData="M38,70 L62,34 C63.5,31.5 67,31 69,33 L71,35 C73,37 72.5,40.5 70,42 L46,78 C44,80.5 40,81 38,79 Z"
+        android:fillColor="#FFFFFF"/>
+
+    <!-- Brush tip -->
+    <path
+        android:pathData="M34,74 L38,70 L38,79 L34,83 C32,85 28,84 28,81 C28,78 31,76 34,74 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:startX="28"
+                android:startY="74"
+                android:endX="38"
+                android:endY="83"
+                android:type="linear">
+                <item android:color="#FF60a5fa" android:offset="0.0"/>
+                <item android:color="#FFa78bfa" android:offset="1.0"/>
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <!-- AI sparkle - top right -->
+    <path
+        android:pathData="M74,28 L76,24 L78,28 L82,30 L78,32 L76,36 L74,32 L70,30 Z"
+        android:fillColor="#60a5fa"/>
+
+    <!-- Small sparkle -->
+    <path
+        android:pathData="M82,40 L83,38 L84,40 L86,41 L84,42 L83,44 L82,42 L80,41 Z"
+        android:fillColor="#93c5fd"/>
+
+    <!-- Tiny sparkle -->
+    <path
+        android:pathData="M66,26 L66.5,25 L67,26 L68,26.5 L67,27 L66.5,28 L66,27 L65,26.5 Z"
+        android:fillColor="#c4b5fd"/>
+
+</vector>

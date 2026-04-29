@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+*.spec
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+*.env.local
+
+# Android build artifacts
+android-app/android/app/build/
+android-app/android/app/release/
+android-app/android/.gradle/
+android-app/android/build/
+android-app/node_modules/
+
+# Canvas data (user generated)
+canvas_data/
+
+# Temp
+*.bak.*
+FILE_UPLOAD_FIX.md
