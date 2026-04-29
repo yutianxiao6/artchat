@@ -1,51 +1,57 @@
 """
-EXE一键打包脚本
-运行此脚本即可将项目打包为单文件可执行程序，无需Python环境即可运行
+Windows 多文件（onedir）打包脚本
+运行后会生成 dist/流绘/ 目录，整个文件夹分发即可。
 """
 import os
 import shutil
 import PyInstaller.__main__
 
-# 项目路径配置
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
-DIST_DIR = os.path.join(PROJECT_ROOT, "dist")  # 输出目录
-BUILD_DIR = os.path.join(PROJECT_ROOT, "build") # 临时构建目录
-FRONTEND_DIR = os.path.join(PROJECT_ROOT, "frontend") # 前端资源
-ENTRY_FILE = os.path.join(PROJECT_ROOT, "run.py") # 程序入口
+DIST_DIR = os.path.join(PROJECT_ROOT, "dist")
+BUILD_DIR = os.path.join(PROJECT_ROOT, "build")
+FRONTEND_DIR = os.path.join(PROJECT_ROOT, "frontend")
+ENTRY_FILE = os.path.join(PROJECT_ROOT, "run.py")
+APP_NAME = "流绘"
+ICON_FILE = os.path.join(PROJECT_ROOT, "frontend", "assets", "app-icon.ico")
+SPEC_FILE = os.path.join(PROJECT_ROOT, f"{APP_NAME}.spec")
+
 
 def clean_old_build():
-    """清理旧的构建文件"""
     for dir_path in [DIST_DIR, BUILD_DIR]:
         if os.path.exists(dir_path):
             shutil.rmtree(dir_path)
-    # 清理旧的spec文件
-    spec_file = os.path.join(PROJECT_ROOT, "run.spec")
-    if os.path.exists(spec_file):
-        os.remove(spec_file)
+    if os.path.exists(SPEC_FILE):
+        os.remove(SPEC_FILE)
 
-def build_exe():
-    """执行打包"""
-    print("🔧 开始清理旧构建文件...")
+
+def build():
+    print("清理旧构建文件...")
     clean_old_build()
 
-    print("📦 开始打包项目为EXE...")
-    # PyInstaller打包参数
+    print("开始打包 Windows 多文件版本...")
     args = [
         ENTRY_FILE,
-        "--name=流绘",  # 生成的EXE文件名
-        "--onefile",  # 打包为单文件
-        "--windowed", # 隐藏控制台窗口（如需看日志可删除此行）
-        "--add-data", f"{FRONTEND_DIR}{os.pathsep}frontend", # 打包前端资源
-        "--clean", # 清理临时文件
-        "--icon=frontend/assets/app-icon.ico", # 可替换为自定义图标：--icon=你的图标.ico
+        f"--name={APP_NAME}",
+        "--onedir",
+        "--windowed",
+        "--clean",
+        "--noconfirm",
+        f"--icon={ICON_FILE}",
+        "--add-data", f"{FRONTEND_DIR}{os.pathsep}frontend",
     ]
 
-    # 执行打包
     PyInstaller.__main__.run(args)
 
-    print(f"\n✅ 打包完成！")
-    print(f"📂 可执行文件路径: {os.path.join(DIST_DIR, '流绘.exe')}")
-    print(f"ℹ️  运行说明：双击exe即可启动，配置文件会自动生成在exe同目录下")
+    output_dir = os.path.join(DIST_DIR, APP_NAME)
+    exe_path = os.path.join(output_dir, f"{APP_NAME}.exe")
+
+    print(f"\n打包完成！")
+    print(f"输出目录: {output_dir}")
+    print(f"可执行文件: {exe_path}")
+    print(f"\n使用说明：")
+    print(f"1. 将整个 dist/{APP_NAME} 文件夹一起分发")
+    print(f"2. 双击 {APP_NAME}.exe 运行")
+
 
 if __name__ == "__main__":
-    build_exe()
+    build()
