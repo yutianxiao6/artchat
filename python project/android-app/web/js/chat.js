@@ -1,7 +1,6 @@
 const CHAT_STORAGE_KEY = "my_ai_chat_sessions_v2";
 let currentSessionId = null;
-let currentController = null;
-let isGenerating = false;
+const activeGenerations = new Map();
 let smartFiles = [];
 let runtimeSessions = null;
 let chatImageLongPressTriggered = false;
@@ -232,18 +231,32 @@ function sanitizeSessionsForStorage(sessions) {
   Object.values(clone).forEach((session) => {
     if (!Array.isArray(session?.messages)) return;
     session.messages = session.messages.map((msg) => {
-      if (!Array.isArray(msg?.user_files)) return msg;
-      return {
-        ...msg,
-        user_files: msg.user_files.map((file) => ({
-          filename: file?.filename || "",
-          content_type: file?.content_type || "",
-          text_content: String(file?.text_content || "").slice(0, 2000),
-          image_url: "",
-          preview_url: String(file?.preview_url || file?.image_url || "").startsWith("data:") ? "" : String(file?.preview_url || file?.image_url || ""),
-          preview_path: String(file?.preview_path || "")
-        }))
-      };
+      var cleaned = msg;
+      if (Array.isArray(msg?.user_files)) {
+        cleaned = {
+          ...cleaned,
+          user_files: msg.user_files.map((file) => ({
+            filename: file?.filename || "",
+            content_type: file?.content_type || "",
+            text_content: String(file?.text_content || "").slice(0, 2000),
+            size: file?.size || 0,
+            image_url: "",
+            preview_url: String(file?.preview_url || file?.image_url || "").startsWith("data:") ? "" : String(file?.preview_url || file?.image_url || ""),
+            preview_path: String(file?.preview_path || "")
+          }))
+        };
+      }
+      if (Array.isArray(cleaned?.images)) {
+        cleaned = {
+          ...cleaned,
+          images: cleaned.images.map((img) => ({
+            ...img,
+            url: String(img?.url || "").startsWith("data:") ? "" : String(img?.url || ""),
+            b64_json: ""
+          })).filter((img) => img.url)
+        };
+      }
+      return cleaned;
     });
   });
   return clone;
@@ -277,9 +290,10 @@ function getMsg() {
   return getCurrentSession()?.messages || [];
 }
 
-function setMsg(msgs, meta = {}) {
+function setMsg(msgs, meta = {}, sessionId) {
+  const sid = sessionId || currentSessionId;
   const sessions = getSessions();
-  const session = sessions[currentSessionId];
+  const session = sessions[sid];
   if (!session) return;
   session.messages = msgs;
   if (meta.model_name) session.model_name = meta.model_name;
@@ -291,7 +305,6 @@ function setMsg(msgs, meta = {}) {
 }
 
 function newSession() {
-  if (isGenerating) stopGenerate();
   const sessions = getSessions();
   const id = "s_" + Date.now();
   sessions[id] = { id, title: "新会话", messages: [] };
@@ -303,16 +316,12 @@ function newSession() {
 }
 
 function switchSession(id) {
-  if (isGenerating) {
-    const ok = confirm("当前正在生成回答，切换会话会停止当前生成，是否继续？");
-    if (!ok) return;
-    stopGenerate();
-  }
   currentSessionId = id;
   renderSessionList();
   refreshModelPills();
   renderMessages();
   updateHeaderTitle();
+  updateSendBtnState();
 }
 
 function delSession(id, e) {
@@ -351,12 +360,34 @@ function renderSessionList() {
   `).join("");
 }
 
+function isSessionGenerating(sid) { return activeGenerations.has(sid || currentSessionId); }
+function stopSessionGenerate(sid) {
+  const gen = activeGenerations.get(sid);
+  if (!gen) return;
+  if (gen.controller) gen.controller.abort();
+  if (gen.timeoutId) clearTimeout(gen.timeoutId);
+  activeGenerations.delete(sid);
+  const sessions = getSessions();
+  const session = sessions[sid];
+  if (session) {
+    const msgs = session.messages || [];
+    const last = msgs[msgs.length - 1];
+    if (last && last.role === "assistant" && last.streaming) {
+      last.streaming = false;
+      if (!last.content) last.content = "已停止生成";
+      setSessions(sessions);
+    }
+  }
+  if (sid === currentSessionId) { renderMessages(); updateSendBtnState(); }
+}
+
 function updateSendBtnState() {
   const btn = document.getElementById("send-chat-btn");
   if (!btn) return;
+  const generating = isSessionGenerating(currentSessionId);
   btn.disabled = false;
-  btn.textContent = isGenerating ? "停止" : "发送";
-  btn.classList.toggle("is-stop", isGenerating);
+  btn.textContent = generating ? "停止" : "发送";
+  btn.classList.toggle("is-stop", generating);
 }
 
 function autoResizeTextarea() {
@@ -368,19 +399,28 @@ function autoResizeTextarea() {
 
 async function persistChatImageFile(file) {
   try {
-    if (!file || !window.LiuHuiGallery || typeof window.LiuHuiGallery.saveBase64ToAppFile !== "function") return "";
-    const dataUrl = await new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve(String(reader.result || ""));
-      reader.onerror = () => reject(new Error(`图片读取失败：${file.name}`));
-      reader.readAsDataURL(file);
-    });
-    const match = String(dataUrl).match(/^data:(image\/[^;]+);base64,(.+)$/);
-    if (!match) return String(dataUrl || "");
-    const saved = String(window.LiuHuiGallery.saveBase64ToAppFile(match[2], match[1], "chat") || "");
-    if (!saved.startsWith("OK:")) return "";
-    const rawPath = saved.slice(3);
-    return (window.Capacitor && typeof window.Capacitor.convertFileSrc === "function") ? `${window.Capacitor.convertFileSrc(rawPath)}||RAW||${rawPath}` : rawPath;
+    if (!file) return "";
+    if (window.LiuHuiGallery && typeof window.LiuHuiGallery.saveBase64ToAppFile === "function") {
+      const dataUrl = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result || ""));
+        reader.onerror = () => reject(new Error(`图片读取失败：${file.name}`));
+        reader.readAsDataURL(file);
+      });
+      const match = String(dataUrl).match(/^data:(image\/[^;]+);base64,(.+)$/);
+      if (!match) return String(dataUrl || "");
+      const saved = String(window.LiuHuiGallery.saveBase64ToAppFile(match[2], match[1], "chat") || "");
+      if (!saved.startsWith("OK:")) return "";
+      const rawPath = saved.slice(3);
+      return (window.Capacitor && typeof window.Capacitor.convertFileSrc === "function") ? `${window.Capacitor.convertFileSrc(rawPath)}||RAW||${rawPath}` : rawPath;
+    }
+    const formData = new FormData();
+    formData.append("file", file);
+    const res = await fetch("/api/chat/upload-image", { method: "POST", body: formData });
+    if (!res.ok) return "";
+    const result = await res.json();
+    if (result.code === 0 && result.data?.url) return result.data.url;
+    return "";
   } catch (error) {
     console.warn("[chat][file] persistChatImageFile error", error);
     return "";
@@ -481,17 +521,13 @@ async function readSmartFile(file) {
 async function collectSmartFiles() {
   const fileInput = document.getElementById("chat-file-input");
   const files = Array.from(fileInput?.files || []);
-  smartFiles = [];
-  
+
   try {
     for (const file of files) {
       smartFiles.push(await readSmartFile(file));
     }
-    console.log("[chat][file] collected smart files", smartFiles.map((f) => ({ name: f.filename, extractedLength: String(f.text_content || f.image_url || "").length, type: f.content_type })));
     renderSmartFiles();
   } catch (error) {
-    // 文件处理失败，清空文件输入并显示错误
-    smartFiles = [];
     if (fileInput) fileInput.value = "";
     renderSmartFiles();
     toast(error.message || "文件处理失败");
@@ -516,9 +552,10 @@ function renderSmartFiles() {
   `).join("");
 }
 
-function renderMessageItem(m, index) {
+function renderMessageItem(m, index, totalCount) {
   const isUser = m.role === "user";
   const html = fmt(m.content || "");
+  const isLastAssistant = !isUser && !m.streaming && index === totalCount - 1;
   const userFiles = Array.isArray(m.user_files) ? m.user_files : [];
   if (isUser && userFiles.length) console.log("[chat][image] render user files", userFiles.map((f) => ({ name: f.filename, preview: !!f.preview_url, previewPath: !!f.preview_path, image: !!f.image_url, type: f.content_type })));
   const filePreview = isUser && userFiles.length ? `
@@ -544,6 +581,7 @@ function renderMessageItem(m, index) {
   const assistantAvatar = !isUser && window.renderModelIcon
     ? window.renderModelIcon(modelHint || cfg?.model_name || "", { size: 22, title: badge.brand?.label || modelHint || cfg?.model_name || "AI" })
     : `<div class="oc-avatar ${isUser ? "" : `provider-${badge.cls}`} ">${badge.label}</div>`;
+  const regenerateBtn = !isUser && !m.streaming && isLastAssistant ? `<div class="oc-regen-wrap oc-regen-last"><button type="button" class="oc-regen-btn" data-regen-idx="${index}" title="重新生成"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg></button></div>` : "";
   return `
     <div class="oc-msg-row ${isUser ? "user" : "assistant"}" data-idx="${index}" data-role="${m.role}" data-streaming="${m.streaming ? "1" : "0"}">
       ${isUser ? `<div class="oc-avatar">${badge.label}</div>` : assistantAvatar}
@@ -551,6 +589,7 @@ function renderMessageItem(m, index) {
         <div class="oc-markdown">${html || (!isUser ? '<span class="oc-dim">...</span>' : "")}</div>
         ${filePreview}${images}
       </div>
+      ${regenerateBtn}
     </div>
   `;
 }
@@ -562,32 +601,51 @@ function ensureChatImagePreviewModal() {
   modal.id = "chat-image-preview-modal";
   modal.className = "oc-image-preview-modal hidden";
   modal.innerHTML = `
-    <div class="oc-image-preview-backdrop" data-chat-preview-close="1"></div>
-    <div class="oc-image-preview-dialog" role="dialog" aria-modal="true">
-      <button type="button" class="oc-image-preview-close" data-chat-preview-close="1" aria-label="关闭预览">×</button>
+    <div class="oc-image-preview-dialog" id="chat-image-preview-dialog">
       <img id="chat-image-preview-target" src="" alt="preview">
     </div>
   `;
-  const closeHandler = (event) => {
-    if (event) {
-      event.preventDefault();
-      event.stopPropagation();
-    }
-    closeChatImagePreview();
-  };
-  modal.addEventListener("click", (event) => {
-    if (event.target === modal || event.target.closest("[data-chat-preview-close]")) {
-      closeHandler(event);
-    }
-  });
-  modal.addEventListener("touchend", (event) => {
-    if (event.target === modal || event.target.closest("[data-chat-preview-close]")) {
-      closeHandler(event);
+  var _cpZoom = 1, _cpPanX = 0, _cpPanY = 0, _cpPinchDist = 0, _cpPinchZoom = 1, _cpDrag = null;
+  function _cpApply() { var img = modal.querySelector("#chat-image-preview-target"); if (img) img.style.transform = "translate(" + _cpPanX + "px," + _cpPanY + "px) scale(" + _cpZoom + ")"; }
+  function _cpReset() { _cpZoom = 1; _cpPanX = 0; _cpPanY = 0; _cpApply(); }
+  function _cpDist(a, b) { return Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY); }
+  var _cpTapTimer = null, _cpTapCount = 0, _cpTouchMoved = false;
+  function _cpIsTarget(t) { return t === modal || t.id === "chat-image-preview-dialog" || t.id === "chat-image-preview-target"; }
+  function _cpHandleTap() {
+    _cpTapCount++;
+    if (_cpTapTimer) clearTimeout(_cpTapTimer);
+    _cpTapTimer = setTimeout(function() {
+      if (_cpTapCount === 1) { closeChatImagePreview(); _cpReset(); }
+      else if (_cpTapCount >= 2) {
+        if (_cpZoom > 1.05) { _cpZoom = 1; _cpPanX = 0; _cpPanY = 0; } else { _cpZoom = 2.5; }
+        _cpApply();
+      }
+      _cpTapCount = 0;
+    }, 180);
+  }
+  modal.addEventListener("click", function(e) { if (_cpIsTarget(e.target)) { e.preventDefault(); e.stopPropagation(); _cpHandleTap(); } });
+  modal.addEventListener("touchstart", function(e) {
+    if (!_cpIsTarget(e.target)) return;
+    _cpTouchMoved = false;
+    if (e.touches.length === 2) { _cpPinchDist = _cpDist(e.touches[0], e.touches[1]); _cpPinchZoom = _cpZoom; e.preventDefault(); }
+    else if (e.touches.length === 1 && _cpZoom > 1.05) { _cpDrag = { x: e.touches[0].clientX - _cpPanX, y: e.touches[0].clientY - _cpPanY }; e.preventDefault(); }
+  }, { passive: false });
+  modal.addEventListener("touchmove", function(e) {
+    _cpTouchMoved = true;
+    if (e.touches.length === 2 && _cpPinchDist > 0) { var d = _cpDist(e.touches[0], e.touches[1]); _cpZoom = Math.max(0.5, Math.min(6, _cpPinchZoom * (d / _cpPinchDist))); _cpApply(); e.preventDefault(); }
+    else if (e.touches.length === 1 && _cpDrag) { _cpPanX = e.touches[0].clientX - _cpDrag.x; _cpPanY = e.touches[0].clientY - _cpDrag.y; _cpApply(); e.preventDefault(); }
+  }, { passive: false });
+  modal.addEventListener("touchend", function(e) {
+    if (e.touches.length < 2) _cpPinchDist = 0;
+    if (e.touches.length === 0) {
+      _cpDrag = null;
+      if (!_cpTouchMoved && _cpIsTarget(e.target)) { e.preventDefault(); _cpHandleTap(); }
+      _cpTouchMoved = false;
     }
   }, { passive: false });
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape" && !modal.classList.contains("hidden")) {
-      closeHandler(event);
+      closeChatImagePreview();
     }
   });
   document.body.appendChild(modal);
@@ -640,11 +698,12 @@ function hideChatImageActionBar() {
 function openChatImagePreview(url) {
   const modal = ensureChatImagePreviewModal();
   const target = modal.querySelector("#chat-image-preview-target");
-  console.log("[chat][image] preview click", { hasUrl: !!url, preview: String(url || "").slice(0, 120), hasModal: !!modal });
   if (!url || !target) return;
+  if (!modal.classList.contains("hidden") && target.src === url) { closeChatImagePreview(); return; }
   target.src = url;
   modal.classList.remove("hidden");
   modal.style.display = "block";
+  target.style.transform = "";
 }
 
 function closeChatImagePreview() {
@@ -704,7 +763,7 @@ function renderMessages() {
     `;
     return;
   }
-  wrap.innerHTML = msgs.map((m, i) => renderMessageItem(m, i)).join("");
+  wrap.innerHTML = msgs.map((m, i) => renderMessageItem(m, i, msgs.length)).join("");
   enhanceAllMessages(wrap);
   wrap.scrollTop = wrap.scrollHeight;
 }
@@ -766,9 +825,10 @@ async function patchStreamingBubble(fullText, streaming = true) {
   }, 200);
 }
 
-function patchLastAssistantMessage(text, streaming = true) {
+function patchLastAssistantMessage(text, streaming = true, sessionId) {
+  const sid = sessionId || currentSessionId;
   const sessions = getSessions();
-  const session = sessions[currentSessionId];
+  const session = sessions[sid];
   if (!session) return;
   for (let i = session.messages.length - 1; i >= 0; i--) {
     const m = session.messages[i];
@@ -779,11 +839,15 @@ function patchLastAssistantMessage(text, streaming = true) {
     }
   }
   setSessions(sessions);
-  patchStreamingBubble(text, streaming);
+  if (sid === currentSessionId) patchStreamingBubble(text, streaming);
 }
 
-function finishLastAssistantMessage(text, extra = {}) {
-  const msgs = [...getMsg()];
+function finishLastAssistantMessage(text, extra = {}, sessionId) {
+  const sid = sessionId || currentSessionId;
+  const sessions = getSessions();
+  const session = sessions[sid];
+  if (!session) return;
+  const msgs = [...(session.messages || [])];
   for (let i = msgs.length - 1; i >= 0; i--) {
     if (msgs[i].role === "assistant" && msgs[i].streaming) {
       msgs[i].content = text;
@@ -793,24 +857,127 @@ function finishLastAssistantMessage(text, extra = {}) {
       break;
     }
   }
-  setMsg(msgs, { model_name: extra.model_name });
-  renderMessages();
+  setMsg(msgs, { model_name: extra.model_name }, sid);
+  if (sid === currentSessionId) renderMessages();
+  if (extra.images && extra.images.length) persistChatImages(msgs, sid);
 }
 
-function stopGenerate() {
-  if (currentController) {
-    currentController.abort();
-    currentController = null;
+async function persistChatImages(msgs, sid) {
+  var changed = false;
+  for (var i = 0; i < msgs.length; i++) {
+    var m = msgs[i];
+    if (!Array.isArray(m.images)) continue;
+    for (var j = 0; j < m.images.length; j++) {
+      var img = m.images[j];
+      var url = img.url || img.b64_json || "";
+      if (!url || !url.startsWith("data:image/")) continue;
+      var persisted = await persistChatImageToFile(url);
+      if (persisted && persisted !== url) {
+        m.images[j] = { ...img, url: persisted, b64_json: "" };
+        changed = true;
+      }
+    }
   }
-  isGenerating = false;
+  if (changed) setMsg(msgs, {}, sid);
+}
+
+async function persistChatImageToFile(dataUrl) {
+  try {
+    if (!dataUrl || !dataUrl.startsWith("data:image/")) return dataUrl;
+    if (window.LiuHuiGallery && typeof window.LiuHuiGallery.saveBase64ToAppFile === "function") {
+      var match = dataUrl.match(/^data:(image\/[^;]+);base64,(.+)$/);
+      if (!match) return dataUrl;
+      var result = String(window.LiuHuiGallery.saveBase64ToAppFile(match[2], match[1], "chat-img") || "");
+      if (result.startsWith("OK:")) {
+        var rawPath = result.slice(3);
+        return (window.Capacitor && typeof window.Capacitor.convertFileSrc === "function") ? window.Capacitor.convertFileSrc(rawPath) : rawPath;
+      }
+      return dataUrl;
+    }
+    var res = await fetch("/api/chat/upload-image-base64", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ image_base64: dataUrl }) });
+    if (!res.ok) return dataUrl;
+    var json = await res.json();
+    return (json.code === 0 && json.data?.url) ? json.data.url : dataUrl;
+  } catch (e) {
+    console.warn("[chat] persistChatImageToFile error", e);
+    return dataUrl;
+  }
+}
+
+async function regenerateFromIndex(assistantIdx) {
+  const sendSessionId = currentSessionId;
+  if (isSessionGenerating(sendSessionId)) return;
+  const allMsgs = getRenderableMessages();
+  const fullMsgs = [...getMsg()];
+  let userMsg = null;
+  for (let i = assistantIdx - 1; i >= 0; i--) {
+    if (allMsgs[i] && allMsgs[i].role === "user") { userMsg = allMsgs[i]; break; }
+  }
+  if (!userMsg) return toast("找不到对应的用户消息");
+  const userText = userMsg.content || "";
+  const userFiles = Array.isArray(userMsg.user_files) ? userMsg.user_files : [];
+  const assistantMsg = allMsgs[assistantIdx];
+  const fullIdx = fullMsgs.indexOf(assistantMsg);
+  if (fullIdx < 0) return;
+
+  const userFullIdx = fullMsgs.indexOf(userMsg);
+  const historyMsgs = userFullIdx > 0
+    ? fullMsgs.slice(0, userFullIdx).filter((m) => m.role && typeof m.content === "string" && !m.streaming).map(({ role, content }) => ({ role, content: content.trim() })).filter((m) => m.content)
+    : [];
+
+  const chatSel = document.getElementById("chat-config-select");
+  const imageSel = document.getElementById("image-config-select");
+  if (!chatSel?.value) return toast("请选择聊天配置");
+  const currentCfg = (window.GLOBAL?.configList || []).find((item) => String(item.id) === String(chatSel.value));
+  const currentModelName = currentCfg?.model_name || currentCfg?.name || "";
+
+  fullMsgs[fullIdx] = { role: "assistant", content: "", streaming: true, model_name: currentModelName };
+  fullMsgs.length = fullIdx + 1;
+  setMsg(fullMsgs, { model_name: currentModelName }, sendSessionId);
+  renderMessages();
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 600000);
+  activeGenerations.set(sendSessionId, { controller, timeoutId });
   updateSendBtnState();
-  const msgs = [...getMsg()];
-  const last = msgs[msgs.length - 1];
-  if (last && last.role === "assistant" && last.streaming) {
-    last.streaming = false;
-    if (!last.content) last.content = "已停止生成";
-    setMsg(msgs);
-    renderMessages();
+  try {
+    const res = await fetch("/api/chat/smart", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message: userText, messages: historyMsgs, chat_config_id: chatSel.value, image_config_id: imageSel?.value || null, stream: true, files: userFiles }),
+      signal: controller.signal
+    });
+    if (!res.ok) throw new Error(`请求失败 [${res.status}]：${await res.text()}`);
+    const contentType = res.headers.get("content-type") || "";
+    if (contentType.includes("application/json")) {
+      const result = await res.json();
+      if (result.mode === "image") {
+        const imageCount = Array.isArray(result?.data?.images) ? result.data.images.length : 0;
+        if (result.code !== 0 || imageCount === 0) {
+          finishLastAssistantMessage(result?.message || "图片接口返回成功，但没有解析到可显示图片。", {}, sendSessionId);
+        } else {
+          finishLastAssistantMessage(`图片已生成完成。\n\n提示词：${result?.data?.prompt || userText}\n尺寸：${result?.data?.image_size || "1024x1024"}\n数量：${imageCount} 张`, { images: result?.data?.images || [], model_name: currentModelName }, sendSessionId);
+        }
+      } else {
+        finishLastAssistantMessage(result?.data?.choices?.[0]?.message?.content || result?.message || "处理完成", { model_name: currentModelName }, sendSessionId);
+      }
+    } else {
+      const finalText = res.body ? await readStreamResponse(res, (fullText) => patchLastAssistantMessage(fullText, true, sendSessionId)) : "";
+      finishLastAssistantMessage(finalText || "无返回内容", { model_name: currentModelName }, sendSessionId);
+    }
+  } catch (e) {
+    if (e.name === "AbortError") {
+      const s = getSessions()[sendSessionId];
+      const msgs = s?.messages || [];
+      const last = msgs[msgs.length - 1];
+      const hasContent = last && last.role === "assistant" && (last.content || "").trim();
+      if (hasContent) { finishLastAssistantMessage(last.content, {}, sendSessionId); }
+      else { finishLastAssistantMessage("请求超时，请重试", {}, sendSessionId); toast("请求超时"); }
+    } else { finishLastAssistantMessage(`请求出错：${e.message}`, {}, sendSessionId); toast(`错误：${e.message}`); }
+  } finally {
+    clearTimeout(timeoutId);
+    activeGenerations.delete(sendSessionId);
+    updateSendBtnState();
   }
 }
 
@@ -857,9 +1024,41 @@ async function readStreamResponse(res, onDelta) {
   return fullText;
 }
 
+function buildPayloadMessages(msgs) {
+  const result = [];
+  for (const m of msgs) {
+    if (!m.role || m.streaming) continue;
+    const text = String(m.content || "").trim();
+    if (!text && !Array.isArray(m.user_files) && !Array.isArray(m.images)) continue;
+
+    const imageUrls = [];
+    if (Array.isArray(m.user_files)) {
+      for (const f of m.user_files) {
+        if (String(f.content_type || "").startsWith("image/")) {
+          const url = f.image_url || f.preview_url || "";
+          if (url) imageUrls.push(url);
+        }
+      }
+    }
+    if (Array.isArray(m.images)) {
+      for (const img of m.images) {
+        if (img.url) imageUrls.push(img.url);
+      }
+    }
+
+    if (imageUrls.length) {
+      result.push({ role: m.role, content: text, image_urls: imageUrls });
+    } else if (text) {
+      result.push({ role: m.role, content: text });
+    }
+  }
+  return result;
+}
+
 async function send() {
-  if (isGenerating) {
-    stopGenerate();
+  const sendSessionId = currentSessionId;
+  if (isSessionGenerating(sendSessionId)) {
+    stopSessionGenerate(sendSessionId);
     return;
   }
   const ipt = document.getElementById("chat-input");
@@ -869,7 +1068,6 @@ async function send() {
   if (!ipt || !chatSel) return;
   if (!chatSel.value) return toast("请选择聊天配置");
 
-  await collectSmartFiles();
   const pendingFiles = smartFiles.map((file) => ({ ...file }));
   if (!text && !pendingFiles.length) return toast("请输入内容或选择附件");
   smartFiles = [];
@@ -880,24 +1078,20 @@ async function send() {
   const prevMsgs = getMsg();
   const currentCfg = (window.GLOBAL?.configList || []).find((item) => String(item.id) === String(chatSel.value));
   const currentModelName = currentCfg?.model_name || currentCfg?.name || "";
-  const isImageIntent = /(生成|画|绘制|做一张|来一张|图片|海报|插画|头像|壁纸|配图)/.test(text);
-  const placeholder = isImageIntent ? "正在识别任务并生成图片，请稍等..." : "";
   const userText = text || (pendingFiles.length ? "[附件]" : "");
-  const nextMsgs = [...prevMsgs, { role: "user", content: userText, user_files: pendingFiles }, { role: "assistant", content: placeholder, streaming: true, model_name: currentModelName }];
-  setMsg(nextMsgs, { model_name: currentModelName });
+  const nextMsgs = [...prevMsgs, { role: "user", content: userText, user_files: pendingFiles }, { role: "assistant", content: "", streaming: true, model_name: currentModelName }];
+  setMsg(nextMsgs, { model_name: currentModelName }, sendSessionId);
   ipt.value = "";
   autoResizeTextarea();
   renderMessages();
 
-  isGenerating = true;
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 600000);
+  activeGenerations.set(sendSessionId, { controller, timeoutId });
   updateSendBtnState();
-  currentController = new AbortController();
 
   try {
-    const payloadMessages = prevMsgs
-      .filter((m) => m.role && typeof m.content === "string")
-      .map(({ role, content }) => ({ role, content: content.trim() }))
-      .filter((m) => m.content);
+    const payloadMessages = buildPayloadMessages(prevMsgs);
 
     const res = await fetch("/api/chat/smart", {
       method: "POST",
@@ -910,7 +1104,7 @@ async function send() {
         stream: true,
         files: pendingFiles
       }),
-      signal: currentController.signal
+      signal: controller.signal
     });
 
     if (!res.ok) {
@@ -924,29 +1118,38 @@ async function send() {
       if (result.mode === "image") {
         const imageCount = Array.isArray(result?.data?.images) ? result.data.images.length : 0;
         if (result.code !== 0 || imageCount === 0) {
-          finishLastAssistantMessage(result?.message || "图片接口返回成功，但没有解析到可显示图片。");
+          finishLastAssistantMessage(result?.message || "图片接口返回成功，但没有解析到可显示图片。", {}, sendSessionId);
         } else {
-          finishLastAssistantMessage(`我已经判断这是图片生成任务，并直接帮你生成好了。\n\n提示词：${result?.data?.prompt || text}\n尺寸：${result?.data?.image_size || "1024x1024"}\n数量：${result?.data?.image_count || imageCount || 1}\n\n共返回 ${imageCount} 张图片。`, { images: result?.data?.images || [], model_name: currentModelName });
+          finishLastAssistantMessage(`图片已生成完成。\n\n提示词：${result?.data?.prompt || text}\n尺寸：${result?.data?.image_size || "1024x1024"}\n数量：${imageCount} 张`, { images: result?.data?.images || [], model_name: currentModelName }, sendSessionId);
         }
       } else {
         const textResult = result?.data?.choices?.[0]?.message?.content || result?.message || "处理完成";
-        finishLastAssistantMessage(textResult, { model_name: currentModelName });
+        finishLastAssistantMessage(textResult, { model_name: currentModelName }, sendSessionId);
       }
     } else {
-      const finalText = res.body ? await readStreamResponse(res, (fullText) => patchLastAssistantMessage(fullText, true)) : "";
-      finishLastAssistantMessage(finalText || "无返回内容", { model_name: currentModelName });
+      const finalText = res.body ? await readStreamResponse(res, (fullText) => patchLastAssistantMessage(fullText, true, sendSessionId)) : "";
+      finishLastAssistantMessage(finalText || "无返回内容", { model_name: currentModelName }, sendSessionId);
     }
 
   } catch (e) {
-    if (e.name !== "AbortError") {
-      finishLastAssistantMessage(`请求出错：${e.message}`);
-      toast(`错误：${e.message}`);
+    if (e.name === "AbortError") {
+      const s = getSessions()[sendSessionId];
+      const msgs = s?.messages || [];
+      const last = msgs[msgs.length - 1];
+      const hasContent = last && last.role === "assistant" && (last.content || "").trim();
+      if (hasContent) {
+        finishLastAssistantMessage(last.content, {}, sendSessionId);
+      } else {
+        finishLastAssistantMessage("请求超时，请重试", {}, sendSessionId);
+        toast("请求超时");
+      }
     } else {
-      finishLastAssistantMessage("已停止生成");
+      finishLastAssistantMessage(`请求出错：${e.message}`, {}, sendSessionId);
+      toast(`错误：${e.message}`);
     }
   } finally {
-    isGenerating = false;
-    currentController = null;
+    clearTimeout(timeoutId);
+    activeGenerations.delete(sendSessionId);
     updateSendBtnState();
   }
 }
@@ -1076,14 +1279,17 @@ function bindEvents() {
   }
   if (clearBtn && !clearBtn._bound) {
     clearBtn.addEventListener("click", () => {
-      if (isGenerating) stopGenerate();
+      if (isSessionGenerating(currentSessionId)) stopSessionGenerate(currentSessionId);
       setMsg([]);
       renderMessages();
     });
     clearBtn._bound = true;
   }
   if (fileInput && !fileInput._bound) {
-    fileInput.addEventListener("change", () => collectSmartFiles());
+    fileInput.addEventListener("change", async () => {
+      await collectSmartFiles();
+      fileInput.value = "";
+    });
     fileInput._bound = true;
   }
   if (plusBtn && !plusBtn._bound) {
@@ -1134,6 +1340,12 @@ function bindEvents() {
         const idx = Number(row?.dataset.idx || -1);
         const msgs = getRenderableMessages();
         if (msgs[idx]) copyMsg(msgs[idx].content || "");
+      }
+      const regenBtn = e.target.closest("[data-regen-idx]");
+      if (regenBtn) {
+        e.preventDefault();
+        e.stopPropagation();
+        regenerateFromIndex(Number(regenBtn.getAttribute("data-regen-idx")));
       }
     });
     msgWrap.addEventListener("touchstart", (e) => {
@@ -1314,11 +1526,9 @@ function injectStyles() {
     .oc-image-action-btn { border:none; border-radius:10px; background:linear-gradient(180deg,#2563eb,#1d4ed8); color:#fff; display:inline-flex; align-items:center; gap:6px; padding:10px 12px; font-size:12px; font-weight:700; }
     .oc-image-action-btn.ghost { background:rgba(255,255,255,.08); color:#e2e8f0; }
     .oc-image-preview-modal.hidden { display:none; }
-    .oc-image-preview-modal { position:fixed; inset:0; z-index:99999; }
-    .oc-image-preview-backdrop { position:absolute; inset:0; background:rgba(2,6,23,.82); }
-    .oc-image-preview-dialog { position:absolute; inset:20px; display:flex; align-items:center; justify-content:center; }
-    .oc-image-preview-dialog img { max-width:100%; max-height:100%; border-radius:16px; background:#111827; object-fit:contain; }
-    .oc-image-preview-close { position:absolute; top:0; right:0; width:38px; height:38px; border:none; border-radius:999px; background:rgba(15,23,42,.78); color:#fff; font-size:24px; line-height:1; }
+    .oc-image-preview-modal { position:fixed; inset:0; z-index:99999; background:rgba(2,6,23,.82); }
+    .oc-image-preview-dialog { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; overflow:hidden; touch-action:none; }
+    .oc-image-preview-dialog img { max-width:92vw; max-height:92vh; border-radius:16px; background:#111827; object-fit:contain; transform-origin:center center; transition:transform .15s ease; will-change:transform; user-select:none; -webkit-user-drag:none; }
     .oc-image-card img { display:block; width:100%; height:auto; object-fit:cover; }
     .oc-image-card-inline { width:min(132px,44vw); }
     .oc-image-card-inline img { aspect-ratio:1 / 1; height:auto; max-height:132px; object-fit:cover; }
@@ -1338,6 +1548,10 @@ function injectStyles() {
     .oc-input { flex:1; min-height:32px; max-height:120px; resize:none; border:none; outline:none; background:transparent; color:#0f172a; font-size:12px; line-height:1.24; padding:6px 0; font-family:inherit; pointer-events:auto; }
     .oc-send-btn { height:30px; border:none; border-radius:9px; padding:0 10px; background:#111827; color:#fff; font-size:10px; font-weight:700; cursor:pointer; flex:0 0 auto; }
     .oc-send-btn.is-stop { background:#ef4444; }
+    .oc-regen-wrap { display:none; margin-left:28px; margin-top:-4px; }
+    .oc-regen-wrap.oc-regen-last { display:block; }
+    .oc-regen-btn { border:none; background:transparent; color:#94a3b8; cursor:pointer; padding:4px 6px; border-radius:8px; display:inline-flex; align-items:center; gap:4px; font-size:12px; transition:color .15s,background .15s; }
+    .oc-regen-btn:active { color:#3b82f6; background:rgba(59,130,246,.08); transform:scale(.92); }
     @media (min-width: 901px) {
       .oc-sidebar{width:300px}
       .oc-msg-row{width:min(920px,calc(100% - 32px))}

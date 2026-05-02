@@ -73,7 +73,7 @@
     if (__imageModuleBootAttempts >= 40 || (STATE.initialized && document.getElementById("canvas-board"))) {
       clearInterval(__imageModuleBootTimer);
     }
-  }, 250);
+  }, 180);
   window.initImageModule = initImageModule;
 
   async function initImageModule() {
@@ -132,7 +132,7 @@
     if (document.getElementById("image-canvas-style")) return;
     const style = document.createElement("style");
     style.id = "image-canvas-style";
-    style.textContent = " = `\n      #image{height:calc(100vh - 64px);overflow:hidden}\n      .canvas-shell{position:relative;display:flex;height:100%;background:#0b1020;color:#e5e7eb;overflow:hidden}.canvas-left-backdrop{position:absolute;inset:0;background:rgba(2,6,23,.46);opacity:0;pointer-events:none;transition:.22s;z-index:20}.canvas-shell.show-left-panel .canvas-left-backdrop{opacity:1;pointer-events:auto}.canvas-left{width:280px;border-right:1px solid rgba(148,163,184,.18);background:#0f172a;padding:10px;display:flex;flex-direction:column;gap:8px;overflow:hidden;z-index:30}.canvas-shell.is-mobile-drawer .canvas-left{position:absolute;left:0;top:0;bottom:0;width:min(60vw,280px);transform:translateX(-100%) !important;transition:transform .22s ease;box-shadow:0 24px 60px rgba(0,0,0,.35)}.canvas-shell.is-mobile-drawer.show-left-panel .canvas-left{transform:translateX(0) !important}\n      .canvas-title{font-size:18px;font-weight:800;color:#fff}.canvas-subtitle{font-size:12px;color:#94a3b8;line-height:1.6}.canvas-panel{border:1px solid rgba(148,163,184,.12);background:rgba(15,23,42,.78);border-radius:12px;padding:10px;min-height:0;display:flex;flex-direction:column}\n      .canvas-panel-header{display:flex;align-items:center;justify-content:space-between;gap:6px;margin-bottom:6px}.canvas-panel-title{font-size:12px;font-weight:700;color:#fff;display:flex;align-items:center;gap:6px}.canvas-panel-subtitle{font-size:10px;color:#94a3b8;line-height:1.45;margin-bottom:6px}\n      .canvas-library-toolbar{display:grid;gap:6px;margin-bottom:6px}.canvas-library-toolbar .form-select,.canvas-library-toolbar .form-input{background:#0b1220;border:1px solid rgba(148,163,184,.18);color:#fff}.canvas-library-list,.canvas-history-list{display:flex;flex-direction:column;gap:6px;overflow:auto;min-height:0}\n      .canvas-library-item,.canvas-history-item{border:1px solid rgba(148,163,184,.12);border-radius:12px;background:#111827;transition:all .2s ease}.canvas-library-item:hover,.canvas-history-item:hover{border-color:rgba(96,165,250,.28);transform:translateY(-1px)}\n      .canvas-library-thumb{width:100%;aspect-ratio:1.35/1;object-fit:cover;display:block;background:#0b1220;border-top-left-radius:14px;border-top-right-radius:14px}.canvas-library-body,.canvas-history-body{padding:10px 12px;display:grid;gap:6px}.canvas-item-title{font-size:13px;font-weight:700;color:#e5e7eb}\n      .canvas-item-meta{font-size:12px;color:#94a3b8}.canvas-item-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:2px}.canvas-item-actions .btn{padding:8px 12px;font-size:12px}.canvas-history-item.active{border-color:#60a5fa;box-shadow:0 0 0 1px rgba(96,165,250,.18)}\n      .canvas-empty-card{border:1px dashed rgba(148,163,184,.18);border-radius:14px;padding:16px;text-align:center;color:#94a3b8;font-size:12px;line-height:1.7;background:rgba(15,23,42,.5)}.canvas-main{flex:1;display:flex;flex-direction:column;min-width:0;min-height:0}\n      .canvas-drawer-close{border:none;background:#eef2f7;color:#0f172a;border-radius:10px;padding:7px 9px;font-size:11px;font-weight:700;cursor:pointer}.canvas-fab-toggle{position:absolute;left:0;top:10px;z-index:45;width:28px;height:44px;border:none;border-top-right-radius:16px;border-bottom-right-radius:16px;border-top-left-radius:0;border-bottom-left-radius:0;background:rgba(15,23,42,.94);color:#fff;box-shadow:0 14px 34px rgba(0,0,0,.28);font-size:18px;font-weight:700;display:flex;align-items:center;justify-content:center;padding:0}\n      .node-grid-two{display:grid;grid-template-columns:1fr 1fr;gap:8px}.node-model-row{display:grid;gap:8px}.node-mini-field{display:grid;gap:4px}.node-mini-field label{font-size:11px;margin-bottom:0}.node-mini-field select,.node-mini-field input{padding:8px 10px;font-size:12px;border-radius:12px}\n      .canvas-toast{position:fixed;top:84px;right:20px;z-index:2000;padding:10px 14px;border-radius:12px;background:rgba(15,23,42,.96);color:#fff;border:1px solid rgba(96,165,250,.28);box-shadow:0 16px 36px rgba(0,0,0,.28);font-size:13px;opacity:0;transform:translateY(-8px);pointer-events:none;transition:opacity .18s ease,transform .18s ease}.canvas-toast.show{opacity:1;transform:translateY(0)}\n      .canvas-board-wrap{position:relative;flex:1;min-height:0;overflow:hidden;background:radial-gradient(circle at 1px 1px, rgba(148,163,184,.16) 1px, transparent 0) 0 0/24px 24px,linear-gradient(180deg,#0b1020,#0a0f1b);touch-action:none}.canvas-board{position:absolute;inset:0;overflow:hidden;cursor:grab;user-select:none;touch-action:none}.canvas-board.panning{cursor:grabbing}.canvas-world{position:absolute;left:0;top:0;transform-origin:0 0;width:5000px;height:3600px;will-change:transform}\n      .canvas-selection-box{position:absolute;border:1px solid rgba(96,165,250,.95);background:rgba(96,165,250,.14);pointer-events:none;z-index:25;border-radius:10px}.node.multi-selected{box-shadow:0 0 0 2px rgba(96,165,250,.95),0 24px 70px rgba(15,23,42,.55)}\n      .asset-library-modal.hidden{display:none}.asset-library-modal{position:fixed;inset:0;z-index:1600}.asset-library-backdrop{position:absolute;inset:0;background:rgba(2,6,23,.7);backdrop-filter:blur(4px)}.asset-library-panel{position:relative;width:min(1100px,calc(100vw - 24px));height:min(760px,calc(100vh - 24px));margin:12px auto;background:#0f172a;border:1px solid rgba(148,163,184,.18);border-radius:18px;box-shadow:0 30px 80px rgba(0,0,0,.45);display:grid;grid-template-columns:minmax(92px,116px) minmax(0,1fr);overflow:hidden}.asset-library-panel.draggable{cursor:default}.asset-library-sidebar{padding:10px 8px;border-right:1px solid rgba(148,163,184,.14);display:flex;flex-direction:column;gap:8px;background:#111827;min-height:0}.asset-library-content{padding:10px;display:flex;flex-direction:column;gap:10px;min-width:0;min-height:0}.asset-folder-list,.asset-grid{display:grid;gap:8px;overflow:auto}.asset-folder-list{flex:1;min-height:0;padding-right:2px}.asset-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;flex:1;min-height:0;padding-right:2px;align-content:start}.asset-card{display:flex;flex-direction:column;gap:0;border:1px solid rgba(148,163,184,.12);border-radius:12px;overflow:hidden;background:#111827;min-height:0}.asset-card img{width:100%;height:auto;aspect-ratio:1/1;object-fit:cover;background:#0b1220;flex:none}.asset-card-body{padding:8px;display:flex;flex-direction:column;gap:6px;flex:1;min-width:0;justify-content:flex-start}.asset-modal-header{display:flex;align-items:center;justify-content:space-between;gap:8px}.asset-modal-header.drag-handle{cursor:move;user-select:none;padding-bottom:4px;border-bottom:1px solid rgba(148,163,184,.1)}.asset-folder-actions{display:flex;gap:6px;align-items:center}.asset-folder-actions .btn{padding:5px 7px;font-size:10px}.asset-modal-actions{display:flex;gap:6px;flex-wrap:wrap}\n      .canvas-debug{position:absolute;right:14px;bottom:14px;z-index:30;min-width:260px;max-width:360px;padding:10px 12px;border-radius:14px;background:rgba(2,6,23,.82);border:1px solid rgba(148,163,184,.22);box-shadow:0 14px 36px rgba(0,0,0,.35);font-size:12px;line-height:1.55;color:#cbd5e1;backdrop-filter:blur(8px)}.canvas-debug strong{color:#fff}.canvas-debug code{color:#93c5fd;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}\n      .canvas-svg{position:absolute;left:0;top:0;width:5000px;height:3600px;overflow:visible;z-index:1;pointer-events:none}.edge-hit{stroke:transparent;stroke-width:28;fill:none;pointer-events:none;cursor:pointer}.edge-visible{fill:none;stroke-linecap:round;pointer-events:none}.edge-selected{stroke:#f59e0b!important}.canvas-node-layer{position:absolute;left:0;top:0;width:5000px;height:3600px;z-index:3}.edge-dom-layer{position:absolute;left:0;top:0;width:5000px;height:3600px;z-index:2;pointer-events:none}.edge-dom-hit{position:absolute;height:28px;transform-origin:left center;pointer-events:auto;cursor:pointer;background:transparent}.edge-dom-hit.edge-selected{outline:2px solid rgba(245,158,11,.95);outline-offset:0;border-radius:999px}\n      .node{position:absolute;width:min(156px,42vw);background:linear-gradient(180deg,rgba(17,24,39,.98),rgba(10,15,27,.98));border:1px solid rgba(96,165,250,.12);border-radius:14px;box-shadow:0 8px 18px rgba(2,6,23,.2);overflow:visible;backdrop-filter:blur(8px)}.node.selected{border-color:#60a5fa;box-shadow:0 0 0 2px rgba(96,165,250,.55),0 0 0 8px rgba(59,130,246,.14),0 22px 48px rgba(0,0,0,.38)}.node-link-highlight{border-color:rgba(52,211,153,.75)!important;box-shadow:0 0 0 1px rgba(52,211,153,.18),0 18px 40px rgba(0,0,0,.32)!important}\n      .node-shell{position:relative;border-radius:14px;overflow:hidden;background:transparent}.node-image-wrap{position:relative;background:linear-gradient(180deg,#0f172a,#0b1220);min-height:88px;display:flex;align-items:center;justify-content:center;cursor:move}.node-image-wrap img{width:100%;height:100%;display:block;object-fit:cover;cursor:default}\n      .node-image-overlay{position:absolute;inset:0;background:linear-gradient(to top, rgba(2,6,23,.62), rgba(2,6,23,.12) 45%, rgba(2,6,23,0));display:flex;align-items:flex-end;justify-content:flex-end;padding:12px;opacity:0;transition:opacity .18s ease;pointer-events:none}.node-image-top-actions{position:absolute;top:10px;right:10px;display:flex;gap:8px;opacity:0;transition:opacity .18s ease;z-index:4}\n      .node-image-wrap:hover .node-image-overlay,.node-image-wrap:hover .node-image-top-actions,.output-card:hover .node-image-overlay{opacity:1}.node-image-toolbar{display:flex;gap:8px;pointer-events:auto}.node-image-toolbar .btn,.node-image-top-actions .btn{padding:8px 12px;background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.18);backdrop-filter:blur(6px)}\n      .node-image-empty{padding:10px;text-align:center;color:#64748b;line-height:1.5;font-size:11px}.node-image-actions{position:absolute;left:8px;right:8px;bottom:8px;display:flex;gap:6px;flex-wrap:wrap;z-index:3}.node-image-actions .btn{flex:1;min-width:0;justify-content:center;cursor:pointer;padding:7px 8px;font-size:11px}\n      .node-linked-banner{position:absolute;left:8px;right:8px;top:8px;padding:6px 8px;border-radius:10px;background:rgba(15,23,42,.82);border:1px solid rgba(52,211,153,.22);color:#d1fae5;font-size:10px;backdrop-filter:blur(4px);z-index:3}\n      .node-divider{height:1px;background:linear-gradient(90deg,transparent,rgba(148,163,184,.16),transparent)}.node-body{padding:7px 7px 8px;display:grid;gap:5px}.node-row{display:grid;gap:4px}.node-body label{display:block;font-size:9px;color:#9fb0c8;margin-bottom:1px;letter-spacing:.01em}\n      .node-body input,.node-body textarea,.node-body select{width:100%;border:1px solid rgba(148,163,184,.14);background:rgba(15,23,42,.96);color:#f8fafc;border-radius:8px;padding:6px 8px;outline:none;pointer-events:auto;cursor:text;transition:border-color .18s ease, box-shadow .18s ease, background .18s ease;font-size:11px}.node-body textarea{resize:vertical;min-height:44px;user-select:text;line-height:1.35}.node-body select{cursor:pointer;-webkit-appearance:none;appearance:none;background-image:linear-gradient(45deg,transparent 50%,#93c5fd 50%),linear-gradient(135deg,#93c5fd 50%,transparent 50%),linear-gradient(to right,rgba(59,130,246,.18),rgba(59,130,246,.18));background-position:calc(100% - 14px) calc(50% - 2px),calc(100% - 10px) calc(50% - 2px),calc(100% - 30px) 50%;background-size:5px 5px,5px 5px,1px 16px;background-repeat:no-repeat;padding-right:34px;box-shadow:inset 0 1px 0 rgba(255,255,255,.03),0 6px 14px rgba(2,6,23,.10)}.node-body input:focus,.node-body textarea:focus,.node-body select:focus{border-color:rgba(96,165,250,.55);box-shadow:0 0 0 2px rgba(59,130,246,.14);background:#111b2f}\n      .node-body input,.node-body textarea,.node-body select,.node-body button,.node-image-actions button,.node-image-actions a,.output-card-actions a,.output-card-actions button,.node-image-toolbar button{position:relative;z-index:3}.node-grid-two{display:grid;grid-template-columns:1fr 1fr;gap:5px}.node-mini-field{display:grid;gap:3px}.node-mini-field label{font-size:9px;margin-bottom:0}.node-mini-field select,.node-mini-field input{padding:6px 8px;font-size:11px;border-radius:8px}\n      .node-actions{display:flex;gap:4px;flex-wrap:wrap}.node-actions button{flex:1;min-width:0;cursor:pointer;border-radius:8px;padding:7px 8px;font-size:11px;font-weight:700}.output-gallery{display:grid;grid-template-columns:1fr 1fr;gap:10px}.output-card{position:relative;border:1px solid rgba(148,163,184,.14);border-radius:14px;overflow:hidden;background:#0b1220}.output-card img{width:100%;display:block;aspect-ratio:1/1;object-fit:cover;cursor:default}\n      .output-card-actions{display:flex;gap:8px;padding:10px;flex-wrap:wrap}.output-card-actions a,.output-card-actions button{flex:1;text-align:center;text-decoration:none}.port-handle{position:absolute;width:${PORT_RADIUS * 2}px;height:${PORT_RADIUS * 2}px;border-radius:999px;background:#111827;border:2px solid #34d399;box-shadow:0 0 0 4px rgba(52,211,153,.12);cursor:crosshair;z-index:5}\n      .canvas-empty{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;pointer-events:none;color:#94a3b8;font-size:14px;text-align:center;line-height:1.8}.canvas-context-menu{position:absolute;z-index:60;min-width:180px;background:#0f172a;border:1px solid rgba(148,163,184,.18);border-radius:14px;box-shadow:0 18px 45px rgba(0,0,0,.35);padding:8px}.canvas-context-menu button{width:100%;background:transparent;border:none;color:#e5e7eb;text-align:left;padding:10px 12px;border-radius:10px;cursor:pointer;font-size:13px}.canvas-context-menu button:hover{background:rgba(30,41,59,.95)}\n      .asset-modal-context-menu{position:fixed!important;z-index:1705!important;transform:translate(-12px,-12px)!important;max-width:min(220px,calc(100vw - 24px))!important}.image-preview-modal{position:fixed;inset:0;background:rgba(2,6,23,.82);display:flex;align-items:center;justify-content:center;z-index:9999;padding:24px}.image-preview-modal.hidden{display:none}.image-preview-backdrop{position:absolute;inset:0}.image-preview-panel{position:relative;z-index:1;max-width:min(92vw,1400px);max-height:92vh}.image-preview-panel img{max-width:100%;max-height:92vh;display:block;border-radius:18px;box-shadow:0 20px 60px rgba(0,0,0,.45)}.image-preview-close{position:absolute;top:-14px;right:-14px;width:40px;height:40px;border:none;border-radius:999px;background:#111827;color:#fff;cursor:pointer;box-shadow:0 10px 30px rgba(0,0,0,.35)}\n      @media (max-width:1100px){.canvas-main{width:100%}.node{width:min(156px,42vw)}.output-gallery{grid-template-columns:1fr}.node-grid-two,.node-mini-row{grid-template-columns:1fr}}\n    ";
+    style.textContent = " = `\n      #image{height:calc(100vh - 64px);overflow:hidden}\n      .canvas-shell{position:relative;display:flex;height:100%;background:#0b1020;color:#e5e7eb;overflow:hidden}.canvas-left-backdrop{position:absolute;inset:0;background:rgba(2,6,23,.46);opacity:0;pointer-events:none;transition:.22s;z-index:20}.canvas-shell.show-left-panel .canvas-left-backdrop{opacity:1;pointer-events:auto}.canvas-left{width:280px;border-right:1px solid rgba(148,163,184,.18);background:#0f172a;padding:10px;display:flex;flex-direction:column;gap:8px;overflow:hidden;z-index:30}.canvas-shell.is-mobile-drawer .canvas-left{position:absolute;left:0;top:0;bottom:0;width:min(60vw,280px);transform:translateX(-100%) !important;transition:transform .22s ease;box-shadow:0 24px 60px rgba(0,0,0,.35)}.canvas-shell.is-mobile-drawer.show-left-panel .canvas-left{transform:translateX(0) !important}\n      .canvas-title{font-size:18px;font-weight:800;color:#fff}.canvas-subtitle{font-size:12px;color:#94a3b8;line-height:1.6}.canvas-panel{border:1px solid rgba(148,163,184,.12);background:rgba(15,23,42,.78);border-radius:12px;padding:10px;min-height:0;display:flex;flex-direction:column}\n      .canvas-panel-header{display:flex;align-items:center;justify-content:space-between;gap:6px;margin-bottom:6px}.canvas-panel-title{font-size:12px;font-weight:700;color:#fff;display:flex;align-items:center;gap:6px}.canvas-panel-subtitle{font-size:10px;color:#94a3b8;line-height:1.45;margin-bottom:6px}\n      .canvas-library-toolbar{display:grid;gap:6px;margin-bottom:6px}.canvas-library-toolbar .form-select,.canvas-library-toolbar .form-input{background:#0b1220;border:1px solid rgba(148,163,184,.18);color:#fff}.canvas-library-list,.canvas-history-list{display:flex;flex-direction:column;gap:6px;overflow:auto;min-height:0}\n      .canvas-library-item,.canvas-history-item{border:1px solid rgba(148,163,184,.12);border-radius:12px;background:#111827;transition:all .2s ease}.canvas-library-item:hover,.canvas-history-item:hover{border-color:rgba(96,165,250,.28);transform:translateY(-1px)}\n      .canvas-library-thumb{width:100%;aspect-ratio:1.35/1;object-fit:cover;display:block;background:#0b1220;border-top-left-radius:14px;border-top-right-radius:14px}.canvas-library-body,.canvas-history-body{padding:10px 12px;display:grid;gap:6px}.canvas-item-title{font-size:13px;font-weight:700;color:#e5e7eb}\n      .canvas-item-meta{font-size:12px;color:#94a3b8}.canvas-item-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:2px}.canvas-item-actions .btn{padding:8px 12px;font-size:12px}.canvas-history-item.active{border-color:#60a5fa;box-shadow:0 0 0 1px rgba(96,165,250,.18)}\n      .canvas-empty-card{border:1px dashed rgba(148,163,184,.18);border-radius:14px;padding:16px;text-align:center;color:#94a3b8;font-size:12px;line-height:1.7;background:rgba(15,23,42,.5)}.canvas-main{flex:1;display:flex;flex-direction:column;min-width:0;min-height:0}\n      .canvas-drawer-close{border:none;background:#eef2f7;color:#0f172a;border-radius:10px;padding:7px 9px;font-size:11px;font-weight:700;cursor:pointer}.canvas-fab-toggle{position:absolute;left:0;top:10px;z-index:45;width:28px;height:44px;border:none;border-top-right-radius:16px;border-bottom-right-radius:16px;border-top-left-radius:0;border-bottom-left-radius:0;background:rgba(15,23,42,.94);color:#fff;box-shadow:0 14px 34px rgba(0,0,0,.28);font-size:18px;font-weight:700;display:flex;align-items:center;justify-content:center;padding:0}\n      .node-grid-two{display:grid;grid-template-columns:1fr 1fr;gap:8px}.node-model-row{display:grid;gap:8px}.node-mini-field{display:grid;gap:4px}.node-mini-field label{font-size:11px;margin-bottom:0}.node-mini-field select,.node-mini-field input{padding:8px 10px;font-size:12px;border-radius:12px}\n      .canvas-toast{position:fixed;top:84px;right:20px;z-index:2000;padding:10px 14px;border-radius:12px;background:rgba(15,23,42,.96);color:#fff;border:1px solid rgba(96,165,250,.28);box-shadow:0 16px 36px rgba(0,0,0,.28);font-size:13px;opacity:0;transform:translateY(-8px);pointer-events:none;transition:opacity .18s ease,transform .18s ease}.canvas-toast.show{opacity:1;transform:translateY(0)}\n      .canvas-board-wrap{position:relative;flex:1;min-height:0;overflow:hidden;background:radial-gradient(circle at 1px 1px, rgba(148,163,184,.16) 1px, transparent 0) 0 0/24px 24px,linear-gradient(180deg,#0b1020,#0a0f1b);touch-action:none}.canvas-board{position:absolute;inset:0;overflow:hidden;cursor:grab;user-select:none;touch-action:none}.canvas-board.panning{cursor:grabbing}.canvas-world{position:absolute;left:0;top:0;transform-origin:0 0;width:3000px;height:2400px;contain:layout style}\n      .canvas-selection-box{position:absolute;border:1px solid rgba(96,165,250,.95);background:rgba(96,165,250,.14);pointer-events:none;z-index:25;border-radius:10px}.node.multi-selected{box-shadow:0 0 0 2px rgba(96,165,250,.95),0 24px 70px rgba(15,23,42,.55)}\n      .asset-library-modal.hidden{display:none}.asset-library-modal{position:fixed;inset:0;z-index:1600}.asset-library-backdrop{position:absolute;inset:0;background:rgba(2,6,23,.7);backdrop-filter:blur(4px)}.asset-library-panel{position:relative;width:min(1100px,calc(100vw - 24px));height:min(760px,calc(100vh - 24px));margin:12px auto;background:#0f172a;border:1px solid rgba(148,163,184,.18);border-radius:18px;box-shadow:0 30px 80px rgba(0,0,0,.45);display:grid;grid-template-columns:minmax(92px,116px) minmax(0,1fr);overflow:hidden}.asset-library-panel.draggable{cursor:default}.asset-library-sidebar{padding:10px 8px;border-right:1px solid rgba(148,163,184,.14);display:flex;flex-direction:column;gap:8px;background:#111827;min-height:0}.asset-library-content{padding:10px;display:flex;flex-direction:column;gap:10px;min-width:0;min-height:0}.asset-folder-list,.asset-grid{display:grid;gap:8px;overflow:auto}.asset-folder-list{flex:1;min-height:0;padding-right:2px;display:flex;flex-direction:column;gap:4px;overflow-y:auto}.asset-folder-item{display:flex;align-items:center;justify-content:space-between;gap:4px;padding:7px 8px;border-radius:8px;background:#111827;border:1px solid rgba(148,163,184,.12);cursor:pointer;font-size:11px;color:#e5e7eb;transition:all .15s ease;flex:0 0 auto}.asset-folder-item:hover{border-color:rgba(96,165,250,.28)}.asset-folder-item.active{border-color:#60a5fa;background:rgba(96,165,250,.1);color:#93c5fd}.asset-folder-item .folder-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.asset-folder-item .folder-rename-btn{flex:0 0 auto;padding:2px 6px;font-size:9px;border:none;border-radius:5px;background:rgba(96,165,250,.18);color:#93c5fd;cursor:pointer}.asset-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;flex:1;min-height:0;padding-right:2px;align-content:start}.asset-card{display:flex;flex-direction:column;gap:0;border:1px solid rgba(148,163,184,.12);border-radius:12px;overflow:hidden;background:#111827;min-height:0}.asset-card img{width:100%;height:auto;aspect-ratio:1/1;object-fit:cover;background:#0b1220;flex:none}.asset-card-body{padding:8px;display:flex;flex-direction:column;gap:6px;flex:1;min-width:0;justify-content:flex-start}.asset-modal-header{display:flex;align-items:center;justify-content:space-between;gap:8px}.asset-modal-header.drag-handle{cursor:move;user-select:none;padding-bottom:4px;border-bottom:1px solid rgba(148,163,184,.1)}.asset-folder-actions{display:flex;gap:6px;align-items:center}.asset-folder-actions .btn{padding:5px 7px;font-size:10px}.asset-modal-actions{display:flex;gap:6px;flex-wrap:wrap}\n      .canvas-debug{position:absolute;right:14px;bottom:14px;z-index:30;min-width:260px;max-width:360px;padding:10px 12px;border-radius:14px;background:rgba(2,6,23,.82);border:1px solid rgba(148,163,184,.22);box-shadow:0 14px 36px rgba(0,0,0,.35);font-size:12px;line-height:1.55;color:#cbd5e1;backdrop-filter:blur(8px)}.canvas-debug strong{color:#fff}.canvas-debug code{color:#93c5fd;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}\n      .canvas-svg{position:absolute;left:0;top:0;width:3000px;height:2400px;overflow:visible;z-index:1;pointer-events:none}.edge-hit{stroke:transparent;stroke-width:28;fill:none;pointer-events:none;cursor:pointer}.edge-visible{fill:none;stroke-linecap:round;pointer-events:none}.edge-selected{stroke:#f59e0b!important}.canvas-node-layer{position:absolute;left:0;top:0;width:3000px;height:2400px;z-index:3}.edge-dom-layer{position:absolute;left:0;top:0;width:3000px;height:2400px;z-index:2;pointer-events:none}.edge-dom-hit{position:absolute;height:28px;transform-origin:left center;pointer-events:auto;cursor:pointer;background:transparent}.edge-dom-hit.edge-selected{outline:2px solid rgba(245,158,11,.95);outline-offset:0;border-radius:999px}\n      .node{position:absolute;width:min(156px,42vw);background:#111827;border:1px solid rgba(96,165,250,.12);border-radius:14px;box-shadow:0 4px 12px rgba(2,6,23,.2);overflow:visible}.node.selected{border-color:#60a5fa;box-shadow:0 0 0 2px rgba(96,165,250,.55),0 0 0 8px rgba(59,130,246,.14),0 22px 48px rgba(0,0,0,.38)}.node-link-highlight{border-color:rgba(52,211,153,.75)!important;box-shadow:0 0 0 1px rgba(52,211,153,.18),0 18px 40px rgba(0,0,0,.32)!important}\n      .node-shell{position:relative;border-radius:14px;overflow:hidden;background:transparent}.node-image-wrap{position:relative;background:linear-gradient(180deg,#0f172a,#0b1220);min-height:88px;display:flex;align-items:center;justify-content:center;cursor:move}.node-image-wrap img{width:100%;height:100%;display:block;object-fit:cover;cursor:default}\n      .node-image-overlay{position:absolute;inset:0;background:linear-gradient(to top, rgba(2,6,23,.62), rgba(2,6,23,.12) 45%, rgba(2,6,23,0));display:flex;align-items:flex-end;justify-content:flex-end;padding:12px;opacity:0;transition:opacity .18s ease;pointer-events:none}.node-image-top-actions{position:absolute;top:10px;right:10px;display:flex;gap:8px;opacity:0;transition:opacity .18s ease;z-index:4}\n      .node-image-wrap:hover .node-image-overlay,.node-image-wrap:hover .node-image-top-actions,.output-card:hover .node-image-overlay{opacity:1}.node-image-toolbar{display:flex;gap:8px;pointer-events:auto}.node-image-toolbar .btn,.node-image-top-actions .btn{padding:8px 12px;background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.18);backdrop-filter:blur(6px)}\n      .node-image-empty{padding:10px;text-align:center;color:#64748b;line-height:1.5;font-size:11px}.node-image-actions{position:absolute;left:8px;right:8px;bottom:8px;display:flex;gap:6px;flex-wrap:wrap;z-index:3}.node-image-actions .btn{flex:1;min-width:0;justify-content:center;cursor:pointer;padding:7px 8px;font-size:11px}\n      .node-linked-banner{position:absolute;left:8px;right:8px;top:8px;padding:6px 8px;border-radius:10px;background:rgba(15,23,42,.82);border:1px solid rgba(52,211,153,.22);color:#d1fae5;font-size:10px;backdrop-filter:blur(4px);z-index:3}\n      .node-divider{height:1px;background:linear-gradient(90deg,transparent,rgba(148,163,184,.16),transparent)}.node-body{padding:7px 7px 8px;display:grid;gap:5px}.node-row{display:grid;gap:4px}.node-body label{display:block;font-size:9px;color:#9fb0c8;margin-bottom:1px;letter-spacing:.01em}\n      .node-body input,.node-body textarea,.node-body select{width:100%;border:1px solid rgba(148,163,184,.14);background:rgba(15,23,42,.96);color:#f8fafc;border-radius:8px;padding:6px 8px;outline:none;pointer-events:auto;cursor:text;transition:border-color .18s ease, box-shadow .18s ease, background .18s ease;font-size:11px}.node-body textarea{resize:vertical;min-height:44px;user-select:text;line-height:1.35}.node-body select{cursor:pointer;-webkit-appearance:none;appearance:none;background-image:linear-gradient(45deg,transparent 50%,#93c5fd 50%),linear-gradient(135deg,#93c5fd 50%,transparent 50%),linear-gradient(to right,rgba(59,130,246,.18),rgba(59,130,246,.18));background-position:calc(100% - 14px) calc(50% - 2px),calc(100% - 10px) calc(50% - 2px),calc(100% - 30px) 50%;background-size:5px 5px,5px 5px,1px 16px;background-repeat:no-repeat;padding-right:34px;box-shadow:inset 0 1px 0 rgba(255,255,255,.03),0 6px 14px rgba(2,6,23,.10)}.node-body input:focus,.node-body textarea:focus,.node-body select:focus{border-color:rgba(96,165,250,.55);box-shadow:0 0 0 2px rgba(59,130,246,.14);background:#111b2f}\n      .node-body input,.node-body textarea,.node-body select,.node-body button,.node-image-actions button,.node-image-actions a,.output-card-actions a,.output-card-actions button,.node-image-toolbar button{position:relative;z-index:3}.node-grid-two{display:grid;grid-template-columns:1fr 1fr;gap:5px}.node-mini-field{display:grid;gap:3px}.node-mini-field label{font-size:9px;margin-bottom:0}.node-mini-field select,.node-mini-field input{padding:6px 8px;font-size:11px;border-radius:8px}\n      .node-actions{display:flex;gap:4px;flex-wrap:wrap}.node-actions button{flex:1;min-width:0;cursor:pointer;border-radius:8px;padding:7px 8px;font-size:11px;font-weight:700}.output-gallery{display:grid;grid-template-columns:1fr 1fr;gap:10px}.output-card{position:relative;border:1px solid rgba(148,163,184,.14);border-radius:14px;overflow:hidden;background:#0b1220}.output-card img{width:100%;display:block;aspect-ratio:1/1;object-fit:cover;cursor:default}\n      .output-card-actions{display:flex;gap:8px;padding:10px;flex-wrap:wrap}.output-card-actions a,.output-card-actions button{flex:1;text-align:center;text-decoration:none}.port-handle{position:absolute;width:${PORT_RADIUS * 2}px;height:${PORT_RADIUS * 2}px;border-radius:999px;background:#111827;border:2px solid #34d399;box-shadow:0 0 0 4px rgba(52,211,153,.12);cursor:crosshair;z-index:5}\n      .canvas-empty{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;pointer-events:none;color:#94a3b8;font-size:14px;text-align:center;line-height:1.8}.canvas-context-menu{position:absolute;z-index:60;min-width:180px;background:#0f172a;border:1px solid rgba(148,163,184,.18);border-radius:14px;box-shadow:0 18px 45px rgba(0,0,0,.35);padding:8px}.canvas-context-menu button{width:100%;background:transparent;border:none;color:#e5e7eb;text-align:left;padding:10px 12px;border-radius:10px;cursor:pointer;font-size:13px}.canvas-context-menu button:hover{background:rgba(30,41,59,.95)}\n      .custom-confirm-mask{position:fixed;inset:0;z-index:10000;background:rgba(2,6,23,.78);display:flex;align-items:center;justify-content:center;padding:24px}.custom-confirm-box{background:#0f172a;border:1px solid rgba(148,163,184,.18);border-radius:16px;padding:20px;max-width:min(360px,90vw);width:100%;box-shadow:0 20px 50px rgba(0,0,0,.4)}.custom-confirm-msg{color:#e5e7eb;font-size:14px;line-height:1.6;margin-bottom:16px;text-align:center}.custom-confirm-actions{display:flex;gap:8px}.custom-confirm-actions .btn{flex:1;justify-content:center;padding:10px;font-size:13px;font-weight:600}.category-pick-list{display:flex;flex-direction:column;gap:4px;max-height:200px;overflow-y:auto;margin:8px 0;padding:2px}.category-pick-item{padding:8px 10px;border-radius:8px;background:#111827;border:1px solid rgba(148,163,184,.12);color:#e5e7eb;font-size:12px;cursor:pointer;transition:all .15s ease;text-align:left}.category-pick-item:hover{border-color:rgba(96,165,250,.28)}.category-pick-item.active{border-color:#60a5fa;background:rgba(96,165,250,.1);color:#93c5fd}.asset-modal-context-menu{position:fixed!important;z-index:1705!important;transform:translate(-12px,-12px)!important;max-width:min(220px,calc(100vw - 24px))!important}.image-preview-modal{position:fixed;inset:0;background:rgba(2,6,23,.82);display:flex;align-items:center;justify-content:center;z-index:9999;padding:24px}.image-preview-modal.hidden{display:none}.image-preview-backdrop{position:absolute;inset:0}.image-preview-container{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;overflow:hidden;touch-action:none}.image-preview-container img{max-width:92vw;max-height:92vh;display:block;border-radius:18px;box-shadow:0 20px 60px rgba(0,0,0,.45);transform-origin:center center;transition:transform .15s ease;contain:layout style;user-select:none;-webkit-user-drag:none}\n      @media (max-width:1100px){.canvas-main{width:100%}.node{width:min(156px,42vw)}.output-gallery{grid-template-columns:1fr}.node-grid-two,.node-mini-row{grid-template-columns:1fr}}\n    ";
     document.head.appendChild(style);
 
     const patch = document.createElement("style");
@@ -157,7 +157,7 @@
       .port-handle:hover::before{background:rgba(52,211,153,.20);border-color:rgba(52,211,153,.40);}
       body.debug-canvas-hit .port-handle{background:rgba(239,68,68,.18) !important;}
       body.debug-canvas-hit .edge-hit{stroke:rgba(250,204,21,.35) !important;}
-      .node-image-overlay,.node-image-top-actions,.node-image-toolbar{display:none !important;}
+      .node-image-overlay,.node-image-top-actions,.node-image-toolbar{display:none !important;}.node-close-image-btn{position:absolute;right:6px;bottom:6px;z-index:5;padding:4px 8px;font-size:10px;min-height:24px;border-radius:6px;display:inline-flex;align-items:center;justify-content:center;gap:3px;background:rgba(245,63,63,.85);color:#fff;border:none;cursor:pointer;backdrop-filter:blur(4px);box-shadow:0 2px 8px rgba(0,0,0,.3)}
       .canvas-left{width:min(18vw,92px);padding:5px;gap:4px;background:linear-gradient(180deg,rgba(15,23,42,.99),rgba(10,15,27,.99));backdrop-filter:blur(16px)}
       .canvas-panel{border-radius:10px;padding:5px;background:rgba(15,23,42,.88)}
       .canvas-panel-header{margin-bottom:6px}.canvas-panel-title{font-size:12px;gap:5px}.canvas-panel-subtitle,.canvas-item-meta,.canvas-subtitle{font-size:10px;line-height:1.4;color:#8ea3bf}
@@ -199,8 +199,8 @@
           <div class="canvas-board-wrap" id="canvas-board-wrap"><button class="canvas-fab-toggle" id="canvas-left-floating-toggle" type="button">☰</button><div class="canvas-board" id="canvas-board"><div class="canvas-world" id="canvas-world"><svg class="canvas-svg" id="canvas-svg"></svg><div id="edge-dom-layer" class="edge-dom-layer"></div><div id="canvas-node-layer" class="canvas-node-layer"></div></div><div class="canvas-empty" id="canvas-empty-tip"></div><div class="canvas-selection-box" id="canvas-selection-box" style="display:none"></div></div><div id="canvas-context-menu-root"></div></div>
         </section>
       </div>
-      <div class="image-preview-modal hidden" id="image-preview-modal"><div class="image-preview-backdrop" data-close-preview="1"></div><div class="image-preview-panel"><button class="image-preview-close" type="button" data-close-preview="1">×</button><img id="image-preview-target" src="" alt="preview"></div></div>
-      <div class="asset-library-modal hidden" id="asset-library-modal"><div class="asset-library-backdrop" data-close-asset-library="1"></div><div class="asset-library-panel draggable" id="asset-library-panel"><aside class="asset-library-sidebar"><div class="asset-modal-header drag-handle" data-drag-asset-library="1"><div><div class="canvas-title" style="font-size:14px;">素材库</div></div></div><div class="canvas-library-toolbar"><select class="form-select" id="asset-category-filter-modal"></select><div><button class="btn btn-default" id="create-asset-category-btn-modal">新建</button><button class="btn btn-default" type="button" id="rename-current-asset-category-btn">重命名</button></div></div></aside><section class="asset-library-content"><div class="asset-modal-header"><div><div class="canvas-title" style="font-size:14px;">图片素材</div></div><div class="asset-modal-actions"><button class="btn btn-danger" type="button" id="delete-current-asset-category-btn">删分类</button><button class="btn btn-default" type="button" data-close-asset-library="1">完成</button></div></div><div class="asset-grid custom-scrollbar" id="asset-library-grid"></div></section></div></div><div class="asset-library-modal hidden" id="asset-category-modal"><div class="asset-library-backdrop" data-close-category-modal="1"></div><div class="asset-library-panel" style="grid-template-columns:1fr;max-width:520px;height:auto;"><section class="asset-library-content"><div class="asset-modal-header"><div><div class="canvas-title" style="font-size:16px;" id="asset-category-modal-title">新建分类</div><div class="canvas-subtitle" id="asset-category-modal-subtitle">填写分类名称并确认。</div></div><button class="btn btn-default" type="button" data-close-category-modal="1">关闭</button></div><div class="canvas-library-toolbar" style="display:grid;gap:12px;"><input class="form-input" id="asset-category-modal-input" placeholder="输入分类名称"><select class="form-select" id="asset-category-modal-select"></select></div><div class="asset-modal-actions"><button class="btn btn-default" type="button" data-close-category-modal="1">取消</button><button class="btn btn-primary" type="button" id="confirm-asset-category-modal-btn">确认</button></div></section></div></div><div class="canvas-toast" id="canvas-toast"></div>`;
+      <div class="image-preview-modal hidden" id="image-preview-modal"><div class="image-preview-container" id="image-preview-container"><img id="image-preview-target" src="" alt="preview"></div></div>
+      <div class="asset-library-modal hidden" id="asset-library-modal"><div class="asset-library-backdrop" data-close-asset-library="1"></div><div class="asset-library-panel draggable" id="asset-library-panel"><aside class="asset-library-sidebar"><div class="asset-modal-header drag-handle" data-drag-asset-library="1"><div><div class="canvas-title" style="font-size:14px;">素材库</div></div><button class="btn btn-default" id="create-asset-category-btn-modal" style="flex:0 0 auto;padding:3px 8px;font-size:10px;min-height:0;">新建</button></div><div class="asset-folder-list custom-scrollbar" id="asset-folder-list"></div></aside><section class="asset-library-content"><div class="asset-modal-header"><div><div class="canvas-title" style="font-size:14px;">图片素材</div></div><div class="asset-modal-actions"><button class="btn btn-danger" type="button" id="delete-current-asset-category-btn">删分类</button><button class="btn btn-default" type="button" data-close-asset-library="1">完成</button></div></div><div class="asset-grid custom-scrollbar" id="asset-library-grid"></div></section></div></div><div class="asset-library-modal hidden" id="asset-category-modal"><div class="asset-library-backdrop" data-close-category-modal="1"></div><div class="asset-library-panel" style="grid-template-columns:1fr;max-width:520px;height:auto;"><section class="asset-library-content"><div class="asset-modal-header"><div><div class="canvas-title" style="font-size:16px;" id="asset-category-modal-title">新建分类</div><div class="canvas-subtitle" id="asset-category-modal-subtitle">填写分类名称并确认。</div></div><button class="btn btn-default" type="button" data-close-category-modal="1">关闭</button></div><div class="canvas-library-toolbar" style="display:grid;gap:12px;"><input class="form-input" id="asset-category-modal-input" placeholder="输入分类名称"><div class="category-pick-list" id="asset-category-modal-select"></div></div><div class="asset-modal-actions"><button class="btn btn-default" type="button" data-close-category-modal="1">取消</button><button class="btn btn-primary" type="button" id="confirm-asset-category-modal-btn">确认</button></div></section></div></div><div class="canvas-toast" id="canvas-toast"></div>`;
   }
 
   function toggleCanvasLeftPanel(force) {
@@ -249,6 +249,8 @@
       if (target.closest("#create-asset-category-btn")) return createAssetCategory();
       if (target.closest("#create-asset-category-btn-assets")) return createAssetCategory("assets");
       if (target.closest("#create-asset-category-btn-modal")) return openCategoryModal("create");
+      var pickItem = target.closest("[data-pick-category]");
+      if (pickItem) { STATE.categoryModal.category = pickItem.getAttribute("data-pick-category") || DEFAULT_ASSET_CATEGORY; document.querySelectorAll(".category-pick-item").forEach(function(el) { el.classList.toggle("active", el.getAttribute("data-pick-category") === STATE.categoryModal.category); }); return; }
       if (target.closest("#confirm-asset-category-modal-btn")) return confirmCategoryModal();
       if (target.closest("[data-close-category-modal]")) return closeCategoryModal();
       if (target.closest("[data-open-asset-library]")) return openAssetLibraryModal();
@@ -312,10 +314,12 @@
       if (assetThumb && !target.closest(".canvas-context-menu")) return openImagePreview(assetThumb.getAttribute("src") || "");
       const addAssetBtn = target.closest("[data-add-asset]");
       if (addAssetBtn) { hideContextMenu(false); return insertAssetAsNode(addAssetBtn.getAttribute("data-add-asset")); }
+      const renameCategoryBtn = target.closest("[data-rename-asset-category]");
+      if (renameCategoryBtn) { event.stopPropagation(); return openCategoryModal("rename", { category: renameCategoryBtn.getAttribute("data-rename-asset-category") || "" }); }
+      const folderBtnModal = target.closest("[data-select-asset-category-modal]");
+      if (folderBtnModal) { STATE.activeAssetCategory = folderBtnModal.getAttribute("data-select-asset-category-modal") || "\u5168\u90e8"; renderLeftPanel(); return; }
       const folderBtn = target.closest("[data-select-asset-category]");
       if (folderBtn) { STATE.activeAssetCategory = folderBtn.getAttribute("data-select-asset-category") || "全部"; renderLeftPanel(); return; }
-      const renameCategoryBtn = target.closest("[data-rename-asset-category]");
-      if (renameCategoryBtn) return openCategoryModal("rename", { category: renameCategoryBtn.getAttribute("data-rename-asset-category") || "" });
       const moveAssetBtn = target.closest("[data-move-asset]");
       if (moveAssetBtn) { hideContextMenu(false); return openCategoryModal("move", { assetId: moveAssetBtn.getAttribute("data-move-asset") || "", category: moveAssetBtn.getAttribute("data-asset-category") || DEFAULT_ASSET_CATEGORY }); }
       const deleteAssetBtn = target.closest("[data-delete-asset]");
@@ -346,6 +350,7 @@
       }
 
       if (target.closest("#asset-library-modal, #asset-category-modal")) {
+        if (!target.closest(".canvas-context-menu")) hideContextMenu();
         return;
       }
 
@@ -421,7 +426,7 @@
       if (!(target instanceof HTMLElement)) return;
       if (target.matches('select[data-field]')) return updateNodeField(target.getAttribute("data-node-id"), target.getAttribute("data-field"), target.value);
       if (target.id === 'asset-category-filter-modal') { STATE.activeAssetCategory = target.value || '全部'; renderLeftPanel(); return; }
-      if (target.id === 'asset-category-modal-select') { STATE.categoryModal.category = target.value || DEFAULT_ASSET_CATEGORY; return; }
+
       if (target.matches('#asset-category-filter') || target.matches('#asset-category-filter-assets')) { STATE.activeAssetCategory = target.value || "全部"; renderLeftPanel(); return; }
       if (target.matches('input[type="file"][data-node-id]')) {
         const fileInput = target;
@@ -641,25 +646,7 @@
         if (formEl) return;
         if (nodeEl) {
           const node = getNode(nodeEl.getAttribute("data-node-id"));
-          clearTimeout(STATE.nodeLongPressTimer);
-          STATE.nodeLongPressId = nodeEl.getAttribute("data-node-id");
-          const imageTarget = target && target.closest ? target.closest(".node-image-wrap") : null;
-          STATE.nodeLongPressScope = imageTarget ? "image" : "node";
-          STATE.nodeLongPressTimer = setTimeout(() => {
-            if (STATE.nodeLongPressId) {
-              STATE.draggingNodeId = null;
-              if (STATE.nodeLongPressScope === "image") {
-                const imageSource = imageTarget && imageTarget.querySelector ? imageTarget.querySelector("[data-context-image]") : null;
-                if (imageSource) {
-                  showImageContextMenu(event.clientX, event.clientY, imageSource.getAttribute("data-context-image"), imageSource.getAttribute("data-image-title") || "图片素材", STATE.nodeLongPressId);
-                } else {
-                  showNodeContextMenu(event.clientX, event.clientY, STATE.nodeLongPressId);
-                }
-              } else {
-                showNodeContextMenu(event.clientX, event.clientY, STATE.nodeLongPressId);
-              }
-            }
-          }, 550);
+          STATE._lastTapTime = 0; STATE._lastTapTarget = null;
           if (!node) return;
           const point = clientToCanvasPoint(event.clientX, event.clientY);
           STATE.draggingNodeId = node.id;
@@ -673,6 +660,7 @@
         }
         const isField = target && target.closest && target.closest('input, textarea, select, button, a, .canvas-left, .canvas-context-menu, .node-body');
         if (isField) return;
+        if (document.activeElement && document.activeElement.matches('textarea, input, select')) document.activeElement.blur();
         const now = Date.now();
         if (STATE._lastTapTime && now - STATE._lastTapTime < 350 && STATE._lastTapTarget === 'board') {
           STATE._lastTapTime = 0;
@@ -685,6 +673,7 @@
         STATE._lastTapTime = now;
         STATE._lastTapTarget = 'board';
         STATE.panning = true;
+        STATE.dragMoved = false;
         STATE.activePointerId = event.pointerId;
         STATE.panStartX = event.clientX - STATE.panX;
         STATE.panStartY = event.clientY - STATE.panY;
@@ -716,9 +705,6 @@
           const point = clientToCanvasPoint(event.clientX, event.clientY);
           const node = getNode(STATE.draggingNodeId);
           if (!node) return;
-          clearTimeout(STATE.nodeLongPressTimer);
-          STATE.nodeLongPressId = null;
-          STATE.nodeLongPressScope = "node";
           node.x = point.x - STATE.dragOffsetX;
           node.y = point.y - STATE.dragOffsetY;
           STATE.dragMoved = true;
@@ -728,6 +714,7 @@
           return;
         }
         if (STATE.panning) {
+          STATE.dragMoved = true;
           STATE.panX = event.clientX - STATE.panStartX;
           STATE.panY = event.clientY - STATE.panStartY;
           updateWorldTransform();
@@ -748,14 +735,17 @@
           if (STATE.panning) {
             STATE.panning = false;
             pointerBoard.classList.remove("panning");
+            if (!STATE.dragMoved && !STATE.contextMenu.visible) {
+              STATE.selectedNodeId = null;
+              STATE.selectedEdgeId = null;
+              STATE.selectedNodeIds = [];
+              renderCanvas();
+            }
             persistCurrentHistory();
             persistCanvasState();
           }
           STATE.activePointerId = null;
         }
-        clearTimeout(STATE.nodeLongPressTimer);
-        STATE.nodeLongPressId = null;
-        STATE.nodeLongPressScope = "node";
         clearPointer(event.pointerId);
         if (STATE.activePointers.size < 2) {
           STATE.pinchStartDistance = 0;
@@ -870,6 +860,7 @@
   function createResultNodeFromSource(sourceNode, imageUrl, index, total) { const node = createNode(sourceNode.x + 460, sourceNode.y + (index * 80)); node.prompt = sourceNode.prompt || ""; node.negativePrompt = sourceNode.negativePrompt || DEFAULT_NEGATIVE_PROMPT; node.resolution = sourceNode.resolution || RESOLUTION_PRESETS[0]; node.ratio = sourceNode.ratio || RATIO_PRESETS[0]; node.modelId = String(sourceNode.modelId || getDefaultImageConfigId() || ""); node.outputImages = imageUrl ? [imageUrl] : []; node.displayImageUrl = imageUrl || ""; node.imageUrl = ""; node.imageBase64 = ""; return node; }
   function getDefaultImageConfigId() { const list = getImageConfigList(); return String(list[0]?.id || ""); }
   function syncNodeModelDefaults() {
+    STATE.nodes.forEach(function(n) { n.busy = false; });
     const defaultId = getDefaultImageConfigId();
     if (!defaultId) return;
     let changed = false;
@@ -1052,8 +1043,10 @@
     const node = getNode(nodeId);
     if (!node) return;
     node.imageUrl = base64Payload.dataUrl; node.imageBase64 = base64Payload.base64; node.displayImageUrl = base64Payload.dataUrl; renderCanvas();
+    var persistedUrl = await persistRuntimeImageUrl(base64Payload.dataUrl, "upload");
+    if (persistedUrl && persistedUrl !== base64Payload.dataUrl) { node.imageUrl = persistedUrl; node.displayImageUrl = persistedUrl; node.imageBase64 = ""; }
     const asset = await saveAssetFile({ title: file.name || "粘贴图片", source: "素材库", category: STATE.pendingAssetCategory || DEFAULT_ASSET_CATEGORY, mime_type: file.type || "image/png", image_base64: base64Payload.base64 });
-    if (asset) { node.assetId = asset.id; node.imageUrl = asset.imageUrl || node.imageUrl; node.displayImageUrl = node.imageUrl || node.displayImageUrl; node.imageBase64 = ""; mergeAssetIntoLibrary(asset); }
+    if (asset) { node.assetId = asset.id; if (asset.imageUrl) { node.imageUrl = asset.imageUrl; node.displayImageUrl = asset.imageUrl; } node.imageBase64 = ""; mergeAssetIntoLibrary(asset); }
     persistCanvasState(); renderCanvas(); renderLeftPanel();
   }
 
@@ -1326,6 +1319,7 @@
           if (img.getAttribute('src') !== displayImageUrl) img.src = displayImageUrl;
           img.setAttribute('data-context-image', displayImageUrl);
           img.setAttribute('data-image-title', imageTitle);
+          if (!imgWrap.querySelector('.node-close-image-btn')) { const cb = document.createElement('button'); cb.className = 'node-close-image-btn'; cb.type = 'button'; cb.setAttribute('data-context-delete-image', node.id); cb.innerHTML = '<i class="fa fa-times"></i> \u5173\u95ed'; imgWrap.appendChild(cb); }
         } else {
           const emptyDiv = imgWrap.querySelector('.node-image-empty');
           if (emptyDiv) emptyDiv.remove();
@@ -1339,7 +1333,7 @@
         const actionsDiv = imgWrap.querySelector('.node-image-actions');
         if (actionsDiv) actionsDiv.remove();
       } else if (upstreamPreviewUrl) {
-        if (img) img.remove();
+        if (img) img.remove(); const _closeBtn = imgWrap.querySelector(".node-close-image-btn"); if (_closeBtn) _closeBtn.remove();
         let emptyDiv = imgWrap.querySelector('.node-image-empty');
         if (!emptyDiv) {
           emptyDiv = document.createElement('div');
@@ -1350,7 +1344,7 @@
         const actionsDiv = imgWrap.querySelector('.node-image-actions');
         if (actionsDiv) actionsDiv.remove();
       } else {
-        if (img) img.remove();
+        if (img) img.remove(); const _closeBtn = imgWrap.querySelector(".node-close-image-btn"); if (_closeBtn) _closeBtn.remove();
         if (!imgWrap.querySelector('.node-image-empty')) {
           const emptyDiv = document.createElement('div');
           emptyDiv.className = 'node-image-empty';
@@ -1376,6 +1370,26 @@
         banner.textContent = `已引用 ${linkedImageNodes.length} 个上游节点图片作为参考图`;
       }
     }
+    el.querySelectorAll('[data-custom-select][data-field]').forEach(function(sel) {
+      var field = sel.getAttribute('data-field');
+      if (sel.getAttribute('data-node-id') !== node.id) return;
+      var val = String(node[field] || '');
+      var span = sel.querySelector('.custom-select-value');
+      var opts = sel.querySelectorAll('.custom-select-option');
+      opts.forEach(function(o) {
+        var isActive = o.getAttribute('data-custom-select-option') === val;
+        o.classList.toggle('active', isActive);
+        if (isActive && span) span.textContent = o.textContent;
+      });
+    });
+    var modelCfg = getImageConfigById(node.modelId) || getImageConfigById(getDefaultImageConfigId());
+    var modelNameEl = el.querySelector('.canvas-node-model-name');
+    if (modelNameEl) modelNameEl.textContent = modelCfg && (modelCfg.model_name || modelCfg.name) || '未选择模型';
+    var modelIconEl = el.querySelector('.canvas-node-model-icon');
+    if (modelIconEl && window.renderModelIcon) {
+      var icon = window.renderModelIcon(modelCfg && (modelCfg.model_name || modelCfg.name) || '', { size: 18 });
+      modelIconEl.innerHTML = icon || '<i class="fa fa-cube"></i>';
+    }
     const genBtn = el.querySelector('[data-run-generate]');
     if (genBtn) genBtn.textContent = node.busy ? "生成中..." : "开始生成";
   }
@@ -1392,10 +1406,10 @@
     const categoryOptions = ["全部", ...categories].map((name) => `<option value="${escapeHtml(name)}" ${name === STATE.activeAssetCategory ? "selected" : ""}>${escapeHtml(name)}</option>`).join("");
     const moveOptions = categories.map((name) => `<option value="${escapeHtml(name)}" ${name === (STATE.categoryModal.category || DEFAULT_ASSET_CATEGORY) ? "selected" : ""}>${escapeHtml(name)}</option>`).join("");
     if (categoryFilter) categoryFilter.innerHTML = categoryOptions;
-    if (modalFilter) modalFilter.innerHTML = categoryOptions;
+    // modalFilter dropdown removed - using folder list
     if (library) library.innerHTML = `<button class="canvas-open-assets-btn" type="button" data-open-asset-library="1"><span class="canvas-open-assets-icon"><i class="fa fa-folder-open-o"></i></span><span class="canvas-open-assets-text">素材</span></button>`;
     if (assetsRoot) assetsRoot.innerHTML = ``;
-    if (folderList) folderList.innerHTML = "";
+    if (folderList) folderList.innerHTML = ["\u5168\u90e8", ...categories].map(function(name) { var isActive = name === STATE.activeAssetCategory; var count = name === "\u5168\u90e8" ? STATE.assetLibrary.length : STATE.assetLibrary.filter(function(a) { return (a.category || "\u672a\u5206\u7c7b") === name; }).length; var renameBtn = isActive && name !== "\u5168\u90e8" ? '<button class="folder-rename-btn" type="button" data-rename-asset-category="' + escapeHtml(name) + '">\u91cd\u547d\u540d</button>' : ""; return '<div class="asset-folder-item ' + (isActive ? "active" : "") + '" data-select-asset-category-modal="' + escapeHtml(name) + '"><span class="folder-name">' + escapeHtml(name) + ' (' + count + ')</span>' + renameBtn + '</div>'; }).join("");
     if (currentFolder) currentFolder.textContent = `${STATE.activeAssetCategory || "全部"} · ${filteredAssets.length} 个素材`;
     if (assetGrid) assetGrid.innerHTML = visibleAssets.length ? visibleAssets.map((item) => { const assetImage = getDirectDisplayImageUrl(item.displayImageUrl) || getDirectDisplayImageUrl(item.imageUrl, item.imageBase64); canvasDebugLog("asset", "render asset card", { id: item.id, title: item.title || "", category: item.category || DEFAULT_ASSET_CATEGORY, imageUrlLength: String(item.imageUrl || "").length, imageBase64Length: String(item.imageBase64 || "").length, finalAssetImageLength: String(assetImage || "").length, finalAssetImagePreview: String(assetImage || "").slice(0, 120) }); return `<article class="asset-card" data-asset-id="${item.id}" data-asset-category="${escapeHtml(item.category || DEFAULT_ASSET_CATEGORY)}" data-asset-title="${escapeHtml(item.title || "素材")}">${assetImage ? `<img src="${assetImage}" alt="${escapeHtml(item.title || "素材")}" data-asset-thumb="1" onerror="console.log('[canvas][img] asset img error', this.src)" onload="console.log('[canvas][img] asset img ok', this.src)">` : ``}</article>`; }).join("") : `<div class="canvas-empty-card">${filteredAssets.length ? '当前分类下有素材，但缺少可显示图片。' : (STATE.assetLibrary.length ? '当前筛选下没有匹配素材。' : '还没有素材。上传图片或把生成结果加入素材库后，这里会出现。')}</div>`;
     if (modal) modal.classList.toggle("hidden", !STATE.isAssetLibraryOpen);
@@ -1403,13 +1417,11 @@
     if (categoryModalTitle) categoryModalTitle.textContent = STATE.categoryModal.mode === 'rename' ? '重命名分类' : (STATE.categoryModal.mode === 'move' ? '移动素材分类' : (STATE.categoryModal.mode === 'save' ? '选择保存分类' : '新建分类'));
     if (categoryModalSubtitle) categoryModalSubtitle.textContent = STATE.categoryModal.mode === 'rename' ? '输入新的分类名称，界面与本地文件夹都会同步更新。' : (STATE.categoryModal.mode === 'move' ? '选择一个目标分类，素材文件会移动到对应本地文件夹。' : (STATE.categoryModal.mode === 'save' ? '请选择这张图片要加入到哪个分类。' : '输入新的分类名称并确认。'));
     if (categoryModalInput) { categoryModalInput.style.display = (STATE.categoryModal.mode === 'move' || STATE.categoryModal.mode === 'save') ? 'none' : 'block'; categoryModalInput.value = STATE.categoryModal.initialValue || ''; }
-    if (categoryModalSelect) { categoryModalSelect.style.display = (STATE.categoryModal.mode === 'move' || STATE.categoryModal.mode === 'save') ? 'block' : 'none'; categoryModalSelect.innerHTML = moveOptions; categoryModalSelect.value = STATE.categoryModal.category || DEFAULT_ASSET_CATEGORY; }
+    if (categoryModalSelect) { categoryModalSelect.style.display = (STATE.categoryModal.mode === 'move' || STATE.categoryModal.mode === 'save') ? 'block' : 'none'; categoryModalSelect.innerHTML = categories.map(function(name) { return '<div class="category-pick-item ' + (name === (STATE.categoryModal.category || DEFAULT_ASSET_CATEGORY) ? "active" : "") + '" data-pick-category="' + escapeHtml(name) + '">' + escapeHtml(name) + '</div>'; }).join(""); }
     if (history) history.innerHTML = sortedHistory.length ? sortedHistory.map((item) => `<article class="canvas-history-item ${item.id === STATE.currentHistoryId ? "active" : ""}"><div class="canvas-history-body"><div class="canvas-item-title">${escapeHtml(item.title || "未命名会话")}</div><div class="canvas-item-meta">${escapeHtml(item.summary || "空白画布")}</div><div class="canvas-item-actions"><button class="btn btn-default" data-open-history="${item.id}">打开</button></div></div></article>`).join("") : `<div class="canvas-empty-card">还没有历史会话。<br>当前画布会自动保存为第一条记录。</div>`;
 
     const createCategoryBtn = document.getElementById('create-asset-category-btn-modal');
     if (createCategoryBtn) createCategoryBtn.onclick = (event) => { event.preventDefault(); event.stopPropagation(); openCategoryModal('create'); };
-    const renameCurrentCategoryBtn = document.getElementById('rename-current-asset-category-btn');
-    if (renameCurrentCategoryBtn) renameCurrentCategoryBtn.onclick = (event) => { event.preventDefault(); event.stopPropagation(); if (!STATE.activeAssetCategory || STATE.activeAssetCategory === '全部') return alert('请先选择一个分类'); openCategoryModal('rename', { category: STATE.activeAssetCategory }); };
     const confirmCategoryBtn = document.getElementById('confirm-asset-category-modal-btn');
     if (confirmCategoryBtn) confirmCategoryBtn.onclick = (event) => { event.preventDefault(); event.stopPropagation(); confirmCategoryModal(); };
     document.querySelectorAll('[data-close-category-modal]').forEach((el) => {
@@ -1420,8 +1432,22 @@
   function openAssetLibraryModal() { STATE.isAssetLibraryOpen = true; renderLeftPanel(); applyAssetLibraryPosition(); }
   function closeAssetLibraryModal() { STATE.isAssetLibraryOpen = false; STATE.assetLibraryDrag.active = false; renderLeftPanel(); }
   function applyAssetLibraryPosition() { const panel = document.getElementById("asset-library-panel"); if (!panel) return; if (STATE.assetLibraryPosition && STATE.isAssetLibraryOpen) { panel.style.left = `${STATE.assetLibraryPosition.left}px`; panel.style.top = `${STATE.assetLibraryPosition.top}px`; panel.style.margin = "0"; } else { panel.style.left = ""; panel.style.top = ""; panel.style.margin = "24px auto"; } }
-  async function deleteCurrentCategory() { const category = STATE.activeAssetCategory; if (!category || category === "全部" || category === DEFAULT_ASSET_CATEGORY) return alert("这个分类不能删除"); const count = STATE.assetLibrary.filter((item) => (item.category || DEFAULT_ASSET_CATEGORY) === category).length; if (!confirm(`删除分类「${category}」？这会同时删除该分类下的 ${count} 个素材。`)) return; try { const res = await fetch("/api/canvas/categories", { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: category }) }); const result = await res.json(); if (!res.ok || result.code !== 0) return alert(result.detail || result.message || "删除分类失败"); STATE.categories = result.data.categories || STATE.categories; STATE.assetLibrary = result.data.assetLibrary || STATE.assetLibrary; STATE.activeAssetCategory = "全部"; renderLeftPanel(); persistCanvasState(); } catch (error) { alert(error.message || "删除分类失败"); } }
-  async function deleteAsset(assetId) { const asset = STATE.assetLibrary.find((item) => item.id === assetId); if (!asset) return; if (!confirm(`删除素材「${asset.title || '未命名素材'}」？`)) return; try { const res = await fetch("/api/canvas/assets", { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ asset_id: assetId }) }); const result = await res.json(); if (!res.ok || result.code !== 0) return alert(result.detail || result.message || "删除素材失败"); STATE.categories = result.data.categories || STATE.categories; STATE.assetLibrary = result.data.assetLibrary || STATE.assetLibrary; renderLeftPanel(); persistCanvasState(); } catch (error) { alert(error.message || "删除素材失败"); } }
+  function showConfirmDialog(message) {
+    return new Promise(function(resolve) {
+      var mask = document.createElement("div");
+      mask.className = "custom-confirm-mask";
+      mask.innerHTML = '<div class="custom-confirm-box"><div class="custom-confirm-msg">' + message + '</div><div class="custom-confirm-actions"><button class="btn btn-default" data-confirm-result="cancel">\u53d6\u6d88</button><button class="btn btn-danger" data-confirm-result="ok">\u786e\u8ba4</button></div></div>';
+      mask.addEventListener("click", function(e) {
+        var btn = e.target.closest("[data-confirm-result]");
+        if (!btn) return;
+        mask.remove();
+        resolve(btn.getAttribute("data-confirm-result") === "ok");
+      });
+      document.body.appendChild(mask);
+    });
+  }
+  async function deleteCurrentCategory() { const category = STATE.activeAssetCategory; if (!category || category === "全部" || category === DEFAULT_ASSET_CATEGORY) return alert("这个分类不能删除"); const count = STATE.assetLibrary.filter((item) => (item.category || DEFAULT_ASSET_CATEGORY) === category).length; if (!(await showConfirmDialog(`删除分类「${category}」？这会同时删除该分类下的 ${count} 个素材。`))) return; try { const res = await fetch("/api/canvas/categories", { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: category }) }); const result = await res.json(); if (!res.ok || result.code !== 0) return alert(result.detail || result.message || "删除分类失败"); STATE.categories = result.data.categories || STATE.categories; STATE.assetLibrary = result.data.assetLibrary || STATE.assetLibrary; STATE.activeAssetCategory = "全部"; renderLeftPanel(); persistCanvasState(); } catch (error) { alert(error.message || "删除分类失败"); } }
+  async function deleteAsset(assetId) { const asset = STATE.assetLibrary.find((item) => item.id === assetId); if (!asset) return; if (!(await showConfirmDialog(`删除素材「${asset.title || '未命名素材'}」？`))) return; try { const res = await fetch("/api/canvas/assets", { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ asset_id: assetId }) }); const result = await res.json(); if (!res.ok || result.code !== 0) return alert(result.detail || result.message || "删除素材失败"); STATE.categories = result.data.categories || STATE.categories; STATE.assetLibrary = result.data.assetLibrary || STATE.assetLibrary; renderLeftPanel(); persistCanvasState(); } catch (error) { alert(error.message || "删除素材失败"); } }
   function openCategoryModal(mode = 'create', payload = {}) {
     STATE.categoryModal = { visible: true, mode, targetImageUrl: payload.imageUrl || '', targetTitle: payload.title || '', targetAssetId: payload.assetId || '', initialValue: payload.category || '', category: payload.category || DEFAULT_ASSET_CATEGORY };
     renderLeftPanel();
@@ -1451,7 +1477,7 @@
       return persistCanvasState();
     }
     if (STATE.categoryModal.mode === 'save') {
-      const targetCategory = document.getElementById('asset-category-modal-select')?.value || DEFAULT_ASSET_CATEGORY;
+      const targetCategory = STATE.categoryModal.category || DEFAULT_ASSET_CATEGORY;
       STATE.pendingAssetCategory = targetCategory;
       const resolver = STATE.categoryModal.resolver;
       closeCategoryModal();
@@ -1472,7 +1498,7 @@
       return persistCanvasState();
     }
     if (STATE.categoryModal.mode === 'move') {
-      const targetCategory = document.getElementById('asset-category-modal-select')?.value || DEFAULT_ASSET_CATEGORY;
+      const targetCategory = STATE.categoryModal.category || DEFAULT_ASSET_CATEGORY;
       const res = await fetch('/api/canvas/assets/move', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ asset_id: STATE.categoryModal.targetAssetId, target_category: targetCategory }) });
       const result = await res.json();
       if (!res.ok || result.code !== 0) return alert(result.detail || result.message || '素材移动失败');
@@ -1609,14 +1635,14 @@ async function downloadImage(imageUrl) {
     const effectivePreviewUrl = displayImageUrl;
     const effectivePreviewTitle = displayImageUrl ? imageTitle : "";
     console.log(`[canvas][node] render id=${node.id} assetId=${node.assetId || ""} src=${String(effectivePreviewUrl || "").slice(0, 180)}`);
-    const previewHtml = effectivePreviewUrl ? `<img src="${effectivePreviewUrl}" alt="node-image" data-context-image="${effectivePreviewUrl}" data-image-title="${escapeHtml(effectivePreviewTitle)}" onerror="console.log('[canvas][img] node img error ' + this.src)" onload="console.log('[canvas][img] node img ok ' + this.src)">` : `<div class="node-image-empty">${linkedImageNodes.length ? `已连接 ${linkedImageNodes.length} 个上游参考图，当前节点将使用它们生成。` : '上传一张参考图，或者把一个带图片的上游节点连到这里。'}</div>`;
+    const previewHtml = effectivePreviewUrl ? `<img src="${effectivePreviewUrl}" alt="node-image" data-context-image="${effectivePreviewUrl}" data-image-title="${escapeHtml(effectivePreviewTitle)}" loading="lazy" decoding="async"><button class="node-close-image-btn" type="button" data-context-delete-image="${node.id}"><i class="fa fa-times"></i> \u5173\u95ed</button>` : `<div class="node-image-empty">${linkedImageNodes.length ? `已连接 ${linkedImageNodes.length} 个上游参考图，当前节点将使用它们生成。` : '上传一张参考图，或者把一个带图片的上游节点连到这里。'}</div>`;
     const overlayTop = linkedImageNodes.length ? `<div class="node-linked-banner">已引用 ${linkedImageNodes.length} 个上游节点图片作为参考图</div>` : "";
     const imageActions = (linkedImageNode || effectivePreviewUrl) ? "" : `<div class="node-image-actions"><button class="btn btn-default" type="button" data-upload-image="${node.id}">上传参考图</button></div>`;
     const modelCfg = getImageConfigById(node.modelId) || getImageConfigById(getDefaultImageConfigId());
     const rawModelIcon = modelCfg && window.renderModelIcon ? window.renderModelIcon(modelCfg.model_name || modelCfg.name || "", { size: 18, title: modelCfg.model_name || modelCfg.name || "" }) : "";
     const modelIcon = `<div class="canvas-node-model-icon">${rawModelIcon || '<i class="fa fa-cube"></i>'}</div>`;
     const modelName = escapeHtml(modelCfg?.model_name || modelCfg?.name || "未选择模型");
-    return `<div class="node ${selected} ${multiSelected} ${linkedHighlight}" data-node-id="${node.id}" style="left:${node.x}px;top:${node.y}px;"><span class="port-handle input" data-node-id="${node.id}" data-side="input" style="top:${getPortOffsetY(node)}px;left:-${PORT_RADIUS}px;transform:translate(-50%,-50%);"></span><span class="port-handle output" data-node-id="${node.id}" data-side="output" style="top:${getPortOffsetY(node)}px;right:-${PORT_RADIUS}px;transform:translate(50%,-50%);"></span><div class="node-shell"><div class="node-image-wrap">${previewHtml}${overlayTop}${imageActions}<input type="file" accept="image/*" hidden id="image-file-${node.id}" data-node-id="${node.id}"></div><div class="node-divider"></div><div class="node-body"><div class="canvas-node-model">${modelIcon}<div class="canvas-node-model-text"><span class="canvas-node-model-name">${modelName}</span></div></div><div class="node-row node-prompt-cell"><textarea data-node-id="${node.id}" data-field="prompt" placeholder="描述画面，例如：霓虹夜景、电影感光影">${escapeHtml(node.prompt || "")}</textarea></div><div class="node-compact-side"><div class="node-mini-field"><label>分辨率</label>${renderCustomSelect(node.id, "resolution", node.resolution || RESOLUTION_PRESETS[0], resolutionOptions)}</div><div class="node-mini-field"><label>比例</label>${renderCustomSelect(node.id, "ratio", node.ratio || RATIO_PRESETS[0], ratioOptions)}</div><div class="node-mini-field"><label>张数</label><input type="number" min="1" max="4" value="${Number(node.count || 1)}" data-node-id="${node.id}" data-field="count"></div><div class="node-mini-field"><label>模型</label>${renderCustomSelect(node.id, "modelId", String(node.modelId || ""), modelOptions, "暂无图片模型")}</div></div><div class="node-actions"><button class="btn btn-primary" type="button" data-run-generate="${node.id}">${node.busy ? "生成中..." : "开始生成"}</button></div></div></div></div>`;
+    return `<div class="node ${selected} ${multiSelected} ${linkedHighlight}" data-node-id="${node.id}" style="left:${node.x}px;top:${node.y}px;"><span class="port-handle input" data-node-id="${node.id}" data-side="input" style="top:${getPortOffsetY(node)}px;left:-${PORT_RADIUS}px;transform:translate(-50%,-50%);"></span><span class="port-handle output" data-node-id="${node.id}" data-side="output" style="top:${getPortOffsetY(node)}px;right:-${PORT_RADIUS}px;transform:translate(50%,-50%);"></span><div class="node-shell"><div class="node-image-wrap">${previewHtml}${overlayTop}${imageActions}<input type="file" accept="image/*" hidden id="image-file-${node.id}" data-node-id="${node.id}"></div><div class="node-divider"></div><div class="node-body"><div class="canvas-node-model">${modelIcon}<div class="canvas-node-model-text"><span class="canvas-node-model-name">${modelName}</span></div></div><div class="node-row node-prompt-cell"><textarea data-node-id="${node.id}" data-field="prompt" placeholder="描述画面，例如：霓虹夜景、电影感光影">${escapeHtml(node.prompt || "")}</textarea></div><div class="node-compact-side"><div class="node-mini-field"><label>分辨率</label>${renderCustomSelect(node.id, "resolution", node.resolution || RESOLUTION_PRESETS[0], resolutionOptions)}</div><div class="node-mini-field"><label>比例</label>${renderCustomSelect(node.id, "ratio", node.ratio || RATIO_PRESETS[0], ratioOptions)}</div><div class="node-mini-field"><label>张数</label><input type="number" min="1" max="4" value="${Number(node.count || 1)}" data-node-id="${node.id}" data-field="count"></div><div class="node-mini-field"><label>模型</label>${renderCustomSelect(node.id, "modelId", String(node.modelId || ""), modelOptions, "暂无图片模型")}</div></div><div class="node-actions"><button class="btn btn-primary" type="button" data-run-generate="${node.id}">${node.busy ? "生成中..." : "开始生成"}</button><button class="btn btn-danger" type="button" data-context-delete-node="${node.id}" title="删除节点"><i class="fa fa-trash"></i></button></div></div></div></div>`;
   }
 
   function renderEdge(edge) {
@@ -1683,22 +1709,97 @@ async function downloadImage(imageUrl) {
   }
 
   function applyZoom(nextZoom, clientX, clientY) { const oldZoom = STATE.zoom; const rect = getBoardRect(); const anchorX = clientX ?? (rect.left + rect.width / 2); const anchorY = clientY ?? (rect.top + rect.height / 2); const worldX = (anchorX - rect.left - STATE.panX) / oldZoom; const worldY = (anchorY - rect.top - STATE.panY) / oldZoom; STATE.zoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, Number(nextZoom.toFixed(2)))); STATE.panX = anchorX - rect.left - worldX * STATE.zoom; STATE.panY = anchorY - rect.top - worldY * STATE.zoom; updateWorldTransform(); persistCurrentHistory(); persistCanvasState(); }
-  function openImagePreview(url) { if (!url) return; STATE.previewImageUrl = url; const modal = document.getElementById("image-preview-modal"), target = document.getElementById("image-preview-target"); if (modal && target) { target.src = url; modal.classList.remove("hidden"); hideContextMenu(false); } }
-  function closeImagePreview() { STATE.previewImageUrl = ""; const modal = document.getElementById("image-preview-modal"), target = document.getElementById("image-preview-target"); if (modal && target) { modal.classList.add("hidden"); target.src = ""; } }
+  function openImagePreview(url) {
+    if (!url) return;
+    if (STATE.previewImageUrl === url) { closeImagePreview(); return; }
+    STATE.previewImageUrl = url;
+    const modal = document.getElementById("image-preview-modal"), target = document.getElementById("image-preview-target");
+    if (modal && target) { target.src = url; modal.classList.remove("hidden"); hideContextMenu(false); resetPreviewZoom(); }
+  }
+  function closeImagePreview() { STATE.previewImageUrl = ""; const modal = document.getElementById("image-preview-modal"), target = document.getElementById("image-preview-target"); if (modal && target) { modal.classList.add("hidden"); target.src = ""; resetPreviewZoom(); } }
+
+  var _pvZoom = 1, _pvPanX = 0, _pvPanY = 0, _pvPinchDist = 0, _pvPinchZoom = 1, _pvDrag = null, _pvLastTap = 0;
+  function resetPreviewZoom() { _pvZoom = 1; _pvPanX = 0; _pvPanY = 0; applyPreviewTransform(); }
+  function applyPreviewTransform() { var img = document.getElementById("image-preview-target"); if (img) img.style.transform = "translate(" + _pvPanX + "px," + _pvPanY + "px) scale(" + _pvZoom + ")"; }
+  function _pvTouchDist(a, b) { return Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY); }
+
+  (function bindPreviewGestures() {
+    var _pvTapTimer = null, _pvTapCount = 0, _pvTouchMoved = false, _pvTouchStartXY = null;
+    function _pvIsPreviewTarget(t) {
+      var modal = document.getElementById("image-preview-modal");
+      if (!modal || modal.classList.contains("hidden")) return false;
+      return t === modal || t.id === "image-preview-container" || t.id === "image-preview-target";
+    }
+    function _pvHandleTap() {
+      _pvTapCount++;
+      if (_pvTapTimer) clearTimeout(_pvTapTimer);
+      _pvTapTimer = setTimeout(function() {
+        if (_pvTapCount === 1) { closeImagePreview(); }
+        else if (_pvTapCount >= 2) {
+          if (_pvZoom > 1.05) { _pvZoom = 1; _pvPanX = 0; _pvPanY = 0; } else { _pvZoom = 2.5; }
+          applyPreviewTransform();
+        }
+        _pvTapCount = 0;
+      }, 180);
+    }
+    document.addEventListener("click", function(e) {
+      if (_pvIsPreviewTarget(e.target)) { e.preventDefault(); e.stopPropagation(); _pvHandleTap(); }
+    });
+    document.addEventListener("touchstart", function(e) {
+      if (!_pvIsPreviewTarget(e.target)) return;
+      _pvTouchMoved = false;
+      if (e.touches.length === 1) _pvTouchStartXY = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+      if (e.touches.length === 2) {
+        _pvPinchDist = _pvTouchDist(e.touches[0], e.touches[1]);
+        _pvPinchZoom = _pvZoom;
+        e.preventDefault();
+      } else if (e.touches.length === 1 && _pvZoom > 1.05) {
+        _pvDrag = { x: e.touches[0].clientX - _pvPanX, y: e.touches[0].clientY - _pvPanY };
+        e.preventDefault();
+      }
+    }, { passive: false });
+    document.addEventListener("touchmove", function(e) {
+      var modal = document.getElementById("image-preview-modal");
+      if (!modal || modal.classList.contains("hidden")) return;
+      _pvTouchMoved = true;
+      if (e.touches.length === 2 && _pvPinchDist > 0) {
+        var d = _pvTouchDist(e.touches[0], e.touches[1]);
+        _pvZoom = Math.max(0.5, Math.min(6, _pvPinchZoom * (d / _pvPinchDist)));
+        applyPreviewTransform();
+        e.preventDefault();
+      } else if (e.touches.length === 1 && _pvDrag) {
+        _pvPanX = e.touches[0].clientX - _pvDrag.x;
+        _pvPanY = e.touches[0].clientY - _pvDrag.y;
+        applyPreviewTransform();
+        e.preventDefault();
+      }
+    }, { passive: false });
+    document.addEventListener("touchend", function(e) {
+      if (e.touches.length < 2) _pvPinchDist = 0;
+      if (e.touches.length === 0) {
+        var wasDrag = _pvDrag !== null;
+        _pvDrag = null;
+        if (!_pvTouchMoved && _pvIsPreviewTarget(e.target)) {
+          e.preventDefault();
+          _pvHandleTap();
+        }
+        _pvTouchMoved = false;
+      }
+    }, { passive: false });
+  })();
   function getBoardRect() { return document.getElementById("canvas-board-wrap")?.getBoundingClientRect() || { left: 0, top: 0, width: 0, height: 0 }; }
   function clientToCanvasPoint(clientX, clientY) { const rect = getBoardRect(); return { x: (clientX - rect.left - STATE.panX) / STATE.zoom, y: (clientY - rect.top - STATE.panY) / STATE.zoom }; }
   function showContextMenu(clientX, clientY) { const rect = getBoardRect(); STATE.contextMenu = { visible: true, x: clientX - rect.left, y: clientY - rect.top, canvasPoint: clientToCanvasPoint(clientX, clientY), scope: "board", payload: null }; renderCanvas(); }
   function showImageContextMenu(clientX, clientY, imageUrl, title, nodeId = "") { const rect = getBoardRect(); STATE.contextMenu = { visible: true, x: clientX - rect.left, y: clientY - rect.top, canvasPoint: clientToCanvasPoint(clientX, clientY), scope: "image", payload: { imageUrl, title, nodeId } }; renderCanvas(); }
-  function showNodeContextMenu(clientX, clientY, nodeId) { const rect = getBoardRect(); STATE.contextMenu = { visible: true, x: clientX - rect.left, y: clientY - rect.top, canvasPoint: clientToCanvasPoint(clientX, clientY), scope: "node", payload: { nodeId } }; renderCanvas(); }
   function showAssetContextMenu(clientX, clientY, assetId, imageUrl, title, category) { STATE.contextMenu = { visible: true, x: clientX, y: clientY, canvasPoint: clientToCanvasPoint(clientX, clientY), scope: "asset", payload: { assetId, imageUrl, title, category } }; renderCanvas(); }
-  function hideContextMenu(rerender = true) { if (!STATE.contextMenu.visible) return; STATE.contextMenu.visible = false; if (rerender) renderCanvas(); }
+  function hideContextMenu(rerender = true) { STATE.contextMenu.visible = false; var _mr = document.getElementById("canvas-context-menu-root"); if (_mr) _mr.innerHTML = ""; if (rerender) renderCanvas(); }
   function renderContextMenu() {
     if (!STATE.contextMenu.visible) return "";
     if (STATE.contextMenu.scope === "image" && STATE.contextMenu.payload) {
-      return `<div class="canvas-context-menu" style="left:${STATE.contextMenu.x}px;top:${STATE.contextMenu.y}px;"><button data-context-preview="${STATE.contextMenu.payload.imageUrl}"><i class="fa fa-search-plus"></i> 预览图片</button><button data-context-save-library="${STATE.contextMenu.payload.imageUrl}" data-image-title="${escapeHtml(STATE.contextMenu.payload.title || '图片素材')}"><i class="fa fa-folder-open-o"></i> 加入素材库</button><button data-context-download-image="${STATE.contextMenu.payload.imageUrl}"><i class="fa fa-download"></i> 保存图片</button>${STATE.contextMenu.payload.nodeId ? `<button data-context-delete-image="${STATE.contextMenu.payload.nodeId}"><i class="fa fa-trash"></i> 删除图片</button><button data-context-delete-node="${STATE.contextMenu.payload.nodeId}"><i class="fa fa-times-circle"></i> 删除节点</button>` : ``}</div>`;
+      return `<div class="canvas-context-menu" style="left:${STATE.contextMenu.x}px;top:${STATE.contextMenu.y}px;"><button data-context-save-library="${STATE.contextMenu.payload.imageUrl}" data-image-title="${escapeHtml(STATE.contextMenu.payload.title || '\u56fe\u7247\u7d20\u6750')}"><i class="fa fa-folder-open-o"></i> \u52a0\u5165\u7d20\u6750\u5e93</button><button data-context-download-image="${STATE.contextMenu.payload.imageUrl}"><i class="fa fa-download"></i> \u4fdd\u5b58\u56fe\u7247</button></div>`;
     }
-    if (STATE.contextMenu.scope === "node" && STATE.contextMenu.payload?.nodeId) { return `<div class="canvas-context-menu" style="left:${STATE.contextMenu.x}px;top:${STATE.contextMenu.y}px;"><button data-context-delete-node="${STATE.contextMenu.payload.nodeId}"><i class="fa fa-trash"></i> 删除节点</button></div>`; }
-    if (STATE.contextMenu.scope === "asset" && STATE.contextMenu.payload?.assetId) { return `<div class="canvas-context-menu asset-modal-context-menu" style="left:${STATE.contextMenu.x}px;top:${STATE.contextMenu.y}px;"><button type="button" data-context-preview="${STATE.contextMenu.payload.imageUrl || ""}"><i class="fa fa-search-plus"></i> 预览图片</button><button type="button" data-add-asset="${STATE.contextMenu.payload.assetId}"><i class="fa fa-plus-circle"></i> 加入画布</button><button type="button" data-move-asset="${STATE.contextMenu.payload.assetId}" data-asset-category="${escapeHtml(STATE.contextMenu.payload.category || DEFAULT_ASSET_CATEGORY)}"><i class="fa fa-folder-open-o"></i> 移动分类</button><button type="button" data-delete-asset="${STATE.contextMenu.payload.assetId}"><i class="fa fa-trash"></i> 删除素材</button></div>`; }
+
+    if (STATE.contextMenu.scope === "asset" && STATE.contextMenu.payload?.assetId) { return `<div class="canvas-context-menu asset-modal-context-menu" style="left:${STATE.contextMenu.x}px;top:${STATE.contextMenu.y}px;"><button type="button" data-context-download-image="${STATE.contextMenu.payload.imageUrl || ""}"><i class="fa fa-download"></i> 保存图片</button><button type="button" data-add-asset="${STATE.contextMenu.payload.assetId}"><i class="fa fa-plus-circle"></i> 加入画布</button><button type="button" data-move-asset="${STATE.contextMenu.payload.assetId}" data-asset-category="${escapeHtml(STATE.contextMenu.payload.category || DEFAULT_ASSET_CATEGORY)}"><i class="fa fa-folder-open-o"></i> 移动分类</button><button type="button" data-delete-asset="${STATE.contextMenu.payload.assetId}"><i class="fa fa-trash"></i> 删除素材</button></div>`; }
     return `<div class="canvas-context-menu" style="left:${STATE.contextMenu.x}px;top:${STATE.contextMenu.y}px;"><button data-context-create-node="1"><i class="fa fa-plus-circle"></i> 新建节点</button></div>`;
   }
   function createNodeFromContextMenu() { const point = STATE.contextMenu.canvasPoint || { x: 180, y: 160 }; hideContextMenu(false); addNodeAt(point.x, point.y); }
@@ -1754,7 +1855,7 @@ async function downloadImage(imageUrl) {
     STATE.panX = Math.round((rect.width - contentW * STATE.zoom) / 2 - minX * STATE.zoom);
     STATE.panY = Math.round((rect.height - contentH * STATE.zoom) / 2 - minY * STATE.zoom);
   }
-  function restoreSnapshot(snapshot, options = {}) { STATE.nodes = JSON.parse(JSON.stringify(snapshot?.nodes || [])).map((node) => { const asset = node.assetId ? STATE.assetLibrary.find((item) => item.id === node.assetId) : null; const outputAsset = node.outputAssetId ? STATE.assetLibrary.find((item) => item.id === node.outputAssetId) : null; const assetImage = getDirectDisplayImageUrl(asset?.displayImageUrl) || getDirectDisplayImageUrl(asset?.imageUrl, asset?.imageBase64); const outputImage = getDirectDisplayImageUrl(outputAsset?.displayImageUrl) || getDirectDisplayImageUrl(outputAsset?.imageUrl, outputAsset?.imageBase64); const hydrated = { ...node, displayImageUrl: getDirectDisplayImageUrl(node.displayImageUrl) || outputImage || (Array.isArray(node.outputImages) ? (node.outputImages[0] || "") : (node.outputImages || "")) || getDirectDisplayImageUrl(node.imageUrl, node.imageBase64) || assetImage, imageUrl: outputImage || getDirectDisplayImageUrl(node.imageUrl, node.imageBase64) || assetImage || "", outputImages: [] }; console.log(`[canvas][restore] node id=${hydrated.id || ""} assetId=${hydrated.assetId || ""} imageUrlLen=${String(hydrated.imageUrl || "").length} displayLen=${String(hydrated.displayImageUrl || "").length} outputCount=${Array.isArray(hydrated.outputImages) ? hydrated.outputImages.length : (hydrated.outputImages ? 1 : 0)}`); return hydrated; }); STATE.edges = JSON.parse(JSON.stringify(snapshot?.edges || [])); STATE.panX = Number(snapshot?.panX || 0); STATE.panY = Number(snapshot?.panY || 0); STATE.zoom = Number(snapshot?.zoom || 1); canvasDebugLog("history", "restoreSnapshot", { nodes: STATE.nodes.map((node) => ({ id: node.id, assetId: node.assetId || "", imageUrlLength: String(node.imageUrl || "").length, imageBase64Length: String(node.imageBase64 || "").length, displayImageUrlLength: String(node.displayImageUrl || "").length, outputImages: Array.isArray(node.outputImages) ? node.outputImages.map((item) => String(item || "").length) : String(node.outputImages || "").length })), edgeCount: STATE.edges.length, zoom: STATE.zoom }); if (options.focus !== false && STATE.nodes.length) focusNodesInView(); }
+  function restoreSnapshot(snapshot, options = {}) { STATE.nodes = JSON.parse(JSON.stringify(snapshot?.nodes || [])).map((node) => { const asset = node.assetId ? STATE.assetLibrary.find((item) => item.id === node.assetId) : null; const outputAsset = node.outputAssetId ? STATE.assetLibrary.find((item) => item.id === node.outputAssetId) : null; const assetImage = getDirectDisplayImageUrl(asset?.displayImageUrl) || getDirectDisplayImageUrl(asset?.imageUrl, asset?.imageBase64); const outputImage = getDirectDisplayImageUrl(outputAsset?.displayImageUrl) || getDirectDisplayImageUrl(outputAsset?.imageUrl, outputAsset?.imageBase64); const hydrated = { ...node, busy: false, displayImageUrl: getDirectDisplayImageUrl(node.displayImageUrl) || outputImage || (Array.isArray(node.outputImages) ? (node.outputImages[0] || "") : (node.outputImages || "")) || getDirectDisplayImageUrl(node.imageUrl, node.imageBase64) || assetImage, imageUrl: outputImage || getDirectDisplayImageUrl(node.imageUrl, node.imageBase64) || assetImage || "", outputImages: [] }; console.log(`[canvas][restore] node id=${hydrated.id || ""} assetId=${hydrated.assetId || ""} imageUrlLen=${String(hydrated.imageUrl || "").length} displayLen=${String(hydrated.displayImageUrl || "").length} outputCount=${Array.isArray(hydrated.outputImages) ? hydrated.outputImages.length : (hydrated.outputImages ? 1 : 0)}`); return hydrated; }); STATE.edges = JSON.parse(JSON.stringify(snapshot?.edges || [])); STATE.panX = Number(snapshot?.panX || 0); STATE.panY = Number(snapshot?.panY || 0); STATE.zoom = Number(snapshot?.zoom || 1); canvasDebugLog("history", "restoreSnapshot", { nodes: STATE.nodes.map((node) => ({ id: node.id, assetId: node.assetId || "", imageUrlLength: String(node.imageUrl || "").length, imageBase64Length: String(node.imageBase64 || "").length, displayImageUrlLength: String(node.displayImageUrl || "").length, outputImages: Array.isArray(node.outputImages) ? node.outputImages.map((item) => String(item || "").length) : String(node.outputImages || "").length })), edgeCount: STATE.edges.length, zoom: STATE.zoom }); if (options.focus !== false && STATE.nodes.length) focusNodesInView(); }
   function mergeAssetIntoLibrary(asset) { STATE.assetLibrary = [normalizeAsset(asset), ...STATE.assetLibrary.filter((item) => item.id !== asset.id)].slice(0, 120); }
   function insertAssetAsNode(assetId) { const asset = STATE.assetLibrary.find((item) => item.id === assetId); if (!asset) return; const point = clientToCanvasPoint(getBoardRect().left + 280, getBoardRect().top + 220); const node = createNode(point.x, point.y); node.imageUrl = asset.imageUrl || ""; node.imageBase64 = ""; node.displayImageUrl = getDirectDisplayImageUrl(asset.displayImageUrl) || getDirectDisplayImageUrl(asset.imageUrl, asset.imageBase64); node.assetId = asset.id; node.outputAssetId = ""; STATE.nodes.push(node); STATE.selectedNodeId = node.id; STATE.selectedEdgeId = null; persistCanvasState(); renderCanvas(); renderLeftPanel(); }
   function fileToBase64(file) { return new Promise((resolve, reject) => { const reader = new FileReader(); reader.onload = () => { const dataUrl = String(reader.result || ""); resolve({ dataUrl, base64: extractBase64(dataUrl) || "" }); }; reader.onerror = reject; reader.readAsDataURL(file); }); }

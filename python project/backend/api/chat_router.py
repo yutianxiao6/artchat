@@ -1,5 +1,8 @@
 import json
 import re
+import os
+import base64
+import uuid
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, UploadFile, File
@@ -9,8 +12,12 @@ from backend.models.schemas import ChatRequest, SmartChatRequest, ImageGenerateR
 from backend.api.config_router import config_list
 from backend.api.image_router import generate_image
 from backend.core.request_client import async_http_request
+from backend.core.canvas_storage import get_data_root
 
 router = APIRouter(prefix="/api/chat", tags=["聊天对话"])
+
+CHAT_IMAGES_DIR = os.path.join(get_data_root(), "chat_images")
+os.makedirs(CHAT_IMAGES_DIR, exist_ok=True)
 
 ALLOWED_IMAGE_SIZES = {
     "1024x1024",
@@ -68,7 +75,26 @@ def parse_image_request_rules(message: str) -> dict:
     return {"image_size": size, "image_count": max(1, min(count, 4))}
 
 
-async def create_chat_response(config: dict, request_data: dict, stream: bool):
+def _resolve_image_url(url: str) -> str:
+    if not url:
+        return ""
+    if url.startswith("data:image"):
+        return url
+    if url.startswith("/chat-images/"):
+        local_path = os.path.join(CHAT_IMAGES_DIR, url.split("/chat-images/", 1)[1])
+        if os.path.isfile(local_path):
+            try:
+                with open(local_path, "rb") as f:
+                    b64 = base64.b64encode(f.read()).decode("utf-8")
+                return f"data:image/png;base64,{b64}"
+            except Exception:
+                pass
+    if url.startswith("http://") or url.startswith("https://"):
+        return url
+    return ""
+
+
+async def create_chat_response(config: dict, request_data: dict, stream: bool, timeout: float = 120.0):
     headers = {
         "Content-Type": "application/json",
         "Authorization": f"Bearer {config['api_key']}"
@@ -78,7 +104,7 @@ async def create_chat_response(config: dict, request_data: dict, stream: bool):
     async def stream_generator():
         try:
             async with await async_http_request(
-                "POST", chat_url, headers, request_data, timeout=120.0, stream=True
+                "POST", chat_url, headers, request_data, timeout=timeout, stream=True
             ) as response:
                 if response.status_code != 200:
                     error_text = await response.atext()
@@ -95,6 +121,7 @@ async def create_chat_response(config: dict, request_data: dict, stream: bool):
                         if line[6:] == "[DONE]":
                             break
         except Exception as e:
+            print(f"[smart_chat] 流式请求异常: {repr(e)}")
             yield f"data: {json.dumps({'error': f'请求异常: {str(e)}'}, ensure_ascii=False)}\n\n"
             yield "data: [DONE]\n\n"
 
@@ -108,42 +135,22 @@ async def create_chat_response(config: dict, request_data: dict, stream: bool):
             }
         )
 
-    response = await async_http_request("POST", chat_url, headers, request_data, timeout=120.0)
+    response = await async_http_request("POST", chat_url, headers, request_data, timeout=timeout)
     if response.status_code != 200:
         error_detail = await response.atext()
         raise HTTPException(status_code=response.status_code, detail=error_detail)
     return response.json()
 
 
-async def classify_task(message: str, files_summary: str, messages: list, classifier_config: dict) -> dict:
+async def classify_task(message: str, has_files: bool, file_names: list, messages: list, classifier_config: dict) -> dict:
     rule_result = parse_image_request_rules(message)
     normalized_message = (message or "").strip()
     lower_message = normalized_message.lower()
 
-    image_keywords = ["生成", "画", "绘制", "图片", "海报", "插画", "头像", "壁纸", "配图", "来一张", "做一张"]
-    if any(k in normalized_message for k in image_keywords):
-        return {
-            "task_type": "image",
-            "reason": "命中图片关键词，走规则优先",
-            "rewritten_prompt": message,
-            "image_size": rule_result.get("image_size") or "1024x1024",
-            "image_count": rule_result.get("image_count") or 1,
-        }
-
-    file_keywords = ["总结文件", "总结一下文件", "分析文件", "读取文件", "根据文件", "结合文件", "基于文件", "提取文件"]
-    if files_summary and any(k in normalized_message for k in file_keywords):
-        return {
-            "task_type": "file",
-            "reason": "存在文件且命中文件任务关键词，走规则直通",
-            "rewritten_prompt": None,
-            "image_size": rule_result.get("image_size") or "1024x1024",
-            "image_count": rule_result.get("image_count") or 1,
-        }
-
     simple_chat_patterns = [
         "你好", "hi", "hello", "在吗", "介绍一下", "解释一下", "帮我写", "帮我改", "翻译", "润色", "总结", "怎么", "为什么", "如何", "是什么", "啥意思", "代码", "报错", "排查", "优化", "修复"
     ]
-    if not files_summary and len(normalized_message) <= 120 and any(k in lower_message or k in normalized_message for k in simple_chat_patterns):
+    if not has_files and len(normalized_message) <= 120 and any(k in lower_message or k in normalized_message for k in simple_chat_patterns):
         return {
             "task_type": "chat",
             "reason": "普通短文本问答，跳过分类模型直通聊天",
@@ -152,25 +159,37 @@ async def classify_task(message: str, files_summary: str, messages: list, classi
             "image_count": rule_result.get("image_count") or 1,
         }
 
+    files_hint = ""
+    if has_files and file_names:
+        files_hint = f"\n用户同时上传了以下文件：{', '.join(file_names)}。判断任务类型时只看用户文字意图，文件会作为辅助材料一并发送给对应模型。"
+
     system_prompt = (
-        "你是任务路由器。根据用户最新输入判断任务类型，只能返回 JSON，不要输出多余文字。"
+        "你是任务路由器。根据用户文字输入判断任务类型，只能返回 JSON，不要输出多余文字。"
         "\n任务类型:"
-        " chat = 普通问答、写作、分析、翻译、代码讨论等;"
-        " image = 明确要求生成图片、画图、海报、插画、头像、壁纸、配图等;"
-        " file = 明确要求读取、总结、提取、改写、分析已上传文件内容。"
-        "\n如果是图片任务，还要尽量补充 image_size 和 image_count。"
+        " chat = 普通问答、写作、分析、翻译、代码讨论、总结文件、读取文件、分析文件内容等;"
+        " image = 明确要求生成/画/绘制/创作一张具体的图片（包括参考已有素材来生成新图片、分镜图、多场景图等）。"
+        " 注意：要求写提示词、描述画面等属于chat而非image。"
+        f"{files_hint}"
+        "\n如果是图片任务，根据用户描述提取image_size和image_count。用户可能说横屏/竖屏/正方形/4K/2K/比例等，请合理映射到对应尺寸。"
         " image_size 只能取 1024x1024 / 1536x1024 / 1024x1536 / 2048x2048 / 2048x1152 / 2160x3840 / 3840x2160 中一个。"
         " image_count 取 1-4 的整数。"
-        "\n输出格式: {\"task_type\":\"chat|image|file\",\"reason\":\"简短原因\",\"rewritten_prompt\":\"如果是image，给出适合绘图模型的优化提示词，否则可为空\",\"image_size\":\"可为空\",\"image_count\":1}"
+        "\n输出格式: {\"task_type\":\"chat|image\",\"reason\":\"简短原因\",\"rewritten_prompt\":\"如果是image，给出适合绘图模型的优化提示词，否则可为空\",\"image_size\":\"可为空\",\"image_count\":1}"
     )
 
-    context_messages = messages[-8:] if messages else []
-    routing_messages = [{"role": "system", "content": system_prompt}]
-    routing_messages.extend(context_messages)
-    routing_messages.append({
-        "role": "user",
-        "content": f"用户最新输入:\n{message}\n\n已上传文件摘要:\n{files_summary or '无'}"
-    })
+    if has_files:
+        routing_messages = [{"role": "system", "content": system_prompt}]
+        routing_messages.append({
+            "role": "user",
+            "content": f"用户最新输入:\n{message}"
+        })
+    else:
+        context_messages = messages[-8:] if messages else []
+        routing_messages = [{"role": "system", "content": system_prompt}]
+        routing_messages.extend(context_messages)
+        routing_messages.append({
+            "role": "user",
+            "content": f"用户最新输入:\n{message}"
+        })
 
     request_data = {
         "model": classifier_config["model_name"],
@@ -181,14 +200,27 @@ async def classify_task(message: str, files_summary: str, messages: list, classi
         "response_format": {"type": "json_object"}
     }
 
-    response = await create_chat_response(classifier_config, request_data, stream=False)
-    content = response["choices"][0]["message"]["content"]
-    parsed = json.loads(content)
+    try:
+        response = await create_chat_response(classifier_config, request_data, stream=False)
+        content = response["choices"][0]["message"]["content"]
+        parsed = json.loads(content)
+    except Exception as e:
+        print(f"[分类器] 调用失败，fallback to chat: {repr(e)}")
+        return {
+            "task_type": "chat",
+            "reason": f"分类器调用失败: {str(e)[:100]}",
+            "rewritten_prompt": None,
+            "image_size": rule_result.get("image_size") or "1024x1024",
+            "image_count": rule_result.get("image_count") or 1,
+        }
     parsed.setdefault("task_type", "chat")
     parsed.setdefault("reason", "默认聊天")
     parsed.setdefault("rewritten_prompt", None)
     parsed.setdefault("image_size", "1024x1024")
     parsed.setdefault("image_count", 1)
+
+    if parsed.get("task_type") not in ("chat", "image"):
+        parsed["task_type"] = "chat"
 
     rule_result = parse_image_request_rules(message)
     if parsed.get("task_type") == "image":
@@ -227,24 +259,29 @@ async def smart_chat(req: SmartChatRequest):
 
     file_blocks = []
     image_files = []
-    
+    text_file_contents = []
+
     for item in req.files:
-        # 检查是否是图片文件
         is_image = item.content_type and item.content_type.startswith("image/")
-        
-        if is_image and item.image_url:
-            # 图片文件：收集用于视觉模型
+
+        resolved_image_url = ""
+        if is_image:
+            resolved_image_url = _resolve_image_url(item.image_url or "") or _resolve_image_url(item.preview_url or "")
+
+        if is_image and resolved_image_url:
             image_files.append({
                 "filename": item.filename,
-                "image_url": item.image_url,
+                "image_url": resolved_image_url,
                 "content_type": item.content_type
             })
-            # 在文本摘要中简要说明
             file_blocks.append(
                 f"文件名: {item.filename}\n类型: {item.content_type}\n大小: {item.size} bytes\n说明: 图片文件已上传"
             )
         elif item.text_content:
-            # 文本文件：使用完整的 text_content（限制 50MB 字符）
+            text_file_contents.append({
+                "filename": item.filename,
+                "text": item.text_content[:50000000]
+            })
             file_blocks.append(
                 f"文件名: {item.filename}\n类型: {item.content_type}\n大小: {item.size} bytes\n内容:\n{item.text_content[:50000000]}"
             )
@@ -252,10 +289,12 @@ async def smart_chat(req: SmartChatRequest):
             file_blocks.append(
                 f"文件名: {item.filename}\n类型: {item.content_type}\n大小: {item.size} bytes\n说明: 无法读取文件内容"
             )
-    
-    files_summary = "\n\n---\n\n".join(file_blocks)
 
-    route = await classify_task(req.message, files_summary, req.messages, classifier_config)
+    files_summary = "\n\n---\n\n".join(file_blocks)
+    has_files = bool(req.files)
+    file_names = [item.filename for item in req.files if item.filename]
+
+    route = await classify_task(req.message, has_files, file_names, req.messages, classifier_config)
     task_type = route.get("task_type", "chat")
 
     if task_type == "image":
@@ -271,6 +310,30 @@ async def smart_chat(req: SmartChatRequest):
         image_size = route.get("image_size") or "1024x1024"
         image_count = route.get("image_count") or 1
 
+        if text_file_contents:
+            text_parts = []
+            for tf in text_file_contents:
+                text_parts.append(f"[{tf['filename']}]:\n{tf['text'][:20000]}")
+            prompt = prompt + "\n\n参考材料:\n" + "\n\n".join(text_parts)
+
+        ref_image_base64_list = []
+        for img in image_files:
+            url = img.get("image_url", "")
+            resolved = _resolve_image_url(url)
+            if resolved and resolved.startswith("data:image"):
+                ref_image_base64_list.append(resolved)
+
+        if not ref_image_base64_list and req.messages:
+            for hist_msg in reversed(req.messages[-12:]):
+                for url in (hist_msg.get("image_urls") or []):
+                    resolved = _resolve_image_url(url)
+                    if resolved and resolved.startswith("data:image"):
+                        ref_image_base64_list.append(resolved)
+                    if len(ref_image_base64_list) >= 4:
+                        break
+                if len(ref_image_base64_list) >= 4:
+                    break
+
         try:
             width, height = [int(x) for x in image_size.split("x")]
             image_response = await generate_image(ImageGenerateRequest(
@@ -280,6 +343,7 @@ async def smart_chat(req: SmartChatRequest):
                 width=width,
                 height=height,
                 n=image_count,
+                image_base64_list=ref_image_base64_list,
             ))
             data_items = image_response.get("data", [])
             normalized = []
@@ -337,7 +401,22 @@ async def smart_chat(req: SmartChatRequest):
 
     composed_messages = [{"role": "system", "content": system_prompt}]
     if req.messages:
-        composed_messages.extend(req.messages[-12:])
+        for hist_msg in req.messages[-12:]:
+            role = hist_msg.get("role", "")
+            content = hist_msg.get("content", "")
+            hist_image_urls = hist_msg.get("image_urls") or []
+            resolved_hist_images = []
+            for url in hist_image_urls:
+                resolved = _resolve_image_url(url)
+                if resolved:
+                    resolved_hist_images.append(resolved)
+            if resolved_hist_images:
+                parts = [{"type": "text", "text": str(content)}]
+                for img_url in resolved_hist_images:
+                    parts.append({"type": "image_url", "image_url": {"url": img_url}})
+                composed_messages.append({"role": role, "content": parts})
+            elif content:
+                composed_messages.append({"role": role, "content": str(content)})
 
     if files_summary:
         composed_messages.append({
@@ -345,9 +424,8 @@ async def smart_chat(req: SmartChatRequest):
             "content": f"以下是用户上传文件的可用文本内容，请在回答时结合使用:\n\n{files_summary}"
         })
 
-    # 构建用户消息：如果有图片文件，使用多模态格式
     if image_files:
-        # 多模态消息格式（支持 OpenAI Vision API 格式）
+        print(f"[smart_chat] 多模态消息: {len(image_files)} 张图片, 各大小: {[len(img['image_url']) for img in image_files]}")
         user_message_content = [{"type": "text", "text": req.message}]
         for img in image_files:
             user_message_content.append({
@@ -356,7 +434,6 @@ async def smart_chat(req: SmartChatRequest):
             })
         composed_messages.append({"role": "user", "content": user_message_content})
     else:
-        # 纯文本消息
         composed_messages.append({"role": "user", "content": req.message})
 
     request_data = {
@@ -368,7 +445,8 @@ async def smart_chat(req: SmartChatRequest):
     }
     request_data = {k: v for k, v in request_data.items() if v is not None}
 
-    response = await create_chat_response(classifier_config, request_data, req.stream)
+    chat_timeout = 300.0 if image_files else 120.0
+    response = await create_chat_response(classifier_config, request_data, req.stream, timeout=chat_timeout)
     if req.stream:
         return response
 
@@ -404,3 +482,53 @@ async def parse_pdf(file: UploadFile = File(...)):
     except Exception as e:
         print(f"[PDF解析] 解析失败: {repr(e)}")
         raise HTTPException(status_code=500, detail=f"PDF 解析失败: {str(e)}")
+
+
+
+@router.post("/upload-image")
+async def upload_chat_image(file: UploadFile = File(...)):
+    try:
+        content = await file.read()
+        if not content:
+            raise HTTPException(status_code=400, detail="文件内容为空")
+        ext = os.path.splitext(file.filename or "")[1] or ".png"
+        if ext.lower() not in (".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"):
+            ext = ".png"
+        filename = f"{uuid.uuid4().hex}{ext}"
+        filepath = os.path.join(CHAT_IMAGES_DIR, filename)
+        with open(filepath, "wb") as f:
+            f.write(content)
+        url = f"/chat-images/{filename}"
+        return JSONResponse({"code": 0, "data": {"url": url, "filename": filename}})
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"图片保存失败: {str(e)}")
+
+
+@router.post("/upload-image-base64")
+async def upload_chat_image_base64(req: dict):
+    try:
+        data_url = req.get("image_base64", "")
+        if not data_url:
+            raise HTTPException(status_code=400, detail="缺少 image_base64")
+        if data_url.startswith("data:image"):
+            parts = data_url.split(",", 1)
+            raw = parts[1] if len(parts) > 1 else ""
+            mime_match = re.match(r"data:(image/\w+)", parts[0])
+            mime = mime_match.group(1) if mime_match else "image/png"
+        else:
+            raw = data_url
+            mime = "image/png"
+        ext_map = {"image/png": ".png", "image/jpeg": ".jpg", "image/gif": ".gif", "image/webp": ".webp"}
+        ext = ext_map.get(mime, ".png")
+        filename = f"{uuid.uuid4().hex}{ext}"
+        filepath = os.path.join(CHAT_IMAGES_DIR, filename)
+        with open(filepath, "wb") as f:
+            f.write(base64.b64decode(raw))
+        url = f"/chat-images/{filename}"
+        return JSONResponse({"code": 0, "data": {"url": url, "filename": filename}})
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"图片保存失败: {str(e)}")

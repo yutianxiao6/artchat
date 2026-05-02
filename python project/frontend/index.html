@@ -7,6 +7,7 @@
     <link rel="icon" type="image/png" href="/static/assets/favicon.png">
     <link rel="shortcut icon" href="/static/assets/favicon.png">
     <link href="https://cdn.jsdelivr.net/npm/font-awesome@4.7.0/css/font-awesome.min.css" rel="stylesheet">
+    <link href="/static/css/workflow.css?v=20260501b" rel="stylesheet">
     <style>
         /* 全局CSS变量 - 统一高端深色主题规范 */
         :root {
@@ -353,6 +354,10 @@
                 <i class="fa fa-picture-o"></i>
                 <span>无限画布</span>
             </button>
+            <button class="tab-btn" data-tab="workflow">
+                <i class="fa fa-film"></i>
+                <span>工作流</span>
+            </button>
         </nav>
         <div class="header-actions">
             <button class="icon-btn" id="open-config-modal-btn" title="配置">
@@ -509,6 +514,9 @@
         <div id="image" class="tab-content" style="height: calc(100vh - 64px); overflow: hidden;">
         </div>
 
+        <div id="workflow" class="tab-content" style="height: calc(100vh - 64px); overflow: hidden;">
+        </div>
+
         <div id="assets" class="tab-content custom-scrollbar">
             <div class="card" style="max-width: 1200px; margin: 24px auto;">
                 <div class="card-header">
@@ -580,7 +588,8 @@
     <script src="/static/js/main.js?v=20260425k"></script>
     <script src="/static/js/model-brand.js?v=20260425k"></script>
     <script src="/static/js/config.js?v=20260425k"></script>
-    <script src="/static/js/chat.js?v=20260429a"></script>
-    <script src="/static/js/image.js?v=20260429b"></script>
+    <script src="/static/js/chat.js?v=20260501n"></script>
+    <script src="/static/js/image.js?v=20260501n"></script>
+    <script src="/static/js/workflow.js?v=20260501b"></script>
 </body>
 </html>

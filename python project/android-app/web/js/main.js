@@ -213,6 +213,8 @@
       if (match) targetPanel = panel;
       panel.classList.toggle("active", match);
       panel.style.display = match ? "block" : "none";
+      panel.style.visibility = match ? "visible" : "hidden";
+      panel.style.contentVisibility = match ? "visible" : "hidden";
     });
     if (!targetPanel) return;
 

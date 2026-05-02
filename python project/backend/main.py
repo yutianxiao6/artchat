@@ -5,9 +5,11 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from backend.api.config_router import router as config_router
-from backend.api.chat_router import router as chat_router
+from backend.api.chat_router import router as chat_router, CHAT_IMAGES_DIR
 from backend.api.image_router import router as image_router
 from backend.api.canvas_router import router as canvas_router, canvas_assets_app
+from backend.api.workflow_router import router as workflow_router
+from backend.core.workflow_storage import WORKFLOW_ROOT
 
 # 服务配置
 SERVER_HOST = "0.0.0.0"
@@ -37,9 +39,12 @@ app.include_router(config_router)
 app.include_router(chat_router)
 app.include_router(image_router)
 app.include_router(canvas_router)
+app.include_router(workflow_router)
 
 app.mount("/static", StaticFiles(directory=FRONTEND_DIR), name="static")
 app.mount("/canvas-assets", canvas_assets_app, name="canvas-assets")
+app.mount("/chat-images", StaticFiles(directory=CHAT_IMAGES_DIR), name="chat-images")
+app.mount("/workflow-images", StaticFiles(directory=WORKFLOW_ROOT), name="workflow-images")
 
 @app.get("/")
 async def index():

@@ -178,6 +178,10 @@
       requestAnimationFrame(() => {
         window.initImageModule && window.initImageModule();
       });
+    } else if (tabId === "workflow") {
+      requestAnimationFrame(() => {
+        window.initWorkflowModule && window.initWorkflowModule();
+      });
     }
 
     if (!opts.noReApply) {

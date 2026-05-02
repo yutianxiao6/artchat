@@ -30,8 +30,8 @@ class ChatRequest(BaseModel):
 class SmartUploadedFile(BaseModel):
     filename: str
     content_type: str
-    text_content: str
-    size: int
+    text_content: str = ""
+    size: int = 0
     image_url: Optional[str] = None
     preview_url: Optional[str] = None
     preview_path: Optional[str] = None
@@ -39,7 +39,7 @@ class SmartUploadedFile(BaseModel):
 
 class SmartChatRequest(BaseModel):
     message: str
-    messages: List[Dict[str, str]] = []
+    messages: List[Dict[str, Any]] = []
     chat_config_id: Optional[str] = None
     image_config_id: Optional[str] = None
     temperature: float = 0.7
@@ -49,7 +49,7 @@ class SmartChatRequest(BaseModel):
 
 
 class SmartRouteResult(BaseModel):
-    task_type: Literal["chat", "image", "file"]
+    task_type: Literal["chat", "image"]
     reason: str
     rewritten_prompt: Optional[str] = None
     image_size: Optional[str] = None

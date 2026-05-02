@@ -1,8 +1,17 @@
+# Ignore everything at root
+/*
+
+# Keep .gitignore and python project
+!/.gitignore
+!/python project/
+
 # Python
 __pycache__/
 *.pyc
 *.pyo
 *.egg-info/
+
+# Build artifacts
 dist/
 build/
 *.spec
@@ -22,15 +31,20 @@ Thumbs.db
 *.env.local
 
 # Android build artifacts
-android-app/android/app/build/
-android-app/android/app/release/
-android-app/android/.gradle/
-android-app/android/build/
-android-app/node_modules/
+**/android/app/build/
+**/android/app/release/
+**/android/.gradle/
+**/android/build/
+**/node_modules/
 
 # Canvas data (user generated)
 canvas_data/
 
+# Config with secrets
+model_configs.json
+
+# Installer output
+installer/
+
 # Temp
 *.bak.*
-FILE_UPLOAD_FIX.md

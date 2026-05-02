@@ -1,7 +1,8 @@
 // Markdown Worker - 在独立线程中处理 markdown 渲染
+self.postMessage({ action: 'ready' });
 self.onmessage = function(e) {
   const { id, text, action } = e.data;
-  
+
   if (action === 'render') {
     try {
       // 简单的 markdown 渲染（不依赖外部库）

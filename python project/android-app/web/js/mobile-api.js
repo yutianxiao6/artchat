@@ -310,37 +310,57 @@ function normalizeImageItems(raw) {
     if (!chatConfig) return fail('聊天配置不存在', 404);
 
     const text = String(body.message || '').trim();
-    const isImageIntent = /(生成|画|绘制|做一张|来一张|图片|海报|插画|头像|壁纸|配图)/.test(text);
     const imageConfig = findConfig(body.image_config_id);
-    log('info', 'chat-smart', `intent resolved image=${isImageIntent}`, {
-      hasImageConfig: !!imageConfig,
-    });
 
-    if (isImageIntent && imageConfig) {
-      const match = text.match(/(\d{3,4})\s*[x×]\s*(\d{3,4})/i);
-      const width = match ? Number(match[1]) : 1024;
-      const height = match ? Number(match[2]) : 1024;
-      const imageUrl = imageConfig.api_base.replace(/\/$/, '') + '/images/generations';
+    // Layer 1: fast-path pure chat (no LLM call needed)
+    var simpleChatKeywords = ['你好','hi','hello','在吗','介绍一下','解释一下','帮我写','帮我改','翻译','润色','总结','怎么','为什么','如何','是什么','啥意思','代码','报错','排查','优化','修复','什么是','告诉我','请问','谢谢','好的','明白'];
+    var isSimpleChat = !imageConfig || (text.length <= 80 && simpleChatKeywords.some(function(k) { return text.indexOf(k) >= 0 || text.toLowerCase().indexOf(k) >= 0; }));
+    log('info', 'chat-smart', 'layer1 simple chat check', { isSimpleChat: isSimpleChat, textLen: text.length, hasImageConfig: !!imageConfig });
+
+    if (!isSimpleChat) {
+      // Layer 2: LLM classifier
       try {
-        log('info', 'chat-smart', 'routing to image generation', redactSecrets({
-          url: imageUrl,
-          model: imageConfig.model_name,
-          width,
-          height,
-        }));
-        const response = await nativeFetch(imageUrl, {
+        var classifierMessages = [
+          { role: 'system', content: '你是任务路由器。根据用户最新输入判断任务类型，只能返回JSON，不要输出多余文字。\n任务类型: chat = 普通问答、写作、分析、翻译、代码讨论、生成提示词等; image = 明确要求生成/画/绘制一张具体的图片; file = 明确要求读取、总结、分析已上传文件内容。\n注意：如果用户要求"写一个提示词""生成提示词""描述一个画面"等，这是chat任务而非image任务。只有用户明确想要得到一张图片时才是image。\n如果是图片任务，根据用户描述提取：image_size(从用户指定的分辨率/比例推断，可选1024x1024/1536x1024/1024x1536/2048x2048/2048x1152/2160x3840/3840x2160，默认1024x1024)和image_count(用户指定的张数，1-4，默认1)。用户可能说横屏/竖屏/正方形/4K/2K等，请合理映射。\n输出格式: {"task_type":"chat|image|file","reason":"简短原因","rewritten_prompt":"如果是image给出优化提示词否则为空","image_size":"","image_count":1}' }
+        ];
+        var contextMsgs = (body.messages || []).slice(-6);
+        classifierMessages = classifierMessages.concat(contextMsgs);
+        classifierMessages.push({ role: 'user', content: text });
+
+        var classifyUrl = chatConfig.api_base.replace(/\/$/, '') + '/chat/completions';
+        log('info', 'chat-smart', 'calling LLM classifier', { url: classifyUrl, model: chatConfig.model_name });
+        var classifyRes = await nativeFetch(classifyUrl, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${imageConfig.api_key}` },
-          body: JSON.stringify({ model: imageConfig.model_name, prompt: text, size: `${width}x${height}`, n: 1 }),
+          headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + chatConfig.api_key },
+          body: JSON.stringify({ model: chatConfig.model_name, messages: classifierMessages, temperature: 0.1, stream: false, max_tokens: 200 }),
         });
-        const raw = await fetchJsonOrText(response, 'chat-smart-image');
-        if (!response.ok) throw new Error(raw?.detail || raw?.error?.message || '图片生成失败');
-        const images = normalizeImageItems(raw);
-        log('info', 'chat-smart', 'image generation normalized', { imageCount: images.length });
-        return json({ code: 0, mode: 'image', data: { prompt: text, image_size: `${width}x${height}`, image_count: images.length, images } });
-      } catch (e) {
-        log('error', 'chat-smart', 'image branch failed', e);
-        return fail(String(e.message || e), 500);
+        var classifyData = await fetchJsonOrText(classifyRes, 'chat-smart-classify');
+        var classifyContent = String((classifyData.choices && classifyData.choices[0] && classifyData.choices[0].message && classifyData.choices[0].message.content) || '{}');
+        var jsonMatch = classifyContent.match(/\{[\s\S]*\}/);
+        var route = jsonMatch ? JSON.parse(jsonMatch[0]) : {};
+        log('info', 'chat-smart', 'classifier result', route);
+
+        if (route.task_type === 'image' && imageConfig) {
+          var prompt = route.rewritten_prompt || text;
+          var sizeStr = route.image_size || '1024x1024';
+          var sizeMatch = sizeStr.match(/(\d{3,4})\s*[x×]\s*(\d{3,4})/i);
+          var width = sizeMatch ? Number(sizeMatch[1]) : 1024;
+          var height = sizeMatch ? Number(sizeMatch[2]) : 1024;
+          var imageCount = Math.max(1, Math.min(4, Number(route.image_count || 1)));
+          var imageUrl = imageConfig.api_base.replace(/\/$/, '') + '/images/generations';
+          log('info', 'chat-smart', 'routing to image generation via classifier', { prompt: prompt.slice(0, 60), width: width, height: height });
+          var imgResponse = await nativeFetch(imageUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + imageConfig.api_key },
+            body: JSON.stringify({ model: imageConfig.model_name, prompt: prompt, size: width + 'x' + height, n: imageCount }),
+          });
+          var imgRaw = await fetchJsonOrText(imgResponse, 'chat-smart-image');
+          if (!imgResponse.ok) throw new Error(imgRaw.detail || (imgRaw.error && imgRaw.error.message) || '图片生成失败');
+          var images = normalizeImageItems(imgRaw);
+          return json({ code: 0, mode: 'image', data: { prompt: prompt, image_size: width + 'x' + height, image_count: images.length, images: images } });
+        }
+      } catch (classifyError) {
+        log('warn', 'chat-smart', 'classifier failed, falling back to chat', classifyError);
       }
     }
 
@@ -453,10 +473,11 @@ function normalizeImageItems(raw) {
     if (method === 'POST') {
       const body = await getJsonBody(request);
       const current = readCanvasState();
+      const mergedCategories = Array.from(new Set([...(current.categories || []), ...deriveCategories(body.assetLibrary ?? current.assetLibrary)]));
       const next = writeCanvasState({
         sessions: body.sessions ?? current.sessions,
         assetLibrary: body.assetLibrary ?? current.assetLibrary,
-        categories: deriveCategories(body.assetLibrary ?? current.assetLibrary),
+        categories: mergedCategories,
       });
       return ok(next, '保存成功');
     }
@@ -487,7 +508,7 @@ function normalizeImageItems(raw) {
       const body = await getJsonBody(request);
       const item = normalizeAssetPayload(body);
       state.assetLibrary.unshift(item);
-      state.categories = deriveCategories(state.assetLibrary);
+      state.categories = Array.from(new Set([...(state.categories || []), ...deriveCategories(state.assetLibrary)]));
       writeCanvasState(state);
       return ok(item, '素材已保存');
     }
@@ -495,7 +516,7 @@ function normalizeImageItems(raw) {
       const body = await getJsonBody(request);
       log('info', 'canvas-assets', 'deleting asset', { asset_id: body.asset_id });
       state.assetLibrary = state.assetLibrary.filter((item) => String(item.id) !== String(body.asset_id));
-      state.categories = deriveCategories(state.assetLibrary);
+      state.categories = Array.from(new Set([...(state.categories || []), ...deriveCategories(state.assetLibrary)]));
       writeCanvasState(state);
       return ok({ assetLibrary: state.assetLibrary, categories: state.categories }, '素材已删除');
     }
@@ -523,7 +544,6 @@ function normalizeImageItems(raw) {
       if (!oldName || !newName) return fail('分类名称不能为空');
       state.categories = state.categories.map((name) => name === oldName ? newName : name);
       state.assetLibrary = state.assetLibrary.map((item) => ({ ...item, category: item.category === oldName ? newName : item.category }));
-      state.categories = deriveCategories(state.assetLibrary);
       writeCanvasState(state);
       return ok({ name: newName, categories: state.categories, assetLibrary: state.assetLibrary }, '分类已更新');
     }
@@ -531,7 +551,7 @@ function normalizeImageItems(raw) {
       const name = String(body.name || '').trim();
       if (!name || name === '未分类') return fail('这个分类不能删除');
       state.assetLibrary = state.assetLibrary.filter((item) => item.category !== name);
-      state.categories = deriveCategories(state.assetLibrary);
+      state.categories = state.categories.filter((c) => c !== name);
       writeCanvasState(state);
       return ok({ categories: state.categories, assetLibrary: state.assetLibrary }, '分类已删除');
     }
@@ -544,7 +564,7 @@ function normalizeImageItems(raw) {
     const targetCategory = String(body.target_category || '未分类').trim() || '未分类';
     log('info', 'canvas-assets', 'moving asset', { asset_id: body.asset_id, targetCategory });
     state.assetLibrary = state.assetLibrary.map((item) => String(item.id) === String(body.asset_id) ? { ...item, category: targetCategory } : item);
-    state.categories = deriveCategories(state.assetLibrary);
+    state.categories = Array.from(new Set([...(state.categories || []), ...deriveCategories(state.assetLibrary)]));
     writeCanvasState(state);
     return ok({ categories: state.categories, assetLibrary: state.assetLibrary }, '素材已移动');
   }
