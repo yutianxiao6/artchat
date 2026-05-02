@@ -65,6 +65,7 @@
       const result = await res.json();
       if (result.code === 0) STATE.workflows = result.data || [];
     } catch { STATE.workflows = []; }
+    STATE.workflows.forEach(ensureWorkflowShape);
     if (!STATE.workflows.length) createWorkflow("我的第一个工作流");
     else STATE.currentWorkflowId = STATE.workflows[0]?.id || null;
   }
@@ -79,8 +80,19 @@
   }
 
   // ===== Layout Engine (mindmap) =====
+  function ensureWorkflowShape(wf) {
+    if (!wf.input) wf.input = {};
+    if (!wf.input.plot) wf.input.plot = "";
+    if (!wf.input.style) wf.input.style = "";
+    if (!wf.input.type) wf.input.type = "";
+    if (!wf.script) wf.script = { status: "idle", versions: [], activeVersionId: null };
+    if (!wf.mainCharacters) wf.mainCharacters = { status: "idle", versions: [], activeVersionId: null };
+    if (!wf.segments) wf.segments = [];
+  }
+
   function computeLayout(wf) {
     if (!wf) return { nodes: [], edges: [] };
+    ensureWorkflowShape(wf);
     const nodes = [];
     const edges = [];
     let x = LAYOUT.startX, y = LAYOUT.startY;
