@@ -1620,6 +1620,7 @@ function initChatModule() {
   initMarkdownWorker();
   
   buildChatUI();
+  if (window.bindSelects) window.bindSelects();
   initSessions();
   bindEvents();
   renderSessionList();

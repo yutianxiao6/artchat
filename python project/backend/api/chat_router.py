@@ -85,8 +85,10 @@ def _resolve_image_url(url: str) -> str:
         if os.path.isfile(local_path):
             try:
                 with open(local_path, "rb") as f:
-                    b64 = base64.b64encode(f.read()).decode("utf-8")
-                return f"data:image/png;base64,{b64}"
+                    raw = f.read()
+                    mime = "image/jpeg" if raw[:3] == b'\xff\xd8\xff' else "image/png"
+                    b64 = base64.b64encode(raw).decode("utf-8")
+                return f"data:{mime};base64,{b64}"
             except Exception:
                 pass
     if url.startswith("http://") or url.startswith("https://"):
@@ -94,11 +96,150 @@ def _resolve_image_url(url: str) -> str:
     return ""
 
 
+def _is_claude_model(config: dict) -> bool:
+    model = (config.get("model_name") or "").lower()
+    api_base = (config.get("api_base") or "").lower()
+    return "claude" in model or "anthropic" in api_base
+
+
+def _openai_img_to_claude(data_url: str) -> dict:
+    if data_url.startswith("data:"):
+        header, raw = data_url.split(",", 1)
+        media_type = header.split(";")[0].replace("data:", "")
+    else:
+        raw = data_url
+        media_type = "image/jpeg"
+    raw_bytes = base64.b64decode(raw)
+    if len(raw_bytes) > 4_000_000:
+        try:
+            from PIL import Image
+            import io
+            img = Image.open(io.BytesIO(raw_bytes))
+            if img.mode == "RGBA":
+                img = img.convert("RGB")
+            max_dim = 1024
+            if max(img.size) > max_dim:
+                img.thumbnail((max_dim, max_dim), Image.LANCZOS)
+            buf = io.BytesIO()
+            img.save(buf, format="JPEG", quality=80)
+            raw = base64.b64encode(buf.getvalue()).decode()
+            media_type = "image/jpeg"
+        except Exception:
+            pass
+    return {"type": "image", "source": {"type": "base64", "media_type": media_type, "data": raw}}
+
+
+def _convert_messages_for_claude(messages: list) -> tuple:
+    system_text = ""
+    converted = []
+    for msg in messages:
+        role = msg.get("role", "user")
+        content = msg.get("content", "")
+        if role == "system":
+            if isinstance(content, str):
+                system_text += ("\n" if system_text else "") + content
+            continue
+        if isinstance(content, list):
+            parts = []
+            for part in content:
+                if part.get("type") == "text":
+                    parts.append({"type": "text", "text": part.get("text", "")})
+                elif part.get("type") == "image_url":
+                    url = part.get("image_url", {}).get("url", "")
+                    if url:
+                        parts.append(_openai_img_to_claude(url))
+            converted.append({"role": role, "content": parts})
+        else:
+            converted.append({"role": role, "content": str(content)})
+    return system_text, converted
+
+
 async def create_chat_response(config: dict, request_data: dict, stream: bool, timeout: float = 120.0):
     headers = {
         "Content-Type": "application/json",
         "Authorization": f"Bearer {config['api_key']}"
     }
+
+    has_images = False
+    for msg in request_data.get("messages", []):
+        c = msg.get("content")
+        if isinstance(c, list):
+            for part in c:
+                if part.get("type") in ("image_url", "image"):
+                    has_images = True
+                    break
+
+    use_claude_native = _is_claude_model(config) and has_images
+
+    if use_claude_native:
+        chat_url = config["api_base"].rstrip("/") + "/messages"
+        headers["x-api-key"] = config["api_key"]
+        headers["anthropic-version"] = "2023-06-01"
+        system_text, claude_msgs = _convert_messages_for_claude(request_data.get("messages", []))
+        claude_data = {
+            "model": request_data.get("model", config["model_name"]),
+            "max_tokens": request_data.get("max_tokens") or 20000,
+            "messages": claude_msgs,
+        }
+        if system_text:
+            claude_data["system"] = system_text
+        if stream:
+            claude_data["stream"] = True
+
+        if stream:
+            async def claude_stream_generator():
+                try:
+                    async with await async_http_request(
+                        "POST", chat_url, headers, claude_data, timeout=timeout, stream=True
+                    ) as response:
+                        if response.status_code != 200:
+                            error_text = await response.atext()
+                            yield f"data: {json.dumps({'error': f'API请求失败: {error_text}'}, ensure_ascii=False)}\n\n"
+                            yield "data: [DONE]\n\n"
+                            return
+                        async for line in response.aiter_lines():
+                            line = line.strip()
+                            if not line or line.startswith(":"):
+                                continue
+                            if line.startswith("data: "):
+                                raw = line[6:]
+                                if raw == "[DONE]":
+                                    yield "data: [DONE]\n\n"
+                                    break
+                                try:
+                                    evt = json.loads(raw)
+                                    evt_type = evt.get("type", "")
+                                    if evt_type == "content_block_delta":
+                                        delta_text = evt.get("delta", {}).get("text", "")
+                                        if delta_text:
+                                            openai_chunk = {"choices": [{"delta": {"content": delta_text}, "index": 0}]}
+                                            yield f"data: {json.dumps(openai_chunk, ensure_ascii=False)}\n\n"
+                                    elif evt_type == "message_stop":
+                                        yield "data: [DONE]\n\n"
+                                        break
+                                except json.JSONDecodeError:
+                                    yield f"{line}\n\n"
+                except Exception as e:
+                    print(f"[smart_chat] Claude流式请求异常: {repr(e)}")
+                    yield f"data: {json.dumps({'error': f'请求异常: {str(e)}'}, ensure_ascii=False)}\n\n"
+                    yield "data: [DONE]\n\n"
+
+            return StreamingResponse(
+                claude_stream_generator(),
+                media_type="text/event-stream",
+                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
+            )
+        else:
+            response = await async_http_request("POST", chat_url, headers, claude_data, timeout=timeout)
+            if response.status_code != 200:
+                raise HTTPException(status_code=response.status_code, detail=response.text[:500])
+            result = response.json()
+            content = ""
+            for block in result.get("content", []):
+                if block.get("type") == "text":
+                    content += block.get("text", "")
+            return {"choices": [{"message": {"role": "assistant", "content": content}, "finish_reason": result.get("stop_reason", "end_turn")}]}
+
     chat_url = config["api_base"].rstrip("/") + "/chat/completions"
 
     async def stream_generator():
@@ -202,8 +343,16 @@ async def classify_task(message: str, has_files: bool, file_names: list, message
 
     try:
         response = await create_chat_response(classifier_config, request_data, stream=False)
-        content = response["choices"][0]["message"]["content"]
-        parsed = json.loads(content)
+        content = response.get("choices", [{}])[0].get("message", {}).get("content", "")
+        if not content or not content.strip():
+            raise ValueError("分类器返回空内容")
+        try:
+            parsed = json.loads(content)
+        except json.JSONDecodeError:
+            cleaned = content.strip()
+            if cleaned.startswith("```"):
+                cleaned = cleaned.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+            parsed = json.loads(cleaned)
     except Exception as e:
         print(f"[分类器] 调用失败，fallback to chat: {repr(e)}")
         return {

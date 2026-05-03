@@ -2,6 +2,7 @@ import os
 import json
 import uuid
 import base64
+import hashlib
 from typing import Dict, List, Any
 from backend.core.canvas_storage import get_data_root
 
@@ -95,8 +96,16 @@ def save_workflow_image(workflow_id: str, image_data: str, prefix: str = "img") 
         raw = parts[1] if len(parts) > 1 else ""
     else:
         raw = image_data
+    img_bytes = base64.b64decode(raw)
+    content_hash = hashlib.md5(img_bytes).hexdigest()[:12]
+    for existing in os.listdir(img_dir):
+        existing_path = os.path.join(img_dir, existing)
+        if os.path.isfile(existing_path) and os.path.getsize(existing_path) == len(img_bytes):
+            with open(existing_path, "rb") as f:
+                if hashlib.md5(f.read()).hexdigest()[:12] == content_hash:
+                    return f"/workflow-images/{workflow_id}/images/{existing}"
     filename = f"{prefix}_{uuid.uuid4().hex[:8]}.png"
     filepath = os.path.join(img_dir, filename)
     with open(filepath, "wb") as f:
-        f.write(base64.b64decode(raw))
-    return f"/workflow-images/{workflow_id}/{filename}"
+        f.write(img_bytes)
+    return f"/workflow-images/{workflow_id}/images/{filename}"

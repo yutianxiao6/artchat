@@ -13,11 +13,17 @@ router = APIRouter(prefix="/api/image", tags=["图片生成"])
 def _strip_image_base64(value: str) -> str:
     if not value:
         return ""
-    raw = value.split(",", 1)[1] if value.startswith("data:image") else value
+    if value.startswith("data:image"):
+        mime_and_rest = value.split(";base64,", 1)
+        mime = mime_and_rest[0].replace("data:", "") if len(mime_and_rest) == 2 else "image/png"
+        raw = mime_and_rest[1] if len(mime_and_rest) == 2 else value.split(",", 1)[-1]
+    else:
+        mime = "image/png"
+        raw = value
     raw = re.sub(r'\s+', '', raw)
     if not raw:
         return ""
-    return f"data:image/png;base64,{raw}"
+    return f"data:{mime};base64,{raw}"
 
 
 @router.post("/upload")
@@ -61,10 +67,8 @@ async def generate_image(req: ImageGenerateRequest):
         if stripped:
             normalized_images = [stripped]
 
-    if len(normalized_images) > 1:
+    if len(normalized_images) >= 1:
         request_data["image"] = normalized_images
-    elif len(normalized_images) == 1:
-        request_data["image"] = normalized_images[0]
 
     safe_request_log = {
         "model": request_data.get("model"),

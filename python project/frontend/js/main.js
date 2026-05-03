@@ -276,6 +276,7 @@
   window.loadAllConfigs = loadAllConfigs;
   window.updateConfigSelectOptions = updateConfigSelectOptions;
   window.updateButtonStatus = updateButtonStatus;
+  window.bindSelects = bindSelects;
   window.openConfigModal = openConfigModal;
   window.closeConfigModal = closeConfigModal;
 })();
