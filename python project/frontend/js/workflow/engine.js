@@ -22,7 +22,8 @@
 
   /* ── WorkflowEngine ── */
   function WorkflowEngine(pipelineDef) {
-    this.pipeline = pipelineDef.pipeline || [];
+    this.defaultPipeline = pipelineDef.pipeline || [];
+    this.pipeline = this.defaultPipeline;
     this.defId = pipelineDef.id || "default";
     this.defTitle = pipelineDef.title || "工作流";
     this.workflows = [];
@@ -38,21 +39,48 @@
     this.panX = 0; this.panY = 0; this.zoom = 1;
     this.panning = false; this.panStartX = 0; this.panStartY = 0;
     this._stopFlag = false;
+    this.execHistoryOpen = false;
   }
 
   var P = WorkflowEngine.prototype;
 
+  P.getPipeline = function () {
+    var id = this.currentId;
+    var wf = this.workflows.find(function (w) { return w.id === id; }) || null;
+    if (wf && wf.templateId) {
+      var tpl = (window.WF_Templates || []).find(function (t) { return t.id === wf.templateId; });
+      if (tpl && tpl.pipeline && tpl.pipeline.pipeline) return tpl.pipeline.pipeline;
+    }
+    return this.defaultPipeline;
+  };
+
+  P.syncPipeline = function () {
+    this.pipeline = this.getPipeline();
+  };
+
   /* ── current ── */
   P.current = function () {
     var id = this.currentId;
-    return this.workflows.find(function (w) { return w.id === id; }) || null;
+    var wf = this.workflows.find(function (w) { return w.id === id; }) || null;
+    this.syncPipeline();
+    return wf;
   };
 
   /* ── CRUD ── */
-  P.create = function (title) {
+  P.create = function (title, templateId) {
+    var template = null;
+    var templates = window.WF_Templates || [];
+    if (templateId) {
+      template = templates.find(function (t) { return t.id === templateId; });
+    }
+    if (!template && templates.length) template = templates[0];
+
+    var tplPipeline = (template && template.pipeline && template.pipeline.pipeline) || this.defaultPipeline;
+
     var wf = {
       id: makeId(),
-      title: title || "新工作流",
+      title: title || (template ? template.name : "新工作流"),
+      templateId: template ? template.id : null,
       createdAt: new Date().toISOString(),
       input: { plot: "", style: "", type: "", segmentCount: null },
       mode: "single",
@@ -60,8 +88,8 @@
       history: [],
     };
     var self = this;
-    this.pipeline.forEach(function (step) {
-      if (step.nodeType === "input") return;
+    tplPipeline.forEach(function (step) {
+      if (step.nodeType === "input" || step.nodeType === "fpInput") return;
       if (step.category === "global") {
         wf[step.nodeType + "Count"] = 1;
         wf[step.nodeType + "s"] = [NR.createNodeData()];
@@ -70,6 +98,11 @@
     wf.segments = [];
     this.workflows.unshift(wf);
     this.currentId = wf.id;
+    this.syncPipeline();
+    var execSteps = this.pipeline.filter(function (s) { return s.nodeType !== "input" && s.nodeType !== "output"; });
+    if (execSteps.length) {
+      this.execRange = { from: execSteps[0].nodeType, to: execSteps[execSteps.length - 1].nodeType, segments: "all" };
+    }
     this.save();
     return wf;
   };
@@ -91,9 +124,17 @@
     if (!wf.mode) wf.mode = "single";
     if (!wf.multiCount) wf.multiCount = 1;
     if (!wf.segments) wf.segments = [];
-    var self = this;
-    this.pipeline.forEach(function (step) {
-      if (step.nodeType === "input" || step.nodeType === "output") return;
+    if (!wf.storyboardGrid) wf.storyboardGrid = 4;
+    if (!wf.storyboardResolution) wf.storyboardResolution = "2160x3840";
+
+    var wfPipeline = this.defaultPipeline;
+    if (wf.templateId) {
+      var tpl = (window.WF_Templates || []).find(function (t) { return t.id === wf.templateId; });
+      if (tpl && tpl.pipeline && tpl.pipeline.pipeline) wfPipeline = tpl.pipeline.pipeline;
+    }
+
+    wfPipeline.forEach(function (step) {
+      if (step.nodeType === "input" || step.nodeType === "fpInput" || step.nodeType === "output") return;
       if (step.category === "global") {
         var countKey = step.nodeType + "Count";
         var arrayKey = step.nodeType + "s";
@@ -102,7 +143,7 @@
       }
     });
     wf.segments.forEach(function (seg) {
-      self.pipeline.forEach(function (step) {
+      wfPipeline.forEach(function (step) {
         if (step.category !== "segment") return;
         var countKey = step.nodeType + "Count";
         var arrayKey = step.nodeType + "s";
@@ -131,7 +172,7 @@
       }
     }
     this.workflows.forEach(function (w) { self.ensureShape(w); });
-    if (!this.workflows.length) this.create("我的第一个工作流");
+    if (!this.workflows.length) this.create();
     else this.currentId = this.workflows[0].id;
   };
 
@@ -160,7 +201,7 @@
   };
 
   P.getGlobalSteps = function () {
-    return this.pipeline.filter(function (s) { return s.category === "global" || s.nodeType === "input" || s.nodeType === "output"; });
+    return this.pipeline.filter(function (s) { return s.category === "global" || s.nodeType === "input" || s.nodeType === "fpInput" || s.nodeType === "output"; });
   };
 
   P.getSegmentSteps = function () {
@@ -204,9 +245,9 @@
         colPositions.push({ x: colX, type: step.nodeType });
         prevColKeys = colKeys;
         colX += LAYOUT.nodeW + LAYOUT.gapX;
-      } else if (step.nodeType === "input") {
-        var inputKey = "input";
-        nodes.push({ key: inputKey, type: "input", x: colX, y: baseY, status: wf.input.plot ? "done" : "idle" });
+      } else if (step.nodeType === "input" || step.nodeType === "fpInput") {
+        var inputKey = step.nodeType;
+        nodes.push({ key: inputKey, type: step.nodeType, x: colX, y: baseY, status: wf.input.plot ? "done" : "idle" });
         colPositions.push({ x: colX, type: "input" });
         prevColKeys = [inputKey];
         colX += LAYOUT.nodeW + LAYOUT.gapX;
@@ -335,7 +376,7 @@
   P.getExecSteps = function () {
     var from = this.execRange.from;
     var to = this.execRange.to;
-    var steps = this.pipeline.filter(function (s) { return s.nodeType !== "input" && s.nodeType !== "output"; });
+    var steps = this.pipeline.filter(function (s) { return s.nodeType !== "input" && s.nodeType !== "fpInput" && s.nodeType !== "output"; });
     var fromIdx = from ? steps.findIndex(function (s) { return s.nodeType === from; }) : 0;
     var toIdx = to ? steps.findIndex(function (s) { return s.nodeType === to; }) : steps.length - 1;
     if (fromIdx < 0) fromIdx = 0;
@@ -351,61 +392,258 @@
     return [sel];
   };
 
+  /* ── Dependency Resolution System ── */
+
+  P.isNodeSkipped = function (nodeType, segIdx, wf) {
+    if (!wf) return false;
+    if (wf[nodeType + "Skip"]) return true;
+    if (segIdx !== null && segIdx !== undefined && wf.segments && wf.segments[segIdx]) {
+      return !!wf.segments[segIdx][nodeType + "Skip"];
+    }
+    return false;
+  };
+
+  function _allImagesReady(v, nodeType) {
+    if (!v) return false;
+    if (nodeType === "mainCharacters" || nodeType === "minorCharacters") {
+      var chars = v.characters || [];
+      return chars.length > 0 && chars.every(function (c) { return !!c.imageUrl; });
+    }
+    if (nodeType === "scene") {
+      var scenes = v.scenes || [];
+      return scenes.length > 0 && scenes.every(function (s) { return !!s.imageUrl; });
+    }
+    if (nodeType === "storyboard") return !!(v.images && v.images.length);
+    if (nodeType === "firstFrame" || nodeType === "lastFrame") return !!v.imageUrl;
+    if (nodeType === "storyTemplate") return !!v.imageUrl;
+    return true;
+  }
+
+  P.isNodeComplete = function (nodeType, segIdx, wf) {
+    if (!wf) return false;
+    if (this.isNodeSkipped(nodeType, segIdx, wf)) return true;
+    if (nodeType === "input" || nodeType === "fpInput") return !!wf.input.plot;
+    if (nodeType === "output") return true;
+
+    var nd = null;
+    var typeDef = NR.get(nodeType);
+    if (segIdx !== null && segIdx !== undefined && wf.segments && wf.segments[segIdx]) {
+      var arr = wf.segments[segIdx][nodeType + "s"] || [];
+      nd = arr[0];
+    } else {
+      var arr = wf[nodeType + "s"] || [];
+      nd = arr[0];
+    }
+    var v = NR.getActiveVersion(nd);
+    if (!v) return false;
+    if (typeDef && typeDef.needsImage) return _allImagesReady(v, nodeType);
+    return true;
+  };
+
+  P.getDependencies = function (nodeType, segIdx, wf) {
+    if (!wf) return [];
+    var deps = [];
+    var self = this;
+
+    function addDep(nt, si) {
+      if (!self.isNodeSkipped(nt, si, wf)) deps.push({ nodeType: nt, segIdx: si });
+    }
+
+    switch (nodeType) {
+      case "input": case "fpInput": break;
+      case "script": addDep("input", null); break;
+      case "planCharactersScenes": addDep("script", null); break;
+      case "mainCharacters": addDep("planCharactersScenes", null); break;
+      case "minorCharacters": addDep("planCharactersScenes", null); break;
+      case "scene":
+        addDep("planCharactersScenes", null);
+        if (segIdx > 0) addDep("scene", segIdx - 1);
+        break;
+      case "planFrames":
+        addDep("planCharactersScenes", null);
+        break;
+      case "firstFrame":
+      case "storyboard":
+      case "lastFrame":
+        addDep("planFrames", segIdx);
+        addDep("mainCharacters", null);
+        addDep("scene", segIdx);
+        break;
+      case "videoPrompt":
+      case "storyTemplate":
+        addDep("script", null);
+        addDep("planCharactersScenes", null);
+        addDep("mainCharacters", null);
+        if (segIdx !== null && segIdx !== undefined) {
+          var segNodeTypes = ["minorCharacters", "scene", "planFrames", "firstFrame", "storyboard", "lastFrame"];
+          for (var i = 0; i < segNodeTypes.length; i++) {
+            addDep(segNodeTypes[i], segIdx);
+          }
+        }
+        break;
+    }
+    return deps;
+  };
+
+  P.isNodeRunning = function (nodeType, segIdx) {
+    var keys = Object.keys(this.runningNodes);
+    for (var i = 0; i < keys.length; i++) {
+      var k = keys[i];
+      if (segIdx !== null && segIdx !== undefined) {
+        if (k.indexOf("seg_" + segIdx + "_" + nodeType + "_") === 0) return true;
+      } else {
+        if (k.indexOf(nodeType + "_") === 0 && k.indexOf("seg_") !== 0) return true;
+      }
+    }
+    return false;
+  };
+
+  P.canExecute = function (nodeType, segIdx, wf) {
+    if (!wf) return false;
+    if (this.isNodeSkipped(nodeType, segIdx, wf)) return false;
+    if (this.isNodeRunning(nodeType, segIdx)) return false;
+    var deps = this.getDependencies(nodeType, segIdx, wf);
+    for (var i = 0; i < deps.length; i++) {
+      if (!this.isNodeComplete(deps[i].nodeType, deps[i].segIdx, wf)) return false;
+    }
+    return true;
+  };
+
+  P.isAnyRunning = function () {
+    return Object.keys(this.runningNodes).length > 0;
+  };
+
+  /* ── Execution Engine ── */
+
   P.run = async function (onUpdate) {
     var wf = this.current();
-    if (!wf || this.running) return;
+    if (!wf) return;
+    if (this.running && this.runningWfId === wf.id) return;
     if (!wf.input.plot) { alert("请先填写输入信息"); return; }
     this.running = true;
     this.runningWfId = wf.id;
     this._stopFlag = false;
     this.runningNodes = {};
     this._resetStuckNodes(wf);
-    if (onUpdate) onUpdate();
 
-    var steps = this.pipeline.filter(function (s) { return s.nodeType !== "input"; });
-    var segSteps = this.getSegmentSteps();
     var self = this;
-
-    try {
-      // Global steps first
-      for (var i = 0; i < steps.length; i++) {
-        if (self._stopFlag) break;
-        var step = steps[i];
-        if (step.category !== "global") continue;
-        if (wf[step.nodeType + "Skip"]) continue;
-        await self._runGlobalStep(wf, step, onUpdate);
-      }
-
-      // Segment steps: per-segment order (finish segment 1 before segment 2)
-      var segIdxs = self.getExecSegments(wf);
-      for (var si = 0; si < segIdxs.length; si++) {
-        if (self._stopFlag) break;
-        for (var j = 0; j < segSteps.length; j++) {
-          if (self._stopFlag) break;
-          var segStep = segSteps[j];
-          if (wf[segStep.nodeType + "Skip"]) continue;
-          await self._runSegmentStep(wf, segStep, segIdxs[si], onUpdate);
-        }
-      }
-    } catch (err) {
-      console.error("[workflow] run error", err);
-    } finally {
-      self.running = false;
-      self.runningWfId = null;
-      self.runningNodes = {};
-      self.saveWorkflow(wf);
-      if (onUpdate) onUpdate();
+    var _rerenderTimer = null;
+    function debouncedUpdate() {
+      if (_rerenderTimer) return;
+      _rerenderTimer = setTimeout(function () { _rerenderTimer = null; if (onUpdate) onUpdate(); }, 100);
     }
+    debouncedUpdate();
+
+    var tasks = self._buildTaskList(wf);
+    var started = {};
+    var completed = {};
+    var retryCount = {};
+
+    function taskKey(t) {
+      return t.segIdx !== null ? "seg_" + t.segIdx + "_" + t.nodeType : t.nodeType;
+    }
+
+    function scheduleReady() {
+      if (self._stopFlag) return;
+      tasks.forEach(function (t) {
+        var tk = taskKey(t);
+        if (started[tk] || completed[tk]) return;
+        if (!self.canExecute(t.nodeType, t.segIdx, wf)) return;
+        started[tk] = true;
+        launchTask(t);
+      });
+    }
+
+    function launchTask(t) {
+      var step = { nodeType: t.nodeType, category: t.category };
+      var promise;
+      if (t.category === "global") {
+        promise = self._runGlobalStep(wf, step, debouncedUpdate, false);
+      } else {
+        promise = self._runSegmentStep(wf, step, t.segIdx, debouncedUpdate, false);
+      }
+      promise.then(function () {
+        var tk = taskKey(t);
+        var nd = self._getTaskNode(wf, t);
+        if (nd && nd.status === "error") {
+          var rc = retryCount[tk] || 0;
+          if (rc < 1) {
+            retryCount[tk] = rc + 1;
+            nd.status = "idle";
+            nd.errorMsg = null;
+            delete started[tk];
+            debouncedUpdate();
+            scheduleReady();
+            return;
+          }
+          completed[tk] = true;
+          var isCritical = t.nodeType === "script" || t.nodeType === "planCharactersScenes";
+          if (isCritical) { self._stopFlag = true; }
+        } else {
+          completed[tk] = true;
+        }
+        self.saveWorkflow(wf);
+        debouncedUpdate();
+        scheduleReady();
+      });
+    }
+
+    scheduleReady();
+
+    await new Promise(function (resolve) {
+      var interval = setInterval(function () {
+        var allDone = tasks.every(function (t) { return completed[taskKey(t)]; });
+        var noneRunning = !self.isAnyRunning();
+        if (allDone || (self._stopFlag && noneRunning)) {
+          clearInterval(interval);
+          resolve();
+        }
+      }, 200);
+    });
+
+    if (_rerenderTimer) { clearTimeout(_rerenderTimer); _rerenderTimer = null; }
+    self.running = false;
+    self.runningWfId = null;
+    self.saveWorkflow(wf);
+    if (onUpdate) onUpdate();
   };
 
-  function _hasImage(v) {
-    if (!v) return false;
-    if (v.imageUrl) return true;
-    if (v.images && v.images.length) return true;
-    if (v.characters && v.characters.some(function (c) { return c.imageUrl; })) return true;
-    if (v.scenes && v.scenes.some(function (s) { return s.imageUrl; })) return true;
-    return false;
-  }
+  P._buildTaskList = function (wf) {
+    var tasks = [];
+    var self = this;
+    var globalSteps = this.pipeline.filter(function (s) {
+      return s.category === "global" && s.nodeType !== "input" && s.nodeType !== "fpInput" && s.nodeType !== "output";
+    });
+    var segSteps = this.getSegmentSteps();
+    var segIdxs = this.getExecSegments(wf);
+
+    globalSteps.forEach(function (step) {
+      if (self.isNodeSkipped(step.nodeType, null, wf)) return;
+      if (self.isNodeComplete(step.nodeType, null, wf)) return;
+      tasks.push({ nodeType: step.nodeType, segIdx: null, category: "global" });
+    });
+
+    segIdxs.forEach(function (si) {
+      segSteps.forEach(function (step) {
+        if (self.isNodeSkipped(step.nodeType, si, wf)) return;
+        if (self.isNodeComplete(step.nodeType, si, wf)) return;
+        tasks.push({ nodeType: step.nodeType, segIdx: si, category: "segment" });
+      });
+    });
+
+    return tasks;
+  };
+
+  P._getTaskNode = function (wf, task) {
+    if (task.segIdx !== null && task.segIdx !== undefined) {
+      var seg = wf.segments[task.segIdx];
+      if (!seg) return null;
+      var arr = seg[task.nodeType + "s"] || [];
+      return arr[0] || null;
+    }
+    var arr = wf[task.nodeType + "s"] || [];
+    return arr[0] || null;
+  };
 
   P._runGlobalStep = async function (wf, step, onUpdate, forceAll) {
     var typeDef = NR.get(step.nodeType);
@@ -416,18 +654,21 @@
     var self = this;
     var nd = arr[0];
     if (!forceAll && NR.getActiveVersion(nd)) {
-      if (!typeDef.needsImage || _hasImage(NR.getActiveVersion(nd))) return;
+      if (!typeDef.needsImage || _allImagesReady(NR.getActiveVersion(nd), step.nodeType)) return;
     }
     nd.status = "running";
+    nd.errorMsg = null;
     self.runningNodes[step.nodeType + "_0"] = true;
     if (onUpdate) onUpdate();
 
     try {
       var result = await typeDef.generate({ workflow: wf, nodeData: nd, branchIdx: 0 });
       if (result) NR.addVersion(nd, result);
+      nd.errorMsg = null;
       self._addHistory(wf, step.nodeType, 0, null, "done");
     } catch (err) {
       nd.status = "error";
+      nd.errorMsg = err.message || "生成失败";
       self._addHistory(wf, step.nodeType, 0, null, "error", err.message);
     } finally {
       delete self.runningNodes[step.nodeType + "_0"];
@@ -452,10 +693,11 @@
         var nd = arr[idx];
         if (!nd) { nd = NR.createNodeData(); arr[idx] = nd; }
         if (!forceAll && NR.getActiveVersion(nd)) {
-          if (!typeDef.needsImage || _hasImage(NR.getActiveVersion(nd))) return;
+          if (!typeDef.needsImage || _allImagesReady(NR.getActiveVersion(nd), step.nodeType)) return;
         }
         if (nd.status === "running") return;
         nd.status = "running";
+        nd.errorMsg = null;
         var nk = "seg_" + segIdx + "_" + step.nodeType + "_" + idx;
         self.runningNodes[nk] = true;
         if (onUpdate) onUpdate();
@@ -463,10 +705,12 @@
         var p = typeDef.generate({ workflow: wf, nodeData: nd, branchIdx: idx, segIndex: segIdx, segment: seg })
           .then(function (result) {
             if (result) NR.addVersion(nd, result);
+            nd.errorMsg = null;
             self._addHistory(wf, step.nodeType, idx, segIdx, "done");
           })
           .catch(function (err) {
             nd.status = "error";
+            nd.errorMsg = err.message || "生成失败";
             self._addHistory(wf, step.nodeType, idx, segIdx, "error", err.message);
           })
           .finally(function () {
@@ -479,7 +723,10 @@
     await Promise.all(promises);
   };
 
-  P.stop = function () { this._stopFlag = true; this.running = false; };
+  P.stop = function () {
+    this._stopFlag = true;
+    this.running = false;
+  };
 
   P._addHistory = function (wf, nodeType, branchIdx, segIdx, status, errorMsg) {
     if (!wf.history) wf.history = [];
@@ -498,7 +745,7 @@
   P._resetStuckNodes = function (wf) {
     var self = this;
     this.pipeline.forEach(function (step) {
-      if (step.nodeType === "input") return;
+      if (step.nodeType === "input" || step.nodeType === "fpInput") return;
       if (step.category === "global") {
         var arr = wf[step.nodeType + "s"] || [];
         arr.forEach(function (nd) { if (nd && nd.status === "running") nd.status = "idle"; });

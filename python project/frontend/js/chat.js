@@ -224,7 +224,8 @@ function initSessions() {
     sessions[id] = { id, title: "新会话", messages: [] };
     localStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(sessions));
   }
-  currentSessionId = Object.keys(sessions)[0];
+  const savedId = localStorage.getItem("flowdraw:currentChatSessionId");
+  currentSessionId = (savedId && sessions[savedId]) ? savedId : Object.keys(sessions)[0];
 }
 
 function sanitizeSessionsForStorage(sessions) {
@@ -340,6 +341,7 @@ function newSession() {
   const id = "s_" + Date.now();
   sessions[id] = { id, title: "新会话", messages: [] };
   currentSessionId = id;
+  localStorage.setItem("flowdraw:currentChatSessionId", id);
   setSessions(sessions);
   renderSessionList();
   renderMessages();
@@ -348,6 +350,7 @@ function newSession() {
 
 function switchSession(id) {
   currentSessionId = id;
+  localStorage.setItem("flowdraw:currentChatSessionId", id);
   resetStreamingState();
   renderSessionList();
   refreshModelPills();
@@ -368,6 +371,7 @@ function delSession(id, e) {
   } else if (currentSessionId === id) {
     currentSessionId = Object.keys(sessions)[0];
   }
+  localStorage.setItem("flowdraw:currentChatSessionId", currentSessionId);
   setSessions(sessions);
   renderSessionList();
   renderMessages();

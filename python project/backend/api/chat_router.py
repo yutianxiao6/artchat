@@ -8,7 +8,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, UploadFile, File
 from fastapi.responses import JSONResponse, StreamingResponse
 
-from backend.models.schemas import ChatRequest, SmartChatRequest, ImageGenerateRequest
+from backend.models.schemas import ChatRequest, SmartChatRequest, ImageGenerateRequest, VideoChatRequest
 from backend.api.config_router import config_list
 from backend.api.image_router import generate_image
 from backend.core.request_client import async_http_request
@@ -681,3 +681,36 @@ async def upload_chat_image_base64(req: dict):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"图片保存失败: {str(e)}")
+
+
+@router.post("/video")
+async def video_chat(req: VideoChatRequest):
+    config = get_config_by_id(req.config_id)
+    if not config:
+        raise HTTPException(status_code=404, detail="配置不存在")
+
+    if not req.video_url or not req.video_url.startswith("http"):
+        raise HTTPException(status_code=400, detail="video_url 必须是有效的 HTTP/HTTPS 链接")
+
+    composed_messages = []
+    for hist_msg in (req.messages or [])[-12:]:
+        role = hist_msg.get("role", "")
+        content = hist_msg.get("content", "")
+        if role and content:
+            composed_messages.append({"role": role, "content": str(content)})
+
+    user_content = [
+        {"type": "text", "text": req.message},
+        {"type": "image_url", "image_url": {"url": req.video_url}},
+    ]
+    composed_messages.append({"role": "user", "content": user_content})
+
+    request_data = {
+        "model": config["model_name"],
+        "messages": composed_messages,
+        "temperature": req.temperature,
+        "stream": req.stream,
+        "max_tokens": req.max_tokens,
+    }
+
+    return await create_chat_response(config, request_data, req.stream, timeout=300.0)

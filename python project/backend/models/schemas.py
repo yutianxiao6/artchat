@@ -103,3 +103,13 @@ class CanvasCategoryDeleteRequest(BaseModel):
 
 class CanvasAssetDeleteRequest(BaseModel):
     asset_id: str
+
+
+class VideoChatRequest(BaseModel):
+    config_id: str
+    video_url: str
+    message: str
+    messages: List[Dict[str, Any]] = []
+    stream: bool = True
+    temperature: float = 0.7
+    max_tokens: int = 4000

@@ -22,12 +22,18 @@
     var items = wfs.map(function (w) {
       var active = w.id === curId ? "active" : "";
       var time = formatTime(w.createdAt);
-      var plot = (w.input && w.input.plot) ? esc(w.input.plot).slice(0, 40) : "空白工作流";
+      var title = w.title || "未命名工作流";
+      var content = (w.input && w.input.plot) ? esc(w.input.plot).slice(0, 40) : "暂无内容";
+      var tpl = null;
+      if (w.templateId && window.WF_Templates) {
+        tpl = window.WF_Templates.find(function (t) { return t.id === w.templateId; });
+      }
+      var iconCls = tpl ? tpl.icon : "fa-film";
       return '<div class="wf-history-item ' + active + '" data-wf-id="' + w.id + '">'
-        + '<div class="wf-history-item-icon"><i class="fa fa-film"></i></div>'
+        + '<div class="wf-history-item-icon"><i class="fa ' + iconCls + '"></i></div>'
         + '<div class="wf-history-item-body">'
-        + '<div class="wf-history-item-title">' + esc(w.title) + '</div>'
-        + '<div class="wf-history-item-desc">' + plot + '</div>'
+        + '<div class="wf-history-item-title">' + esc(title) + '</div>'
+        + '<div class="wf-history-item-desc">' + content + '</div>'
         + '<div class="wf-history-item-time">' + time + '</div>'
         + '</div></div>';
     }).join("");
@@ -60,13 +66,20 @@
         return;
       }
       if (e.target.closest && e.target.closest("#wf-history-new")) {
-        engine.create();
+        var tplSel = document.getElementById("wf-template-select");
+        var tplId = tplSel ? tplSel.value : null;
+        engine.create(null, tplId);
         rerender();
         return;
       }
       var item = e.target.closest && e.target.closest(".wf-history-item[data-wf-id]");
       if (item) {
         engine.currentId = item.getAttribute("data-wf-id");
+        engine.syncPipeline();
+        var execSteps = engine.pipeline.filter(function (s) { return s.nodeType !== "input" && s.nodeType !== "output"; });
+        if (execSteps.length) {
+          engine.execRange = { from: execSteps[0].nodeType, to: execSteps[execSteps.length - 1].nodeType, segments: "all" };
+        }
         engine.selectedNodeKey = null;
         engine.detailOpen = false;
         rerender();

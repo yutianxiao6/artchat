@@ -12,7 +12,7 @@
   function renderMiniPipeline(engine) {
     var wf = engine.current();
     var steps = engine.pipeline.filter(function (s) {
-      return s.nodeType !== "input" && s.nodeType !== "output";
+      return s.nodeType !== "input" && s.nodeType !== "fpInput" && s.nodeType !== "output";
     });
     var segments = wf ? (wf.segments || []) : [];
     var hasSegs = segments.length > 0;
@@ -52,16 +52,15 @@
 
   /* ── Toolbar ── */
   function renderToolbar(engine) {
-    var wfs = engine.workflows;
-    var curId = engine.currentId;
     var wf = engine.current();
     var mode = wf ? wf.mode : "single";
-    var isCurrentRunning = engine.running && engine.runningWfId === (wf && wf.id);
-    var opts = wfs.map(function (w) {
-      return '<option value="' + w.id + '"' + (w.id === curId ? " selected" : "") + '>' + esc(w.title) + '</option>';
+    var isAutoRunning = engine.running && engine.runningWfId === (wf && wf.id);
+    var templates = window.WF_Templates || [];
+    var tplOpts = templates.map(function (t) {
+      return '<option value="' + t.id + '">' + esc(t.name) + '</option>';
     }).join("");
     return '<div class="wf-toolbar" id="wf-toolbar">'
-      + '<select id="wf-select" class="wf-toolbar-select">' + opts + '</select>'
+      + '<select id="wf-template-select" class="wf-toolbar-select wf-template-select">' + tplOpts + '</select>'
       + '<button class="wf-tb-btn" id="wf-new-btn"><i class="fa fa-plus"></i> 新建</button>'
       + '<button class="wf-tb-btn danger" id="wf-del-btn"><i class="fa fa-trash-o"></i></button>'
       + '<div class="wf-toolbar-sep"></div>'
@@ -71,24 +70,18 @@
       + '</div>'
       + (mode === "single" && wf ? '<div class="wf-multi-count"><span>输出数量:</span><button class="wf-count-btn" data-mc-delta="-1">-</button><span class="wf-count-value">' + (wf.multiCount || 1) + '</span><button class="wf-count-btn" data-mc-delta="1">+</button></div>' : '')
       + '<div class="wf-toolbar-sep"></div>'
-      + '<button class="wf-tb-btn primary" id="wf-run-btn"' + (isCurrentRunning ? " disabled" : "") + '><i class="fa fa-play"></i> 一键执行</button>'
-      + (isCurrentRunning ? '<button class="wf-tb-btn danger" id="wf-stop-btn"><i class="fa fa-stop"></i> 停止</button>' : '')
+      + '<button class="wf-tb-btn primary" id="wf-run-btn"' + (isAutoRunning ? " disabled" : "") + '><i class="fa fa-play"></i> 一键执行</button>'
+      + (isAutoRunning ? '<button class="wf-tb-btn danger" id="wf-stop-btn"><i class="fa fa-stop"></i> 停止</button>' : '')
       + '</div>';
   }
 
   /* ── Pipeline Header ── */
   function renderPipelineHeader(engine) {
     var wf = engine.current();
-    var steps = engine.pipeline.filter(function (s) { return s.nodeType !== "input"; });
+    var allSteps = engine.pipeline;
     var html = '<div class="wf-pipeline-header">';
 
-    // Input node
-    var inputDef = NR.get("input");
-    html += '<div class="wf-pipe-node' + (engine.selectedNodeKey === "input" ? " selected" : "") + '" data-pipe-node="input">'
-      + '<div class="wf-pipe-icon" style="background:' + inputDef.color + '22;color:' + inputDef.color + '"><i class="fa ' + inputDef.icon + '"></i></div>'
-      + '<div class="wf-pipe-label">' + inputDef.label + '</div></div>';
-
-    steps.forEach(function (step, i) {
+    allSteps.forEach(function (step, i) {
       var def = NR.get(step.nodeType);
       if (!def) return;
       var isSkipped = wf && wf[step.nodeType + "Skip"];
@@ -102,8 +95,9 @@
       var selected = engine.selectedNodeKey === step.nodeType ? "selected" : "";
       var isPlan = (step.nodeType === "planCharactersScenes" || step.nodeType === "planFrames");
 
-      // Connector line (solid)
-      html += '<div class="wf-pipe-connector"><div class="wf-pipe-line-solid"></div></div>';
+      if (i > 0) {
+        html += '<div class="wf-pipe-connector"><div class="wf-pipe-line-solid"></div></div>';
+      }
 
       html += '<div class="wf-pipe-node ' + statusCls + ' ' + selected + (isPlan ? ' wf-pipe-plan' : '') + '" data-pipe-node="' + step.nodeType + '">'
         + '<div class="wf-pipe-icon" style="background:' + def.color + '22;color:' + def.color + '"><i class="fa ' + def.icon + '"></i></div>'
@@ -115,10 +109,53 @@
     return html;
   }
 
+  /* ── Global-Only Content (for simple templates without segments) ── */
+  function renderGlobalOnlyContent(engine, wf) {
+    var globalSteps = engine.pipeline.filter(function (s) { return s.category === "global"; });
+    var html = '<div class="wf-content-area">';
+    html += '<div class="wf-content-inner" id="wf-content-inner" style="transform:translate(' + engine.panX + 'px,' + engine.panY + 'px) scale(' + engine.zoom + ');transform-origin:0 0;">';
+    html += '<div class="wf-content-grid"><div class="wf-global-cols">';
+
+    globalSteps.forEach(function (step) {
+      var def = NR.get(step.nodeType);
+      if (!def) return;
+      var isInputLike = (step.nodeType === "input" || step.nodeType === "fpInput");
+      if (isInputLike) {
+        html += '<div class="wf-gcol" data-col="' + step.nodeType + '"><div class="wf-col-header">' + def.label + '</div><div class="wf-col-body">';
+        if (wf.input && wf.input.plot) {
+          html += '<div class="wf-content-card" data-node-key="' + step.nodeType + '">';
+          html += '<div class="wf-card-text">' + esc(wf.input.plot) + '</div>';
+          if (wf.input.style) html += '<div class="wf-card-tag">风格: ' + esc(wf.input.style) + '</div>';
+          if (wf.input.duration) html += '<div class="wf-card-tag">时长: ' + wf.input.duration + '秒</div>';
+          if (wf.input.firstFrameUrl) html += '<img class="wf-card-img wf-preview-img" src="' + esc(wf.input.firstFrameUrl) + '" style="max-height:120px;margin-top:6px;">';
+          if (wf.input.lastFrameUrl) html += '<img class="wf-card-img wf-preview-img" src="' + esc(wf.input.lastFrameUrl) + '" style="max-height:120px;margin-top:6px;">';
+          html += '</div>';
+        } else {
+          html += '<div class="wf-content-empty">点击上方节点填写</div>';
+        }
+        html += '</div></div>';
+      } else {
+        var arr = wf[step.nodeType + "s"] || [];
+        html += '<div class="wf-gcol" data-col="' + step.nodeType + '"><div class="wf-col-header">' + def.label + '</div><div class="wf-col-body">';
+        html += renderContentCard(engine, step.nodeType, arr[0], 0, null);
+        html += '</div></div>';
+      }
+    });
+
+    html += '</div></div></div></div>';
+    return html;
+  }
+
   /* ── Content Area ── */
   function renderContentArea(engine) {
     var wf = engine.current();
     if (!wf) return '<div class="wf-content-area"></div>';
+    var segSteps = engine.getSegmentSteps();
+
+    if (!segSteps.length) {
+      return renderGlobalOnlyContent(engine, wf);
+    }
+
     var segments = wf.segments || [];
     var branchCount = engine.getBranchCount(wf);
     var segSteps = engine.getSegmentSteps();
@@ -289,7 +326,7 @@
     var statusCls = nd.status || "idle";
     var key = segIndex !== null ? "seg_" + segIndex + "_" + nodeType + "_" + branchIdx : nodeType + "_" + branchIdx;
     var branchLabel = branchIdx > 0 ? ' <span class="wf-branch-badge">#' + (branchIdx + 1) + '</span>' : "";
-    var isRunning = engine.runningWfId === (engine.current() && engine.current().id) && engine.runningNodes[key];
+    var isRunning = !!engine.runningNodes[key];
 
     var html = '<div class="wf-content-card status-' + statusCls + (isRunning ? ' running' : '') + '" data-node-key="' + key + '">';
 
@@ -364,17 +401,29 @@
       if (v.description) html += '<div class="wf-card-text">' + esc(v.description).slice(0, 100) + '</div>';
       if (v.imageUrl) html += '<img class="wf-card-img wf-preview-img" src="' + esc(v.imageUrl) + '" data-preview="' + esc(v.imageUrl) + '">';
       if (isRunning) html += '<div class="wf-card-loading"><i class="fa fa-spinner fa-spin"></i> 生成图片中...</div>';
-    } else if (nodeType === "videoPrompt") {
+    } else if (nodeType === "videoPrompt" || nodeType === "framePrompt") {
       if (v.fullText) html += '<div class="wf-card-text">' + esc(v.fullText).slice(0, 300) + '</div>';
-      var refImgs = collectRefImages(engine, branchIdx, segIndex);
-      if (refImgs.length) {
-        html += '<div class="wf-ref-images">';
-        refImgs.forEach(function (r) {
-          html += '<div class="wf-ref-img-item"><img class="wf-ref-img wf-preview-img" src="' + esc(r.url) + '" data-preview="' + esc(r.url) + '"><span class="wf-ref-img-label">@' + esc(r.label) + '</span></div>';
-        });
-        html += '</div>';
+      if (nodeType === "videoPrompt") {
+        var refImgs = collectRefImages(engine, branchIdx, segIndex);
+        if (refImgs.length) {
+          html += '<div class="wf-ref-images">';
+          refImgs.forEach(function (r) {
+            html += '<div class="wf-ref-img-item"><img class="wf-ref-img wf-preview-img" src="' + esc(r.url) + '" data-preview="' + esc(r.url) + '"><span class="wf-ref-img-label">@' + esc(r.label) + '</span></div>';
+          });
+          html += '</div>';
+        }
       }
       html += '<button class="wf-copy-btn" data-copy-vp="' + key + '"><i class="fa fa-copy"></i> 复制全部</button>';
+    } else if (nodeType === "storyTemplate") {
+      if (v.imageUrl) html += '<img class="wf-card-img wf-preview-img" src="' + esc(v.imageUrl) + '" data-preview="' + esc(v.imageUrl) + '">';
+      else html += '<div class="wf-card-text">已生成</div>';
+      if (isRunning) html += '<div class="wf-card-loading"><i class="fa fa-spinner fa-spin"></i> 生成中...</div>';
+    }
+
+    if (nd && nd.status === "error") {
+      html += '<div class="wf-card-error"><i class="fa fa-exclamation-triangle"></i> 生成失败';
+      if (nd.errorMsg) html += '：' + esc(nd.errorMsg).slice(0, 100);
+      html += '</div>';
     }
 
     html += '</div>';
@@ -400,9 +449,9 @@
     html += '<div class="wf-detail-title">' + def.label
       + (segIdx !== null ? ' · 段' + (segIdx + 1) : '')
       + (branchIdx > 0 ? ' #' + (branchIdx + 1) : '')
-      + ' <button class="wf-detail-close" id="wf-detail-close">×</button></div>';
+      + '</div>';
 
-    if (isPipelineNode && nodeType !== "input") {
+    if (isPipelineNode && nodeType !== "input" && nodeType !== "fpInput") {
       html += renderModelSelect(engine, nodeType);
       if (nodeType !== "planCharactersScenes" && nodeType !== "planFrames") {
         html += renderSkipToggle(engine, key);
@@ -418,17 +467,16 @@
     }
 
     if (isPipelineNode && def.category === "segment") {
-      var isRunningNow = engine.running && engine.runningWfId === (wf && wf.id);
-      var disabledAttr = isRunningNow ? " disabled" : "";
+      var disabledAttr = engine.isAnyRunning() ? " disabled" : "";
       html += '<div class="wf-detail-actions"><button class="wf-tb-btn primary" data-gen-all-seg="' + nodeType + '"' + disabledAttr + '><i class="fa fa-play"></i> 全部段落生成</button></div>';
     }
 
     if (!isPipelineNode) {
       html += renderVersionList(nd);
       html += '<div class="wf-detail-actions">';
-      var isRunningNow2 = engine.running && engine.runningWfId === (wf && wf.id);
+      var isNodeBusy = engine.isNodeRunning(nodeType, segIdx);
       if (NR.getActiveVersion(nd)) {
-        html += '<button class="wf-tb-btn danger" data-clear-node="' + key + '"' + (isRunningNow2 ? " disabled" : "") + '><i class="fa fa-trash-o"></i> 清空</button>';
+        html += '<button class="wf-tb-btn danger" data-clear-node="' + key + '"' + (isNodeBusy ? " disabled" : "") + '><i class="fa fa-trash-o"></i> 清空</button>';
       }
       html += '</div>';
     }
@@ -466,8 +514,8 @@
     var gc = window._getGlobalNodeConfigs ? window._getGlobalNodeConfigs() : {};
     var cfg = gc[nodeType] || {};
     var list = (window.GLOBAL && window.GLOBAL.configList) || [];
-    var needsChat = ["script", "planCharactersScenes", "planFrames", "videoPrompt"].indexOf(nodeType) >= 0;
-    var needsImage = ["mainCharacters", "minorCharacters", "scene", "firstFrame", "storyboard", "lastFrame"].indexOf(nodeType) >= 0;
+    var needsChat = ["script", "planCharactersScenes", "planFrames", "videoPrompt", "framePrompt"].indexOf(nodeType) >= 0;
+    var needsImage = ["mainCharacters", "minorCharacters", "scene", "firstFrame", "storyboard", "lastFrame", "storyTemplate"].indexOf(nodeType) >= 0;
     var dirty = false;
     var html = '';
     if (needsChat) {
@@ -489,6 +537,13 @@
         html += '<option value="' + c.id + '"' + (cfg.imageConfigId === c.id ? " selected" : "") + '>' + esc(c.name) + '</option>';
       });
       html += '</select></div>';
+      var imgCount = parseInt(cfg.imageCount) || 1;
+      html += '<div class="wf-detail-section"><div class="wf-detail-label">生成张数</div>'
+        + '<select class="wf-detail-input" data-node-config="' + nodeType + '" data-config-key="imageCount">';
+      [1, 2, 3, 4].forEach(function (n) {
+        html += '<option value="' + n + '"' + (imgCount === n ? " selected" : "") + '>' + n + ' 张</option>';
+      });
+      html += '</select></div>';
     }
     if (dirty) {
       gc[nodeType] = cfg;
@@ -500,19 +555,36 @@
   function renderGridControl(engine) {
     var wf = engine.current();
     if (!wf) return "";
-    var grid = 4;
-    if (wf.segments && wf.segments[0]) grid = wf.segments[0].storyboardGrid || 4;
-    return '<div class="wf-detail-section"><div class="wf-detail-label">分镜宫格</div>'
+    var grid = wf.storyboardGrid || 4;
+    var res = wf.storyboardResolution || "2160x3840";
+    var resOptions = [
+      { value: "2160x3840", label: "2160×3840 (9:16 竖版)" },
+      { value: "1080x1920", label: "1080×1920 (9:16 竖版)" },
+      { value: "1536x1024", label: "1536×1024 (3:2 横版)" },
+      { value: "2048x1152", label: "2048×1152 (16:9 横版)" },
+      { value: "3840x2160", label: "3840×2160 (16:9 横版)" },
+      { value: "1024x1024", label: "1024×1024 (1:1 方形)" },
+      { value: "2048x2048", label: "2048×2048 (1:1 方形)" },
+      { value: "1024x1536", label: "1024×1536 (2:3 竖版)" },
+    ];
+    var resHtml = resOptions.map(function (o) {
+      return '<option value="' + o.value + '"' + (res === o.value ? " selected" : "") + '>' + o.label + '</option>';
+    }).join("");
+    return '<div class="wf-detail-section"><div class="wf-detail-label">分镜宫格（全局）</div>'
       + '<div class="wf-grid-btns">'
       + '<button class="wf-grid-btn' + (grid === 4 ? " active" : "") + '" data-grid="4">2×2</button>'
+      + '<button class="wf-grid-btn' + (grid === 6 ? " active" : "") + '" data-grid="6">2×3</button>'
       + '<button class="wf-grid-btn' + (grid === 9 ? " active" : "") + '" data-grid="9">3×3</button>'
       + '<button class="wf-grid-btn' + (grid === 16 ? " active" : "") + '" data-grid="16">4×4</button>'
-      + '</div></div>';
+      + '</div></div>'
+      + '<div class="wf-detail-section"><div class="wf-detail-label">分镜分辨率（全局）</div>'
+      + '<select class="wf-detail-input" id="wf-sb-resolution">' + resHtml + '</select>'
+      + '</div>';
   }
 
   function renderSkipToggle(engine, key) {
     var nodeType = parseNodeType(key);
-    if (nodeType === "input" || nodeType === "output" || nodeType === "script") return "";
+    if (nodeType === "input" || nodeType === "fpInput" || nodeType === "output" || nodeType === "script" || nodeType === "framePrompt") return "";
     var wf = engine.current();
     if (!wf) return "";
     var segIdx = parseSegIndex(key);
@@ -560,10 +632,10 @@
     var m = key.match(/_(\d+)$/);
     return m ? parseInt(m[1]) : 0;
   }
-  function getNodeDataByKey(engine, key) {
+  function getNodeDataByKey(engine, key, createIfMissing) {
     var wf = engine.current();
     if (!wf) return {};
-    if (key === "input") return wf.input;
+    if (key === "input" || key === "fpInput") return wf.input;
     if (key === "output") return {};
     var segIdx = parseSegIndex(key);
     var nodeType = parseNodeType(key);
@@ -571,11 +643,59 @@
     if (segIdx !== null) {
       var seg = wf.segments[segIdx];
       if (!seg) return {};
-      var arr = seg[nodeType + "s"];
-      return (arr && arr[branchIdx]) || {};
+      var arrayKey = nodeType + "s";
+      if (!seg[arrayKey]) seg[arrayKey] = [];
+      if (createIfMissing && !seg[arrayKey][branchIdx]) {
+        while (seg[arrayKey].length <= branchIdx) seg[arrayKey].push(NR.createNodeData());
+      }
+      return (seg[arrayKey][branchIdx]) || {};
     }
-    var gArr = wf[nodeType + "s"];
-    return (gArr && gArr[branchIdx]) || {};
+    var arrayKey = nodeType + "s";
+    if (!wf[arrayKey]) wf[arrayKey] = [];
+    if (createIfMissing && !wf[arrayKey][branchIdx]) {
+      while (wf[arrayKey].length <= branchIdx) wf[arrayKey].push(NR.createNodeData());
+    }
+    return (wf[arrayKey][branchIdx]) || {};
+  }
+
+  /* ── Execution History Panel ── */
+  function renderExecHistory(engine) {
+    var wf = engine.current();
+    if (!wf) return "";
+    var history = (wf.history || []).slice(-100).reverse();
+    var toggle = '<button class="wf-exec-history-toggle" id="wf-exec-history-toggle" title="执行历史"><i class="fa fa-history"></i>'
+      + (history.length ? '<span class="wf-exec-history-badge">' + Math.min(history.length, 99) + '</span>' : '')
+      + '</button>';
+    if (!engine.execHistoryOpen) return toggle;
+
+    var items = history.map(function (h) {
+      var def = NR.get(h.nodeType);
+      var label = def ? def.label : h.nodeType;
+      var segLabel = (h.segIndex !== null && h.segIndex !== undefined) ? ' · 段' + (h.segIndex + 1) : '';
+      var time = '';
+      try {
+        var d = new Date(h.time);
+        var pad = function (n) { return n < 10 ? '0' + n : '' + n; };
+        time = pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
+      } catch (e) { time = ''; }
+      var dotCls = h.status === 'done' ? 'wf-exec-dot-done' : 'wf-exec-dot-error';
+      var errText = h.error ? '<div class="wf-exec-error-text">' + esc(h.error).slice(0, 80) + '</div>' : '';
+      return '<div class="wf-exec-history-item">'
+        + '<div class="' + dotCls + '"></div>'
+        + '<div class="wf-exec-history-info">'
+        + '<span class="wf-exec-history-label">' + label + segLabel + '</span>'
+        + '<span class="wf-exec-history-time">' + time + '</span>'
+        + '</div>'
+        + errText
+        + '</div>';
+    }).join('');
+
+    if (!items) items = '<div class="wf-exec-history-empty">暂无执行记录</div>';
+
+    return toggle + '<div class="wf-exec-history-panel" id="wf-exec-history-panel">'
+      + '<div class="wf-exec-history-header">执行历史</div>'
+      + '<div class="wf-exec-history-list custom-scrollbar">' + items + '</div>'
+      + '</div>';
   }
 
   /* ── Main Render ── */
@@ -590,12 +710,14 @@
     var historyHtml = WF_History.render(engine);
     container.innerHTML = '<div class="wf-shell">'
       + '<div class="wf-history-wrap">' + historyHtml + '</div>'
-      + '<div class="wf-main">'
+      + '<div class="wf-main" style="position:relative;">'
       + renderToolbar(engine)
+      + renderExecHistory(engine)
       + renderPipelineHeader(engine)
       + renderContentArea(engine)
       + '</div>'
       + '<div class="wf-detail' + (engine.detailOpen ? " open" : "") + '" id="wf-detail">'
+      + '<button class="wf-detail-close" id="wf-detail-close">×</button>'
       + renderDetailPanel(engine) + '</div>'
       + '<div class="wf-img-preview" id="wf-img-preview"><img id="wf-img-preview-src"><button class="wf-img-preview-close" id="wf-img-preview-close"><i class="fa fa-times"></i></button></div>'
       + '</div>';
@@ -636,6 +758,17 @@
     }, { passive: false });
 
     document.addEventListener("click", function (e) {
+      // Exec history toggle
+      if (e.target.closest && e.target.closest("#wf-exec-history-toggle")) {
+        engine.execHistoryOpen = !engine.execHistoryOpen;
+        rerender();
+        return;
+      }
+      // Close exec history when clicking outside (don't return, let other handlers run)
+      if (engine.execHistoryOpen && !(e.target.closest && e.target.closest("#wf-exec-history-panel")) && !(e.target.closest && e.target.closest("#wf-exec-history-toggle"))) {
+        engine.execHistoryOpen = false;
+      }
+
       // Image preview
       var previewImg = e.target.closest && e.target.closest(".wf-preview-img");
       if (previewImg) {
@@ -690,6 +823,23 @@
         return;
       }
 
+      var pickImg = e.target.closest && e.target.closest("[data-pick-image]");
+      if (pickImg) {
+        var pickIdx = parseInt(pickImg.getAttribute("data-pick-image"));
+        var key = engine.selectedNodeKey;
+        if (key != null && !isNaN(pickIdx)) {
+          var nd = getNodeDataByKey(engine, key);
+          var v = NR.getActiveVersion(nd);
+          if (v && v.imageUrls && pickIdx < v.imageUrls.length) {
+            v.imageUrl = v.imageUrls[pickIdx];
+            engine.save();
+            rerender();
+          }
+        }
+        e.stopPropagation();
+        return;
+      }
+
       var contentCard = e.target.closest && e.target.closest(".wf-content-card[data-node-key]");
       if (contentCard) {
         engine.selectedNodeKey = contentCard.getAttribute("data-node-key");
@@ -699,7 +849,13 @@
       }
 
       if (e.target.closest && e.target.closest("#wf-detail-close")) { engine.detailOpen = false; engine.selectedNodeKey = null; rerender(); return; }
-      if (e.target.closest && e.target.closest("#wf-new-btn")) { engine.create(); rerender(); return; }
+      if (e.target.closest && e.target.closest("#wf-new-btn")) {
+        var tplSel = document.getElementById("wf-template-select");
+        var tplId = tplSel ? tplSel.value : null;
+        engine.create(null, tplId);
+        rerender();
+        return;
+      }
       if (e.target.closest && e.target.closest("#wf-del-btn")) { if (confirm("确定删除当前工作流？")) { engine.delete(engine.currentId); rerender(); } return; }
       if (e.target.closest && e.target.closest("#wf-run-btn")) { engine.run(rerender); return; }
       if (e.target.closest && e.target.closest("#wf-stop-btn")) { engine.stop(); rerender(); return; }
@@ -731,7 +887,7 @@
 
       var genAllSeg = e.target.closest && e.target.closest("[data-gen-all-seg]");
       if (genAllSeg) {
-        if (engine.running && engine.runningWfId === engine.currentId) return;
+        if (engine.running) return;
         var nodeType = genAllSeg.getAttribute("data-gen-all-seg");
         handleGenAllSegments(engine, nodeType, rerender);
         return;
@@ -739,10 +895,12 @@
 
       var clearNode = e.target.closest && e.target.closest("[data-clear-node]");
       if (clearNode) {
-        if (engine.running && engine.runningWfId === engine.currentId) return;
-        var key = clearNode.getAttribute("data-clear-node");
+        var clearKey = clearNode.getAttribute("data-clear-node");
+        var clearNodeType = parseNodeType(clearKey);
+        var clearSegIdx = parseSegIndex(clearKey);
+        if (engine.isNodeRunning(clearNodeType, clearSegIdx)) return;
         if (confirm("确定清空该节点内容？")) {
-          engine.clearNode(key);
+          engine.clearNode(clearKey);
           rerender();
         }
         return;
@@ -752,8 +910,11 @@
       if (gridBtn) {
         var grid = parseInt(gridBtn.getAttribute("data-grid"));
         var wf = engine.current();
-        if (wf && wf.segments) {
-          wf.segments.forEach(function (seg) { seg.storyboardGrid = grid; });
+        if (wf) {
+          wf.storyboardGrid = grid;
+          if (wf.segments) {
+            wf.segments.forEach(function (seg) { seg.storyboardGrid = grid; });
+          }
           engine.save();
         }
         rerender();
@@ -762,7 +923,6 @@
     });
 
     document.addEventListener("change", function (e) {
-      if (e.target.id === "wf-select") { engine.currentId = e.target.value; engine.selectedNodeKey = null; engine.detailOpen = false; rerender(); }
       if (e.target.id === "wf-skip-check") {
         var key = e.target.getAttribute("data-skip-node");
         var nodeType = parseNodeType(key);
@@ -788,6 +948,13 @@
           if (!gc[nodeType]) gc[nodeType] = {};
           gc[nodeType][configKey] = e.target.value;
           if (window._saveGlobalNodeConfigs) window._saveGlobalNodeConfigs(gc);
+        }
+      }
+      if (e.target.id === "wf-sb-resolution") {
+        var wf = engine.current();
+        if (wf) {
+          wf.storyboardResolution = e.target.value;
+          engine.save();
         }
       }
     });
@@ -826,7 +993,7 @@
         if (!wf) return;
         var key = engine.selectedNodeKey;
         if (!key) return;
-        var nd = getNodeDataByKey(engine, key);
+        var nd = getNodeDataByKey(engine, key, true);
         fetch("/api/workflow/upload-image/" + wf.id, {
           method: "POST", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ image_data: reader.result, prefix: "upload" }),
@@ -952,34 +1119,36 @@
     if (nd && nd.versions) { NR.setActiveVersion(nd, versionId); engine.save(); rerender(); }
   }
 
+  function showToast(text) {
+    var el = document.getElementById("wf-toast");
+    if (!el) {
+      el = document.createElement("div");
+      el.id = "wf-toast";
+      el.style.cssText = "position:fixed;left:50%;top:20px;transform:translateX(-50%);background:rgba(15,23,42,.9);color:#e2e8f0;padding:8px 18px;border-radius:10px;font-size:13px;font-weight:600;z-index:99999;opacity:0;transition:opacity .2s;pointer-events:none;box-shadow:0 8px 24px rgba(0,0,0,.3);";
+      document.body.appendChild(el);
+    }
+    el.textContent = text;
+    el.style.opacity = "1";
+    clearTimeout(el._timer);
+    el._timer = setTimeout(function () { el.style.opacity = "0"; }, 1000);
+  }
+
   async function handleCopyVideoPrompt(engine, key) {
     var nd = getNodeDataByKey(engine, key);
     var v = NR.getActiveVersion(nd);
-    if (!v || !v.fullText) { alert("暂无内容可复制"); return; }
-    var segIdx = parseSegIndex(key);
-    var branchIdx = parseBranchIdx(key);
-    var refs = collectRefImages(engine, branchIdx, segIdx);
-
-    var textParts = [v.fullText];
-    if (refs.length) {
-      textParts.push("\n\n--- 参考图 ---");
-      refs.forEach(function (r) {
-        textParts.push("@" + r.label + " " + window.location.origin + r.url);
-      });
-    }
-    var fullText = textParts.join("\n");
+    if (!v || !v.fullText) { showToast("暂无内容"); return; }
 
     try {
-      await navigator.clipboard.writeText(fullText);
-      alert("已复制提示词" + (refs.length ? "（含" + refs.length + "张参考图链接）" : ""));
+      await navigator.clipboard.writeText(v.fullText);
+      showToast("已复制");
     } catch (e) {
       var ta = document.createElement("textarea");
-      ta.value = fullText;
+      ta.value = v.fullText;
       document.body.appendChild(ta);
       ta.select();
       document.execCommand("copy");
       document.body.removeChild(ta);
-      alert("已复制提示词");
+      showToast("已复制");
     }
   }
 
@@ -987,26 +1156,26 @@
     var wf = engine.current();
     if (!wf || !wf.segments || !wf.segments.length) return;
     var step = { nodeType: nodeType, category: "segment" };
-    engine.running = true;
-    engine.runningWfId = wf.id;
-    engine._stopFlag = false;
-    rerender();
-    (async function () {
-      try {
-        for (var si = 0; si < wf.segments.length; si++) {
-          if (engine._stopFlag) break;
-          await engine._runSegmentStep(wf, step, si, rerender, true);
-        }
-        engine.save();
-      } catch (err) {
-        alert("生成失败：" + err.message);
-      } finally {
-        engine.running = false;
-        engine.runningWfId = null;
-        engine.runningNodes = {};
-        rerender();
+
+    function runReady() {
+      var launched = false;
+      for (var si = 0; si < wf.segments.length; si++) {
+        if (engine.isNodeRunning(nodeType, si)) { launched = true; continue; }
+        if (engine.isNodeComplete(nodeType, si, wf)) continue;
+        if (!engine.canExecute(nodeType, si, wf)) continue;
+        launched = true;
+        (function (idx) {
+          engine._runSegmentStep(wf, step, idx, rerender, true).then(function () {
+            engine.save();
+            rerender();
+            runReady();
+          });
+        })(si);
       }
-    })();
+      if (!launched) rerender();
+    }
+
+    runReady();
   }
 
   window.WF_Renderer = {
