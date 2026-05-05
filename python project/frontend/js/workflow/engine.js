@@ -221,7 +221,7 @@
         } catch (e) {}
       }
     }
-    this.workflows.forEach(function (w) { self.ensureShape(w); });
+    this.workflows.forEach(function (w) { self.ensureShape(w); self._resetStuckNodes(w); });
     if (!this.workflows.length) this.create();
     else this.currentId = this.workflows[0].id;
   };
@@ -525,13 +525,21 @@
         break;
       case "planFrames":
         addDep("planCharactersScenes", null);
+        // 第二段及之后的规划需要依赖前一段的规划
+        if (segIdx > 0) addDep("planFrames", segIdx - 1);
         break;
       case "firstFrame":
-      case "storyboard":
       case "lastFrame":
         addDep("planFrames", segIdx);
         addDep("mainCharacters", null);
         addDep("scene", segIdx);
+        break;
+      case "storyboard":
+        addDep("planFrames", segIdx);
+        addDep("mainCharacters", null);
+        addDep("scene", segIdx);
+        // 第二段及之后的分镜图需要依赖前一段的分镜图
+        if (segIdx > 0) addDep("storyboard", segIdx - 1);
         break;
       case "videoPrompt":
       case "storyTemplate":
@@ -726,10 +734,17 @@
     if (!forceAll && NR.getActiveVersion(nd)) {
       if (!typeDef.needsImage || _allImagesReady(NR.getActiveVersion(nd), step.nodeType)) return;
     }
+    var globalKey = step.nodeType + "_0";
+    var isActuallyRunning = !!state.runningNodes[globalKey];
+    if (nd.status === "running" && !isActuallyRunning) {
+      nd.status = "idle";
+      nd.errorMsg = null;
+    }
+    if (nd.status === "running") return;
     nd.status = "running";
     nd.errorMsg = null;
     if (state._autoExecMode && REVIEWABLE_NODES[step.nodeType]) nd.reviewStatus = "pending";
-    state.runningNodes[step.nodeType + "_0"] = true;
+    state.runningNodes[globalKey] = true;
     if (onUpdate) onUpdate();
 
     try {
@@ -772,11 +787,16 @@
         if (!forceAll && NR.getActiveVersion(nd)) {
           if (!typeDef.needsImage || _allImagesReady(NR.getActiveVersion(nd), step.nodeType)) return;
         }
+        var nk = "seg_" + segIdx + "_" + step.nodeType + "_" + idx;
+        var isActuallyRunning = !!state.runningNodes[nk];
+        if (nd.status === "running" && !isActuallyRunning) {
+          nd.status = "idle";
+          nd.errorMsg = null;
+        }
         if (nd.status === "running") return;
         nd.status = "running";
         nd.errorMsg = null;
         if (state._autoExecMode && REVIEWABLE_NODES[step.nodeType]) nd.reviewStatus = "pending";
-        var nk = "seg_" + segIdx + "_" + step.nodeType + "_" + idx;
         state.runningNodes[nk] = true;
         if (onUpdate) onUpdate();
 

@@ -31,7 +31,17 @@
   }
 
   function createNodeData(id) {
-    return { id: id || makeVersionId(), status: "idle", versions: [], activeVersionId: null };
+    return {
+      id: id || makeVersionId(),
+      status: "idle",
+      versions: [],
+      activeVersionId: null,
+      planningHistory: [],
+      isLocked: false,
+      executedTo: null,
+      segmentIndex: null,
+      transitionType: "direct"
+    };
   }
 
   function getActiveVersion(node) {

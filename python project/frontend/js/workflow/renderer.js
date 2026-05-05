@@ -899,6 +899,40 @@
         return;
       }
 
+      var delSceneBtn = e.target.closest && e.target.closest("[data-del-scene-item]");
+      if (delSceneBtn) {
+        var sIdx = parseInt(delSceneBtn.getAttribute("data-del-scene-item"));
+        var key = engine.selectedNodeKey;
+        if (key != null && !isNaN(sIdx)) {
+          var nd = getNodeDataByKey(engine, key);
+          var v = NR.getActiveVersion(nd);
+          if (v && v.scenes && sIdx < v.scenes.length) {
+            v.scenes.splice(sIdx, 1);
+            engine.save();
+            rerender();
+          }
+        }
+        e.stopPropagation();
+        return;
+      }
+
+      var delCharBtn = e.target.closest && e.target.closest("[data-del-char-item]");
+      if (delCharBtn) {
+        var cIdx = parseInt(delCharBtn.getAttribute("data-del-char-item"));
+        var key = engine.selectedNodeKey;
+        if (key != null && !isNaN(cIdx)) {
+          var nd = getNodeDataByKey(engine, key);
+          var v = NR.getActiveVersion(nd);
+          if (v && v.characters && cIdx < v.characters.length) {
+            v.characters.splice(cIdx, 1);
+            engine.save();
+            rerender();
+          }
+        }
+        e.stopPropagation();
+        return;
+      }
+
       var pickImg = e.target.closest && e.target.closest("[data-pick-image]");
       if (pickImg) {
         var pickIdx = parseInt(pickImg.getAttribute("data-pick-image"));
@@ -1264,24 +1298,64 @@
   function handleGenAllSegments(engine, nodeType, rerender) {
     var wf = engine.current();
     if (!wf || !wf.segments || !wf.segments.length) return;
+    if (engine.isAnyRunning && engine.isAnyRunning(wf.id)) {
+      showToast("当前工作流有节点正在执行中");
+      return;
+    }
     var step = { nodeType: nodeType, category: "segment" };
+    var MAX_RETRY = 1;
+    var failCount = {};
+    var permanent = {};
+    var pendingSaveTimer = null;
+
+    function debouncedSave() {
+      if (pendingSaveTimer) return;
+      pendingSaveTimer = setTimeout(function () {
+        pendingSaveTimer = null;
+        engine.save();
+      }, 300);
+    }
+
+    function getSegNode(si) {
+      var seg = wf.segments[si];
+      if (!seg) return null;
+      var arr = seg[nodeType + "s"] || [];
+      return arr[0] || null;
+    }
 
     function runReady() {
       var launched = false;
+      var anyPending = false;
       for (var si = 0; si < wf.segments.length; si++) {
-        if (engine.isNodeRunning(nodeType, si)) { launched = true; continue; }
+        if (permanent[si]) continue;
+        if (engine.isNodeRunning(nodeType, si)) { launched = true; anyPending = true; continue; }
         if (engine.isNodeComplete(nodeType, si, wf)) continue;
-        if (!engine.canExecute(nodeType, si, wf)) continue;
+        if (!engine.canExecute(nodeType, si, wf)) { anyPending = true; continue; }
         launched = true;
+        anyPending = true;
         (function (idx) {
           engine._runSegmentStep(wf, step, idx, rerender, true).then(function () {
-            engine.save();
+            var nd = getSegNode(idx);
+            if (nd && nd.status === "error") {
+              failCount[idx] = (failCount[idx] || 0) + 1;
+              if (failCount[idx] > MAX_RETRY) {
+                permanent[idx] = true;
+                console.warn("[workflow] 第" + (idx + 1) + "段 " + nodeType + " 连续失败，停止重试:", nd.errorMsg);
+              } else {
+                nd.status = "idle";
+                nd.errorMsg = null;
+              }
+            }
+            debouncedSave();
             rerender();
             runReady();
           });
         })(si);
       }
-      if (!launched) rerender();
+      if (!launched && !anyPending) {
+        if (pendingSaveTimer) { clearTimeout(pendingSaveTimer); pendingSaveTimer = null; engine.save(); }
+        rerender();
+      }
     }
 
     runReady();

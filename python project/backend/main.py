@@ -1,6 +1,6 @@
 import os
 import sys
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
@@ -10,6 +10,7 @@ from backend.api.image_router import router as image_router
 from backend.api.canvas_router import router as canvas_router, canvas_assets_app
 from backend.api.workflow_router import router as workflow_router
 from backend.core.workflow_storage import WORKFLOW_ROOT
+from backend.core.lifecycle import lifecycle_manager
 
 # 服务配置
 SERVER_HOST = "0.0.0.0"
@@ -35,6 +36,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# 添加生命周期管理中间件
+@app.middleware("http")
+async def lifecycle_middleware(request: Request, call_next):
+    # 记录活动
+    lifecycle_manager.record_activity()
+    response = await call_next(request)
+    return response
+
 app.include_router(config_router)
 app.include_router(chat_router)
 app.include_router(image_router)
@@ -49,3 +58,10 @@ app.mount("/workflow-images", StaticFiles(directory=WORKFLOW_ROOT), name="workfl
 @app.get("/")
 async def index():
     return FileResponse(os.path.join(FRONTEND_DIR, "index.html"))
+
+@app.get("/api/heartbeat")
+async def heartbeat():
+    """前端心跳接口，保持连接活跃"""
+    import time
+    lifecycle_manager.record_activity()
+    return {"status": "ok", "timestamp": int(time.time() * 1000)}

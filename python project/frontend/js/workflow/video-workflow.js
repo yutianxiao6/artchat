@@ -325,7 +325,9 @@
           var charRunKey = "mainCharacters_0_char_" + ci;
           var charRunning = ctx.engine && ctx.engine.runningNodes[charRunKey];
           var charDis = charRunning ? " disabled" : dis;
-          html += '<div class="wf-detail-section"><div class="wf-detail-label">' + esc(c.name) + '</div>'
+          html += '<div class="wf-detail-section"><div class="wf-detail-label">' + esc(c.name)
+            + ' <button class="wf-char-del-btn" data-del-char-item="' + ci + '" title="删除该人物" style="float:right;background:transparent;border:none;color:#ef4444;cursor:pointer;font-size:12px;"><i class="fa fa-trash-o"></i></button>'
+            + '</div>'
             + '<textarea class="wf-detail-textarea wf-editable" data-edit-field="characters.' + ci + '.description" rows="3">' + esc(c.description) + '</textarea>'
             + (c.imageUrl ? '<img class="wf-detail-img wf-preview-img" src="' + esc(c.imageUrl) + '">' : '')
             + renderItemRefImagesSection(c, "characters." + ci)
@@ -336,9 +338,11 @@
             + '</div>';
         });
       }
-      html += '<div class="wf-detail-section"><div class="wf-detail-label">手动添加人物</div>'
-        + '<input class="wf-detail-input wf-manual-label" placeholder="人物名称" style="margin-bottom:6px;">'
-        + '<div class="wf-upload-wrap"><label class="wf-upload-btn"><i class="fa fa-upload"></i> 上传人物图<input type="file" accept="image/*" class="wf-file-input" data-upload-add="mainCharacters" style="display:none"></label></div></div>';
+      if (!ctx.isPipelineNode) {
+        html += '<div class="wf-detail-section"><div class="wf-detail-label">手动添加人物</div>'
+          + '<input class="wf-detail-input wf-manual-label" placeholder="人物名称" style="margin-bottom:6px;">'
+          + '<div class="wf-upload-wrap"><label class="wf-upload-btn"><i class="fa fa-upload"></i> 上传人物图<input type="file" accept="image/*" class="wf-file-input" data-upload-add="mainCharacters" style="display:none"></label></div></div>';
+      }
       html += renderRefImagesSection(nd, "mainCharacters");
       html += '<div class="wf-detail-actions"><button class="wf-tb-btn primary" data-gen-global="mainCharacters"' + dis + '><i class="fa fa-refresh"></i> ' + (v && v.characters && v.characters.some(function(c){return c.imageUrl;}) ? "全部重新生成" : "全部生成图片") + '</button></div>';
       return html;
@@ -389,7 +393,9 @@
           var charRunKey = "seg_" + ctx.segIndex + "_minorCharacters_0_char_" + ci;
           var charRunning = ctx.engine && ctx.engine.runningNodes[charRunKey];
           var charDis = charRunning ? " disabled" : _getDisabledAttr(ctx, "minorCharacters");
-          html += '<div class="wf-detail-section"><div class="wf-detail-label">' + esc(c.name) + '</div>'
+          html += '<div class="wf-detail-section"><div class="wf-detail-label">' + esc(c.name)
+            + ' <button class="wf-char-del-btn" data-del-char-item="' + ci + '" title="删除该人物" style="float:right;background:transparent;border:none;color:#ef4444;cursor:pointer;font-size:12px;"><i class="fa fa-trash-o"></i></button>'
+            + '</div>'
             + '<textarea class="wf-detail-textarea wf-editable" data-edit-field="characters.' + ci + '.description" rows="3">' + esc(c.description) + '</textarea>'
             + (c.imageUrl ? '<img class="wf-detail-img wf-preview-img" src="' + esc(c.imageUrl) + '">' : '')
             + renderItemRefImagesSection(c, "characters." + ci)
@@ -400,9 +406,11 @@
             + '</div>';
         });
       }
-      html += '<div class="wf-detail-section"><div class="wf-detail-label">手动添加人物</div>'
-        + '<input class="wf-detail-input wf-manual-label" placeholder="人物名称" style="margin-bottom:6px;">'
-        + '<div class="wf-upload-wrap"><label class="wf-upload-btn"><i class="fa fa-upload"></i> 上传人物图<input type="file" accept="image/*" class="wf-file-input" data-upload-add="minorCharacters" style="display:none"></label></div></div>';
+      if (!ctx.isPipelineNode) {
+        html += '<div class="wf-detail-section"><div class="wf-detail-label">手动添加人物</div>'
+          + '<input class="wf-detail-input wf-manual-label" placeholder="人物名称" style="margin-bottom:6px;">'
+          + '<div class="wf-upload-wrap"><label class="wf-upload-btn"><i class="fa fa-upload"></i> 上传人物图<input type="file" accept="image/*" class="wf-file-input" data-upload-add="minorCharacters" style="display:none"></label></div></div>';
+      }
       html += renderRefImagesSection(nd, "minorCharacters");
       if (!ctx.isPipelineNode) { var _dis = _getDisabledAttr(ctx, "minorCharacters"); html += '<div class="wf-detail-actions"><button class="wf-tb-btn primary" data-gen-seg="' + ctx.segIndex + '" data-gen-type="minorCharacters"' + _dis + '><i class="fa fa-refresh"></i> ' + (v && v.characters && v.characters.some(function(c){return c.imageUrl;}) ? "全部重新生成" : "全部生成图片") + '</button></div>'; }
       return html;
@@ -463,7 +471,9 @@
           var sceneRunKey = "seg_" + segIdx + "_scene_0_item_" + i;
           var sceneRunning = ctx.engine && ctx.engine.runningNodes[sceneRunKey];
           var sceneDis = sceneRunning ? " disabled" : _getDisabledAttr(ctx, "scene");
-          html += '<div class="wf-detail-section"><div class="wf-detail-label">场景' + (i + 1) + ': ' + esc(sc.name || "") + '</div>'
+          html += '<div class="wf-detail-section"><div class="wf-detail-label">场景' + (i + 1) + ': ' + esc(sc.name || "")
+            + ' <button class="wf-scene-del-btn" data-del-scene-item="' + i + '" title="删除该场景" style="float:right;background:transparent;border:none;color:#ef4444;cursor:pointer;font-size:12px;"><i class="fa fa-trash-o"></i></button>'
+            + '</div>'
             + '<textarea class="wf-detail-textarea wf-editable" data-edit-field="scenes.' + i + '.description" rows="3">' + esc(sc.description || "") + '</textarea>'
             + (sc.imageUrl ? '<img class="wf-detail-img wf-preview-img" src="' + esc(sc.imageUrl) + '">' : '')
             + renderItemRefImagesSection(sc, "scenes." + i)
@@ -477,9 +487,11 @@
         html += '<div class="wf-detail-section"><textarea class="wf-detail-textarea wf-editable" data-edit-field="description" rows="3">' + esc(v.description) + '</textarea>'
           + (v.imageUrl ? '<img class="wf-detail-img wf-preview-img" src="' + esc(v.imageUrl) + '">' : '') + '</div>';
       }
-      html += '<div class="wf-detail-section"><div class="wf-detail-label">手动添加场景</div>'
-        + '<input class="wf-detail-input wf-manual-label" placeholder="场景名称（如：竹林小径）" style="margin-bottom:6px;">'
-        + '<div class="wf-upload-wrap"><label class="wf-upload-btn"><i class="fa fa-upload"></i> 上传场景图<input type="file" accept="image/*" class="wf-file-input" data-upload-add="scene" style="display:none"></label></div></div>';
+      if (!ctx.isPipelineNode) {
+        html += '<div class="wf-detail-section"><div class="wf-detail-label">手动添加场景</div>'
+          + '<input class="wf-detail-input wf-manual-label" placeholder="场景名称（如：竹林小径）" style="margin-bottom:6px;">'
+          + '<div class="wf-upload-wrap"><label class="wf-upload-btn"><i class="fa fa-upload"></i> 上传场景图<input type="file" accept="image/*" class="wf-file-input" data-upload-add="scene" style="display:none"></label></div></div>';
+      }
       html += renderRefImagesSection(nd, "scene");
       if (!ctx.isPipelineNode) { var _dis = _getDisabledAttr(ctx, "scene"); html += '<div class="wf-detail-actions"><button class="wf-tb-btn primary" data-gen-seg="' + ctx.segIndex + '" data-gen-type="scene"' + _dis + '><i class="fa fa-refresh"></i> ' + (v && v.scenes && v.scenes.some(function(s){return s.imageUrl;}) ? "全部重新生成" : "全部生成图片") + '</button></div>'; }
       return html;
@@ -507,11 +519,18 @@
       var scenes = sceneV && sceneV.scenes ? sceneV.scenes : [];
       var isLast = ctx.segIndex === wf.segments.length - 1;
       var prevLastDesc = "";
+      var prevPlanningHistory = [];
+      var prevStoryboardUrl = "";
       if (ctx.segIndex > 0) {
         var prevSeg = wf.segments[ctx.segIndex - 1];
         if (prevSeg) {
           var prevLfV = NR.getActiveVersion((prevSeg.lastFrames || [])[0]);
           if (prevLfV) prevLastDesc = prevLfV.description || "";
+          var prevPlanNd = (prevSeg.planFramess || [])[0];
+          if (prevPlanNd) prevPlanningHistory = prevPlanNd.planningHistory || [];
+          var prevSbNd = (prevSeg.storyboards || [])[0];
+          var prevSbV = NR.getActiveVersion(prevSbNd);
+          if (prevSbV && prevSbV.imageUrl) prevStoryboardUrl = prevSbV.imageUrl;
         }
       }
       var planNd = ctx.nodeData;
@@ -519,6 +538,7 @@
       var data = await callApi("/api/workflow/generate/plan-frames", {
         workflow_id: wf.id, chat_config_id: getConfigId("chat", "planFrames"),
         segment_text: seg.scriptText,
+        segment_index: ctx.segIndex,
         characters: mcV ? mcV.characters : [],
         minor_characters: minorV ? minorV.characters : [],
         scenes: scenes, style: wf.input.style,
@@ -526,6 +546,8 @@
         resolution: getStoryboardResolution(),
         is_last_segment: isLast,
         prev_last_frame_desc: prevLastDesc,
+        prev_planning_history: prevPlanningHistory,
+        prev_storyboard_url: prevStoryboardUrl,
         user_hint: (planV && planV.userHint) || (planNd && planNd.userHint) || "",
         skip_first_frame: skipFF,
         skip_storyboard: skipSB,
@@ -534,6 +556,13 @@
       var ff = data.first_frame || {};
       var sb = data.storyboard || {};
       var lf = data.last_frame || {};
+
+      // 保存规划历史记录
+      if (data.planning_record) {
+        if (!planNd.planningHistory) planNd.planningHistory = [];
+        planNd.planningHistory.push(data.planning_record);
+      }
+
       if (!skipFF && ff.description) {
         var ffNd = (seg.firstFrames || [])[0];
         if (ffNd) NR.addVersion(ffNd, { description: ff.description || "", visualPrompt: ff.visual_prompt || "" });
@@ -560,6 +589,30 @@
         html += '<div class="wf-detail-text" style="color:#f59e0b;">首帧、分镜、尾帧节点均已跳过，无需规划</div>';
         return html;
       }
+
+      // 显示规划历史
+      if (nd.planningHistory && nd.planningHistory.length > 0) {
+        html += '<div class="wf-detail-section"><div class="wf-detail-label">规划历史 (' + nd.planningHistory.length + '次)</div>';
+        html += '<div style="max-height:200px;overflow-y:auto;font-size:11px;color:#64748b;">';
+        nd.planningHistory.forEach(function (record, i) {
+          var date = new Date(record.timestamp * 1000);
+          var timeStr = date.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+          html += '<div style="border-left:2px solid #e2e8f0;padding-left:8px;margin-bottom:8px;">';
+          html += '<div style="font-weight:600;color:#475569;">第' + (i + 1) + '次规划 - ' + timeStr + '</div>';
+          if (record.first_frame && record.first_frame.description) {
+            html += '<div>首帧: ' + esc(record.first_frame.description.slice(0, 40)) + '...</div>';
+          }
+          if (record.storyboard && record.storyboard.grid_prompts) {
+            html += '<div>分镜: ' + record.grid_label + ' (' + record.storyboard.grid_prompts.length + '格)</div>';
+          }
+          if (record.last_frame && record.last_frame.description) {
+            html += '<div>尾帧: ' + esc(record.last_frame.description.slice(0, 40)) + '...</div>';
+          }
+          html += '</div>';
+        });
+        html += '</div></div>';
+      }
+
       html += '<div class="wf-detail-section"><div class="wf-detail-label">补充指令</div>'
         + '<textarea class="wf-detail-textarea wf-editable" data-edit-field="userHint" rows="2" placeholder="可选：补充构图、镜头要求等...">' + esc((nd && nd.userHint) || "") + '</textarea></div>';
       html += '<div class="wf-detail-section"><div class="wf-detail-label">风格参考图</div>'
@@ -618,12 +671,25 @@
         image_count: getImageCount("firstFrame"),
       });
       var urls = data.imageUrls || (data.imageUrl ? [data.imageUrl] : []);
+
+      // 生成图片后锁定节点
+      if (urls.length > 0) {
+        nd.isLocked = true;
+        nd.segmentIndex = ctx.segIndex;
+      }
+
       return { description: desc || data.description || "", visualPrompt: vp, imageUrl: urls[0] || "", imageUrls: urls };
     },
     renderDetail: function (nd, wf, ctx) {
       var v = NR.getActiveVersion(nd);
       var html = "";
       if (v) {
+        // 显示锁定状态
+        if (nd.isLocked) {
+          html += '<div class="wf-detail-section" style="background:#fef3c7;padding:8px;border-radius:4px;margin-bottom:8px;">'
+            + '<i class="fa fa-lock" style="color:#f59e0b;"></i> <strong style="color:#f59e0b;">节点已锁定</strong> - 图片已生成，防止误操作'
+            + '</div>';
+        }
         html += '<div class="wf-detail-section"><div class="wf-detail-label">画面描述</div><textarea class="wf-detail-textarea wf-editable" data-edit-field="description" rows="3">' + esc(v.description || "") + '</textarea></div>';
         if (v.visualPrompt) html += '<div class="wf-detail-section"><div class="wf-detail-label">生图提示词</div><textarea class="wf-detail-textarea wf-editable" data-edit-field="visualPrompt" rows="2">' + esc(v.visualPrompt) + '</textarea></div>';
         if (v.imageUrls && v.imageUrls.length > 1) {
@@ -664,6 +730,20 @@
       var sceneV = !wf.sceneSkip ? NR.getActiveVersion((seg.scenes || [])[0]) : null;
       var ffV = !wf.firstFrameSkip ? NR.getActiveVersion((seg.firstFrames || [])[0]) : null;
       var scenes = sceneV && sceneV.scenes ? sceneV.scenes : [];
+
+      // 获取前段分镜图URL作为参考
+      var prevStoryboardUrl = "";
+      if (ctx.segIndex > 0) {
+        var prevSeg = wf.segments[ctx.segIndex - 1];
+        if (prevSeg) {
+          var prevSbNd = (prevSeg.storyboards || [])[0];
+          var prevSbV = NR.getActiveVersion(prevSbNd);
+          if (prevSbV && prevSbV.images && prevSbV.images.length) {
+            prevStoryboardUrl = prevSbV.images[0];
+          }
+        }
+      }
+
       var sbPrompt = "";
       if (gridPrompts.length) {
         sbPrompt = gridPrompts.map(function (gp, i) { return "第" + (i + 1) + "格：" + gp; }).join("，");
@@ -676,18 +756,33 @@
         characters: mcV ? mcV.characters : [],
         scenes: scenes,
         first_frame_url: ffV ? (ffV.imageUrl || "") : "",
+        prev_storyboard_url: prevStoryboardUrl,
+        segment_index: ctx.segIndex,
         grid: getStoryboardGrid(),
         style: wf.input.style,
         ref_image_urls: nd.refImages || [],
         resolution: getStoryboardResolution(),
         image_count: getImageCount("storyboard"),
       });
+
+      // 生成图片后锁定节点
+      if (data.images && data.images.length > 0) {
+        nd.isLocked = true;
+        nd.segmentIndex = ctx.segIndex;
+      }
+
       return { description: desc, gridPrompts: gridPrompts, images: data.images || [], grid: data.grid || 4, gridLabel: data.grid_label || "" };
     },
     renderDetail: function (nd, wf, ctx) {
       var v = NR.getActiveVersion(nd);
       var html = "";
       if (v && v.gridPrompts && v.gridPrompts.length) {
+        // 显示锁定状态
+        if (nd.isLocked) {
+          html += '<div class="wf-detail-section" style="background:#fef3c7;padding:8px;border-radius:4px;margin-bottom:8px;">'
+            + '<i class="fa fa-lock" style="color:#f59e0b;"></i> <strong style="color:#f59e0b;">节点已锁定</strong> - 分镜图已生成，防止误操作'
+            + '</div>';
+        }
         html += '<div class="wf-detail-section"><div class="wf-detail-label">分镜描述 (' + v.gridPrompts.length + '格)</div>';
         v.gridPrompts.forEach(function (gp, i) {
           html += '<div style="margin-bottom:6px;"><strong>格' + (i + 1) + '</strong>'
@@ -762,12 +857,25 @@
         image_count: getImageCount("lastFrame"),
       });
       var urls = data.imageUrls || (data.imageUrl ? [data.imageUrl] : []);
+
+      // 生成图片后锁定节点
+      if (urls.length > 0) {
+        nd.isLocked = true;
+        nd.segmentIndex = ctx.segIndex;
+      }
+
       return { description: desc || data.description || "", visualPrompt: vp, imageUrl: urls[0] || "", imageUrls: urls };
     },
     renderDetail: function (nd, wf, ctx) {
       var v = NR.getActiveVersion(nd);
       var html = "";
       if (v) {
+        // 显示锁定状态
+        if (nd.isLocked) {
+          html += '<div class="wf-detail-section" style="background:#fef3c7;padding:8px;border-radius:4px;margin-bottom:8px;">'
+            + '<i class="fa fa-lock" style="color:#f59e0b;"></i> <strong style="color:#f59e0b;">节点已锁定</strong> - 图片已生成，防止误操作'
+            + '</div>';
+        }
         html += '<div class="wf-detail-section"><div class="wf-detail-label">画面描述</div><textarea class="wf-detail-textarea wf-editable" data-edit-field="description" rows="3">' + esc(v.description || "") + '</textarea></div>';
         if (v.visualPrompt) html += '<div class="wf-detail-section"><div class="wf-detail-label">生图提示词</div><textarea class="wf-detail-textarea wf-editable" data-edit-field="visualPrompt" rows="2">' + esc(v.visualPrompt) + '</textarea></div>';
         if (v.imageUrls && v.imageUrls.length > 1) {
@@ -815,6 +923,30 @@
       var ffV = !ffSkip ? NR.getActiveVersion((seg.firstFrames || [])[0]) : null;
       var lfV = !lfSkip ? NR.getActiveVersion((seg.lastFrames || [])[0]) : null;
 
+      // 收集所有段落的规划历史和执行进度
+      var allSegmentsContext = [];
+      for (var i = 0; i < wf.segments.length; i++) {
+        var s = wf.segments[i];
+        var planNd = (s.planFramess || [])[0];
+        var planHistory = planNd ? (planNd.planningHistory || []) : [];
+        var sbNd = (s.storyboards || [])[0];
+        var sbVer = NR.getActiveVersion(sbNd);
+        var ffNd = (s.firstFrames || [])[0];
+        var ffVer = NR.getActiveVersion(ffNd);
+        var lfNd = (s.lastFrames || [])[0];
+        var lfVer = NR.getActiveVersion(lfNd);
+
+        allSegmentsContext.push({
+          segment_index: i,
+          script_text: s.scriptText || "",
+          planning_history: planHistory,
+          first_frame_generated: !!(ffVer && ffVer.imageUrl),
+          storyboard_generated: !!(sbVer && sbVer.images && sbVer.images.length),
+          last_frame_generated: !!(lfVer && lfVer.imageUrl),
+          executed_to: sbNd ? (sbNd.executedTo || null) : null
+        });
+      }
+
       var scenes = sceneV && sceneV.scenes ? sceneV.scenes : (sceneV && sceneV.description ? [{ name: "场景", description: sceneV.description, imageUrl: sceneV.imageUrl }] : []);
       var gridPrompts = normalizeGridPrompts((sbV && sbV.gridPrompts) ? sbV.gridPrompts : []);
       var data = await callApi("/api/workflow/generate/video-prompt", {
@@ -831,6 +963,7 @@
         first_frame: ffV ? { description: ffV.description, imageUrl: ffV.imageUrl } : {},
         last_frame: lfV ? { description: lfV.description, imageUrl: lfV.imageUrl } : {},
         style: wf.input.style, type: wf.input.type,
+        all_segments_context: allSegmentsContext
       });
       return { fullText: data.full_text || "" };
     },
@@ -1615,10 +1748,17 @@
     var sbV = NR.getActiveVersion((seg.storyboards || [])[0]);
     var lfV = NR.getActiveVersion((seg.lastFrames || [])[0]);
 
+    var refImageUrls = [];
+    if (ffV && ffV.imageUrl) refImageUrls.push(ffV.imageUrl);
+    if (sbV && sbV.images) refImageUrls = refImageUrls.concat(sbV.images);
+    if (lfV && lfV.imageUrl) refImageUrls.push(lfV.imageUrl);
+
     for (var attempt = 0; attempt < maxRetries; attempt++) {
       engine.setNodeReviewing("videoPrompt", segIdx, true, wf.id);
       engine._addHistory(wf, "videoPrompt", 0, segIdx, "reviewing");
       if (rerender) rerender();
+      var shouldRegen = false;
+      var failAnalysis = "";
       try {
         var data = await callApi("/api/workflow/review/video-prompt", {
           chat_config_id: getConfigId("chat", "videoPrompt"),
@@ -1629,17 +1769,22 @@
           last_frame_url: lfV ? (lfV.imageUrl || "") : "",
           storyboard_urls: sbV ? (sbV.images || []) : [],
         });
+        var analysis = (data.analysis || "").trim();
         if (data.passed) {
-          engine._updateLastReviewHistory(wf, "videoPrompt", segIdx, "review_passed");
+          engine._updateLastReviewHistory(wf, "videoPrompt", segIdx, "review_passed", analysis);
           vpNd.reviewStatus = "passed";
           break;
         }
-        engine._updateLastReviewHistory(wf, "videoPrompt", segIdx, "review_failed", data.analysis || "审核不通过");
-        if (data.revised_full_text) {
-          NR.addVersion(vpNd, { fullText: data.revised_full_text });
+        failAnalysis = analysis || "审核未通过但模型未给出具体原因";
+        engine._updateLastReviewHistory(wf, "videoPrompt", segIdx, "review_failed", failAnalysis);
+
+        if (data.revised_full_text && data.revised_full_text.trim()) {
+          NR.addVersion(vpNd, { fullText: data.revised_full_text.trim() });
           engine.saveWorkflow(wf);
           v = NR.getActiveVersion(vpNd);
-        } else { break; }
+        } else {
+          shouldRegen = true;
+        }
       } catch (err) {
         engine._addHistory(wf, "videoPrompt", 0, segIdx, "error", "审核调用失败: " + err.message);
         break;
@@ -1647,6 +1792,32 @@
         engine.setNodeReviewing("videoPrompt", segIdx, false, wf.id);
         delete state.runningNodes["seg_" + segIdx + "_videoPrompt_0"];
         if (rerender) rerender();
+      }
+
+      if (!shouldRegen) continue;
+      if (attempt === maxRetries - 1) break;
+
+      try {
+        var prevHistory = v.chatHistory || [];
+        var iterData = await callApi("/api/workflow/generate/video-prompt-iterate", {
+          chat_config_id: getConfigId("chat", "videoPrompt"),
+          current_text: v.fullText,
+          script_text: seg.scriptText || "",
+          image_urls: refImageUrls,
+          chat_history: prevHistory,
+          user_message: failAnalysis,
+        });
+        var newText = (iterData.full_text || "").trim();
+        if (!newText) break;
+        var newHistory = prevHistory.slice();
+        newHistory.push({ role: "user", content: "[自动审核反馈] " + failAnalysis });
+        newHistory.push({ role: "assistant", content: iterData.analysis || "done" });
+        NR.addVersion(vpNd, { fullText: newText, chatHistory: newHistory });
+        engine.saveWorkflow(wf);
+        v = NR.getActiveVersion(vpNd);
+      } catch (err2) {
+        engine._addHistory(wf, "videoPrompt", 0, segIdx, "error", "重新生成失败: " + err2.message);
+        break;
       }
     }
     vpNd.reviewStatus = "passed";

@@ -469,21 +469,21 @@ async def plan_characters_scenes(body: dict):
 风格：{style}，类型：{vtype}{hint_line}
 
 要求：
-1. 主要人物：贯穿多段的核心角色。description 只写详细的穿着、服饰、发型、体型等外貌特征，不写表情和动作。visual_prompt 用于AI生成2x2四视图角色模型图（正面/侧面/背面/四分之三角度），人物保持直立姿势，白色背景
-2. 每段的次要人物：仅在该段出现的配角，如果该段没有次要人物则返回空数组。次要人物不能和主要人物重复。描述规则同主要人物
+1. 主要人物：贯穿多段的核心角色。description 必须以"【性别：男/女/其他】"开头（即使剧本未明说，也要根据名字、行为、称谓等合理推断并明确写出；不得留"未知"），随后写详细的穿着、服饰、发型、体型、年龄段等外貌特征，不写表情和动作。visual_prompt 用于AI生成2x2四视图角色模型图（正面/侧面/背面/四分之三角度），人物保持直立姿势，白色背景，且必须在开头体现性别（如"年轻男性角色"/"中年女性角色"）
+2. 每段的次要人物：仅在该段出现的配角，如果该段没有次要人物则返回空数组。次要人物不能和主要人物重复。description 同样以"【性别：男/女/其他】"开头，visual_prompt 同样在开头体现性别
 3. 每段的场景：纯环境描述，不含任何人物。visual_prompt 用于AI生成2x2四机位全景场景图（从四个不同角度拍摄同一场景），必须明确"无人物、无人影"
-4. 同一角色在不同段落的描述必须一致
+4. 同一角色在不同段落的描述必须一致，性别绝不可前后矛盾
 5. 场景描述要前后连贯，相同场景保持一致性
 
 只输出JSON：
 {{
   "main_characters": [
-    {{"name": "角色名", "description": "详细穿着、服饰、发型、体型等外貌特征，不含表情和动作", "visual_prompt": "2x2四视图，角色模型图，直立姿势，白色背景，正面/侧面/背面/四分之三角度，详细外貌描述..."}}
+    {{"name": "角色名", "description": "【性别：男】详细穿着、服饰、发型、体型、年龄段等外貌特征，不含表情和动作", "visual_prompt": "2x2四视图，年轻男性角色模型图，直立姿势，白色背景，正面/侧面/背面/四分之三角度，详细外貌描述..."}}
   ],
   "segments": [
     {{
       "index": 0,
-      "minor_characters": [{{"name": "角色名", "description": "详细穿着外貌特征", "visual_prompt": "2x2四视图，角色模型图，直立姿势，白色背景，详细外貌描述..."}}],
+      "minor_characters": [{{"name": "角色名", "description": "【性别：女】详细穿着外貌特征", "visual_prompt": "2x2四视图，中年女性角色模型图，直立姿势，白色背景，详细外貌描述..."}}],
       "scenes": [{{"name": "场景名称标签", "description": "场景环境详细描述", "visual_prompt": "2x2四机位全景图，无人物无人影，{style}风格，从四个不同角度拍摄，场景描述..."}}]
     }}
   ]
@@ -498,6 +498,7 @@ async def plan_frames(body: dict):
     if not config:
         raise HTTPException(status_code=400, detail="未找到聊天配置")
     segment_text = body.get("segment_text", "")
+    segment_index = body.get("segment_index", 0)
     characters = body.get("characters", [])
     minor_characters = body.get("minor_characters", [])
     scenes = body.get("scenes", [])
@@ -505,6 +506,8 @@ async def plan_frames(body: dict):
     grid = body.get("grid", 4)
     is_last_segment = body.get("is_last_segment", False)
     prev_last_frame_desc = body.get("prev_last_frame_desc", "")
+    prev_planning_history = body.get("prev_planning_history", [])
+    prev_storyboard_url = body.get("prev_storyboard_url", "")
     user_hint = body.get("user_hint", "")
     skip_first_frame = body.get("skip_first_frame", False)
     skip_storyboard = body.get("skip_storyboard", False)
@@ -513,8 +516,48 @@ async def plan_frames(body: dict):
 
     grid, rows, cols, grid_label = compute_grid_layout(grid, resolution)
 
-    char_desc = "\n".join(f"- {c.get('name','')}: {c.get('visual_prompt', c.get('description',''))}" for c in characters + minor_characters) if (characters or minor_characters) else "无特定角色"
-    scene_desc = "\n".join(f"- {s.get('name','')}: {s.get('visual_prompt', s.get('description',''))}" for s in scenes) if scenes else "无特定场景"
+    def _fmt_char(c):
+        name = c.get("name", "")
+        desc = (c.get("description") or "").strip()
+        vp = (c.get("visual_prompt") or "").strip()
+        parts = []
+        if desc:
+            parts.append(f"外貌设定: {desc}")
+        if vp and vp != desc:
+            parts.append(f"视觉提示: {vp}")
+        body_text = " | ".join(parts) if parts else "（无设定）"
+        return f"- {name}: {body_text}"
+
+    def _fmt_scene(s):
+        name = s.get("name", "")
+        desc = (s.get("description") or "").strip()
+        vp = (s.get("visual_prompt") or "").strip()
+        parts = []
+        if desc:
+            parts.append(f"环境设定: {desc}")
+        if vp and vp != desc:
+            parts.append(f"视觉提示: {vp}")
+        body_text = " | ".join(parts) if parts else "（无设定）"
+        return f"- {name}: {body_text}"
+
+    char_desc = "\n".join(_fmt_char(c) for c in characters + minor_characters) if (characters or minor_characters) else "无特定角色"
+    scene_desc = "\n".join(_fmt_scene(s) for s in scenes) if scenes else "无特定场景"
+
+    # 构建前段规划历史上下文
+    prev_context = ""
+    if segment_index > 0 and prev_planning_history:
+        latest_plan = prev_planning_history[-1] if prev_planning_history else {}
+        if latest_plan:
+            prev_context = f"\n\n【前一段落的规划记录】\n"
+            if latest_plan.get("first_frame"):
+                prev_context += f"前段首帧：{latest_plan['first_frame'].get('description', '')}\n"
+            if latest_plan.get("storyboard") and latest_plan["storyboard"].get("grid_prompts"):
+                prev_context += f"前段分镜图（{len(latest_plan['storyboard']['grid_prompts'])}格）：\n"
+                for i, gp in enumerate(latest_plan["storyboard"]["grid_prompts"][:3]):
+                    prev_context += f"  格{i+1}: {gp[:80]}...\n"
+            if latest_plan.get("last_frame"):
+                prev_context += f"前段尾帧：{latest_plan['last_frame'].get('description', '')}\n"
+            prev_context += "本段规划需要与前段自然衔接，保持视觉连贯性。\n"
 
     prev_hint = f"\n前一段的尾帧画面：{prev_last_frame_desc}\n本段首帧必须能从前段尾帧自然过渡。" if prev_last_frame_desc else ""
     ending_hint = "这是整个视频的最后一段，尾帧需要有结束感和余韵。" if is_last_segment else "这段之后还有下一段，尾帧需要为下一段做铺垫和过渡。"
@@ -568,12 +611,12 @@ async def plan_frames(body: dict):
 
     system_prompt = f"""你是一位专业的电影美术指导和分镜师。根据剧本片段，统一规划该段的{plan_target}，确保各部分之间的过渡连贯。
 风格：{style}
-{ending_hint}{prev_hint}{hint_line}
+{ending_hint}{prev_hint}{hint_line}{prev_context}
 
-出场人物：
+出场人物（必须严格遵循以下设定，不得擅自改写性别、外貌、穿着）：
 {char_desc}
 
-场景环境：
+场景环境（必须严格遵循以下设定）：
 {scene_desc}
 {storyboard_rules}
 
@@ -583,6 +626,8 @@ async def plan_frames(body: dict):
 {f"- 分镜图第{rows}排第{cols}格必须能自然过渡到尾帧画面" if not skip_storyboard and not skip_last_frame else ""}
 {"- 尾帧是该段最后一帧" if not skip_last_frame else ""}
 - 所有 visual_prompt 用于AI生图，必须包含：人物外貌和站位、场景环境、构图方式、光线方向
+- **人物出现时必须按"出场人物"中的设定描述**：沿用其性别（如"年轻男性"/"中年女性"）、发型、服饰、体型等关键特征；严禁出现与设定冲突的描述（例如设定为男性却写成"女子"、设定为古装却写成"西装"）
+- **场景出现时必须按"场景环境"中的设定描述**，不得更改场景核心要素
 - visual_prompt 中不要写风格描述，风格"{style}"会在生图时统一附加到提示词末尾
 - 所有描述必须具体到可以直接画出来的程度，不要使用模糊的形容词
 
@@ -599,12 +644,13 @@ async def plan_frames(body: dict):
 审查要点：
 1. 每格分镜是否都是视频中的关键节点（不是无意义的过渡画面）
 2. 人物在画面中的站位是否明确（左/中/右/前景/背景）
-3. 背景环境描述是否具体（不能只说"某个场景"，要描述光线、物体、氛围）
-4. 相邻格之间的动作和情节是否连贯合理
-5. 事件的因果关系是否合理（人物的动作要有动机和结果）
-6. visual_prompt 是否足够详细，能让AI直接生成准确的图片
-7. **长度预算**：grid_prompts 每一格不超过 {per_cell_budget if not skip_storyboard else 200} 个中文字，全部格子加起来不超过 2000 字。超长必须精简。
-8. 每格描述中不要含有风格词（如"{style}风格""水墨""赛博朋克风格"等），风格统一在生图时附加。发现保留了风格词的要删掉。
+3. **人物描述必须严格遵循"出场人物"中的设定**：性别、发型、服饰、体型不得偏离；若出现与设定冲突（例如设定男性却写成"女子"、设定古装却写成"西装"）必须改回
+4. 背景环境描述是否具体（不能只说"某个场景"，要描述光线、物体、氛围），且不得偏离"场景环境"中的设定
+5. 相邻格之间的动作和情节是否连贯合理
+6. 事件的因果关系是否合理（人物的动作要有动机和结果）
+7. visual_prompt 是否足够详细，能让AI直接生成准确的图片
+8. **长度预算**：grid_prompts 每一格不超过 {per_cell_budget if not skip_storyboard else 200} 个中文字，全部格子加起来不超过 2000 字。超长必须精简。
+9. 每格描述中不要含有风格词（如"{style}风格""水墨""赛博朋克风格"等），风格统一在生图时附加。发现保留了风格词的要删掉。
 
 风格：{style}
 出场人物：{char_desc}
@@ -654,7 +700,19 @@ async def plan_frames(body: dict):
     if skip_last_frame:
         result["last_frame"] = {}
 
-    return JSONResponse({"code": 0, "data": result})
+    # 保存规划历史记录
+    import time
+    planning_record = {
+        "timestamp": time.time(),
+        "segment_index": segment_index,
+        "first_frame": result.get("first_frame", {}),
+        "storyboard": result.get("storyboard", {}),
+        "last_frame": result.get("last_frame", {}),
+        "grid": grid,
+        "grid_label": grid_label
+    }
+
+    return JSONResponse({"code": 0, "data": result, "planning_record": planning_record})
 
 
 @router.post("/generate/main-characters")
@@ -920,12 +978,43 @@ async def gen_video_prompt(body: dict):
     style = body.get("style", "")
     vtype = body.get("type", "")
     duration = body.get("duration", 15)
+    all_segments_context = body.get("all_segments_context", [])
 
     has_first = bool(first_frame.get("imageUrl"))
     has_sb = bool(storyboard_images) and storyboard_grid > 0
     has_last = bool(last_frame.get("imageUrl"))
-    grid_label = {4: "2x2", 6: "2x3", 9: "3x3", 16: "4x4"}.get(storyboard_grid, "")
-    _sg, rows, cols, _gl = compute_grid_layout(storyboard_grid)
+
+    # 构建全局上下文：所有段落的规划历史和执行进度
+    context_summary = ""
+    if all_segments_context:
+        context_summary = "\n\n【全局上下文 - 所有段落的规划和执行进度】\n"
+        for ctx in all_segments_context:
+            idx = ctx.get("segment_index", 0)
+            executed_to = ctx.get("executed_to")
+            context_summary += f"\n第{idx+1}段："
+            if ctx.get("first_frame_generated"):
+                context_summary += " 首帧已生成"
+            if ctx.get("storyboard_generated"):
+                context_summary += " 分镜已生成"
+            if ctx.get("last_frame_generated"):
+                context_summary += " 尾帧已生成"
+            if executed_to:
+                context_summary += f" [执行进度: {executed_to}]"
+
+            # 添加规划历史摘要
+            plan_history = ctx.get("planning_history", [])
+            if plan_history:
+                latest = plan_history[-1]
+                if latest.get("first_frame"):
+                    ff_desc = latest["first_frame"].get("description", "")
+                    if ff_desc:
+                        context_summary += f"\n  首帧规划: {ff_desc[:60]}..."
+                if latest.get("last_frame"):
+                    lf_desc = latest["last_frame"].get("description", "")
+                    if lf_desc:
+                        context_summary += f"\n  尾帧规划: {lf_desc[:60]}..."
+
+        context_summary += f"\n\n当前正在生成第{seg_idx+1}段的视频提示词。请确保本段的开场能自然衔接前段的结尾，整体保持视觉连贯性。\n"
 
     # 构建 @图片引用列表
     img_ref_lines = []
@@ -953,7 +1042,7 @@ async def gen_video_prompt(body: dict):
     sb_ref = ""
     if has_sb:
         sb_ref = f"@图片{img_idx}"
-        img_ref_lines.append(f"@图片{img_idx} 是分镜图（{grid_label}宫格）")
+        img_ref_lines.append(f"@图片{img_idx} 是分镜图（共{storyboard_grid}格，具体行列布局请自行观察图片判断）")
         img_idx += 1
     last_frame_ref = ""
     if has_last:
@@ -963,14 +1052,12 @@ async def gen_video_prompt(body: dict):
 
     img_ref_block = "\n".join(img_ref_lines) if img_ref_lines else ""
 
-    # 构建分镜格位列表（不预分配时间，由模型智能分配）
+    # 构建分镜格位列表（按阅读顺序编号，不写行列，由模型观察分镜图自行判断真实行列布局）
     grid_time_hints = []
     if has_sb and storyboard_grid > 0:
         for gi in range(storyboard_grid):
-            r = gi // cols + 1
-            c_pos = gi % cols + 1
             gp_desc = grid_prompts[gi] if gi < len(grid_prompts) else ""
-            grid_time_hints.append(f"分镜图第{r}排第{c_pos}格" + (f"：{gp_desc}" if gp_desc else ""))
+            grid_time_hints.append(f"第{gi+1}个格位（按从左到右、从上到下的阅读顺序）" + (f"：{gp_desc}" if gp_desc else ""))
         grid_time_text = "\n".join(grid_time_hints)
     else:
         grid_time_text = ""
@@ -993,11 +1080,13 @@ async def gen_video_prompt(body: dict):
 
     if has_any_grid:
         grid_section = f"""每段对应分镜图的一个格位，总时长{duration}秒，共{storyboard_grid}格。
+**布局由你自行观察分镜图判断**：请仔细看分镜图实际有几行几列（例如 6 格可能是 2行3列，也可能是 3行2列；9 格是 3行3列，等等），然后按真实行列填写"第X排第Y格"。不要凭空假设布局，也不要写出超过真实行列范围的索引。
+阅读顺序：从左到右、从上到下。下面列出的"第N个格位"即按此顺序编号，第1个格 = 左上角第一格，最后一个格 = 右下角最后一格。
 你需要根据每格的剧情密度和节奏需要，智能分配每格的时长（动作密集的格分配更多时间，静态画面的格可以更短），所有格的时长之和必须等于{duration}秒。
 {f"首帧画面描述：{ff_desc}" if ff_desc else ""}
 {f"尾帧画面描述：{lf_desc}" if lf_desc else ""}
 
-分镜格位：
+分镜格位（按阅读顺序给出，请你对照分镜图自行推断每个格位所在的真实行列）：
 {grid_time_text}"""
     else:
         # 无分镜时，让模型自行拆分关键节点
@@ -1007,11 +1096,11 @@ async def gen_video_prompt(body: dict):
 {f"尾帧画面描述：{lf_desc}" if lf_desc else ""}
 每个时间段必须对应一个有明确叙事功能的关键画面，不要写无意义的过渡。"""
 
-    cut_format = f"格式：【起止时间 | 第X排第Y格 | 画面概述→动作变化 | 镜头运动方式】然后紧跟详细描述" if has_any_grid else "格式：【起止时间 | 画面概述→动作变化 | 镜头运动方式】然后紧跟详细描述"
+    cut_format = "格式：【起止时间 | 第X排第Y格 | 画面概述→动作变化 | 镜头运动方式】然后紧跟详细描述（X/Y 按你观察分镜图判断出的真实行列填写）" if has_any_grid else "格式：【起止时间 | 画面概述→动作变化 | 镜头运动方式】然后紧跟详细描述"
 
     example_cuts = (
         "【0-2s | 第1排第1格 | 冰封特写→急拉全景 | 固定→急拉】固定镜头超特写锁焦小明闭合的眼睑，睫毛上结着细碎冰晶...紧接着镜头以6m/s速度急拉至全景——小明立于竹林中央...\n"
-        "【2-4s | 第1排第2格 | 俯冲环绕+螺旋爆发 | 俯冲环绕+螺旋升镜】高空8米以30度斜角极速俯冲环绕..."
+        "【2-4s | 第1排第2格 | 俯冲环绕+螺旋爆发 | 俯冲环绕+螺旋升镜】高空8米以30度斜角极速俯冲环绕...（示例仅演示格式，真实行列以你观察分镜图为准）"
     ) if has_any_grid else (
         "【0-2s | 冰封特写→急拉全景 | 固定→急拉】固定镜头超特写锁焦小明闭合的眼睑，睫毛上结着细碎冰晶...紧接着镜头以6m/s速度急拉至全景——小明立于竹林中央...\n"
         "【2-4s | 俯冲环绕+螺旋爆发 | 俯冲环绕+螺旋升镜】高空8米以30度斜角极速俯冲环绕..."
@@ -1020,6 +1109,7 @@ async def gen_video_prompt(body: dict):
     system_prompt = f"""你是AI视频生成提示词专家。根据{"提供的参考图片和" if has_any_ref else ""}剧本，为这段{duration}秒视频写提示词。{"仔细观察每张参考图片的实际内容。" if has_any_ref else ""}
 
 段落：第{seg_idx+1}段/共{total}段 | 风格：{style} | 类型：{vtype}
+{context_summary}
 
 严格按照以下格式输出（不要输出JSON，直接输出纯文本）：
 
@@ -1657,6 +1747,10 @@ async def review_video_prompt(body: dict):
         result = await call_llm_vision_json(config, system_prompt, user_prompt, vision_images)
     else:
         result = await call_llm_json(config, system_prompt, user_prompt)
+
+    if not result.get("passed") and not (result.get("analysis") or "").strip():
+        result["analysis"] = "审核未通过但模型未给出具体原因，请人工检查提示词或画面对照关系"
+
     return JSONResponse({"code": 0, "data": result})
 
 
