@@ -98,10 +98,12 @@
       if (!def) return;
       var isSkipped = wf && wf[step.nodeType + "Skip"];
       var isRunning = false;
-      if (engine.runningWfId === (wf && wf.id)) {
-        Object.keys(engine.runningNodes).forEach(function (k) {
-          if (k.indexOf(step.nodeType) >= 0) isRunning = true;
-        });
+      if (wf) {
+        var runKeys = Object.keys(engine._state(wf.id).runningNodes);
+        var needle = step.category === "segment" ? "_" + step.nodeType + "_" : step.nodeType + "_";
+        for (var ki = 0; ki < runKeys.length; ki++) {
+          if (runKeys[ki].indexOf(needle) >= 0) { isRunning = true; break; }
+        }
       }
       var statusCls = isRunning ? "running" : (isSkipped ? "skipped" : "");
       var selected = engine.selectedNodeKey === step.nodeType ? "selected" : "";
@@ -113,7 +115,7 @@
 
       html += '<div class="wf-pipe-node ' + statusCls + ' ' + selected + (isPlan ? ' wf-pipe-plan' : '') + '" data-pipe-node="' + step.nodeType + '">'
         + '<div class="wf-pipe-icon" style="background:' + def.color + '22;color:' + def.color + '"><i class="fa ' + def.icon + '"></i></div>'
-        + '<div class="wf-pipe-label">' + def.label + (isSkipped ? ' <span style="font-size:9px;color:#64748b;">(跳过)</span>' : '') + '</div>'
+        + '<div class="wf-pipe-label">' + def.label + (isSkipped ? ' <span style="font-size:9px;color:#64748b;">(跳过)</span>' : '') + (isRunning ? ' <span style="font-size:9px;color:#60a5fa;"><i class="fa fa-spinner fa-spin"></i> 生成中</span>' : '') + '</div>'
         + '</div>';
     });
 
@@ -345,10 +347,20 @@
     var branchLabel = branchIdx > 0 ? ' <span class="wf-branch-badge">#' + (branchIdx + 1) + '</span>' : "";
     var isRunning = !!engine.runningNodes[key];
     var isReviewing = engine.runningNodes[key] === "reviewing";
+    // 单独生成某一项（如 mainCharacters_0_char_2、seg_0_scene_0_item_1）时，卡片也视为 running
+    var hasItemRunning = false;
+    if (!isRunning) {
+      var prefix = key + "_";
+      var runKeys = Object.keys(engine.runningNodes);
+      for (var rki = 0; rki < runKeys.length; rki++) {
+        if (runKeys[rki].indexOf(prefix) === 0) { isRunning = true; hasItemRunning = true; break; }
+      }
+    }
 
     var html = '<div class="wf-content-card status-' + statusCls + (isRunning ? ' running' : '') + '" data-node-key="' + key + '">';
 
     if (branchLabel) html += '<div class="wf-card-branch">' + branchLabel + '</div>';
+    if (hasItemRunning) html += '<div class="wf-card-loading"><i class="fa fa-spinner fa-spin"></i> 正在生成...</div>';
 
     var typeDef = NR.get(nodeType);
     var isImageNode = typeDef && typeDef.needsImage;
@@ -708,6 +720,7 @@
       var def = NR.get(h.nodeType);
       var label = def ? def.label : h.nodeType;
       var segLabel = (h.segIndex !== null && h.segIndex !== undefined) ? ' · 段' + (h.segIndex + 1) : '';
+      var itemLabel = h.itemLabel ? ' · ' + esc(h.itemLabel) : '';
       var time = '';
       try {
         var d = new Date(h.time);
@@ -729,7 +742,7 @@
       return '<div class="wf-exec-history-item">'
         + '<div class="' + dotCls + '"></div>'
         + '<div class="wf-exec-history-info">'
-        + '<span class="wf-exec-history-label">' + label + segLabel + statusLabel + '</span>'
+        + '<span class="wf-exec-history-label">' + label + segLabel + itemLabel + statusLabel + '</span>'
         + '<span class="wf-exec-history-time">' + time + '</span>'
         + '</div>'
         + errText
@@ -855,6 +868,23 @@
 
       var delRefBtn = e.target.closest && e.target.closest(".wf-ref-del-btn");
       if (delRefBtn) {
+        var itemRefPath = delRefBtn.getAttribute("data-del-item-ref");
+        if (itemRefPath) {
+          var refIdx = parseInt(delRefBtn.getAttribute("data-del-item-ref-idx"));
+          var key = engine.selectedNodeKey;
+          if (key != null && !isNaN(refIdx)) {
+            var nd = getNodeDataByKey(engine, key);
+            var v = NR.getActiveVersion(nd);
+            var item = getNestedField(v, itemRefPath);
+            if (item && item.refImages && refIdx < item.refImages.length) {
+              item.refImages.splice(refIdx, 1);
+              engine.save();
+              rerender();
+            }
+          }
+          e.stopPropagation();
+          return;
+        }
         var idx = parseInt(delRefBtn.getAttribute("data-del-ref"));
         var key = engine.selectedNodeKey;
         if (key != null && !isNaN(idx)) {
@@ -1056,6 +1086,7 @@
       var addType = e.target.getAttribute("data-upload-add");
       var directType = e.target.getAttribute("data-upload-direct");
       var refType = e.target.getAttribute("data-upload-ref");
+      var itemRefPath = e.target.getAttribute("data-upload-item-ref");
       var reader = new FileReader();
       reader.onload = function () {
         var wf = engine.current();
@@ -1100,6 +1131,15 @@
           } else if (refType) {
             if (!nd.refImages) nd.refImages = [];
             nd.refImages.push(url);
+          } else if (itemRefPath) {
+            var v = NR.getActiveVersion(nd);
+            if (v) {
+              var item = getNestedField(v, itemRefPath);
+              if (item) {
+                if (!item.refImages) item.refImages = [];
+                item.refImages.push(url);
+              }
+            }
           }
           engine.save();
           rerender();

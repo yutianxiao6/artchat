@@ -115,6 +115,18 @@
     return html;
   }
 
+  // 每个 item（人物/场景）下的独立参考图区块。itemPath 形如 "characters.0" / "scenes.2"。
+  function renderItemRefImagesSection(item, itemPath) {
+    var refs = (item && item.refImages) || [];
+    var html = '<div class="wf-detail-sub-section"><div class="wf-detail-sub-label" style="font-size:11px;color:#64748b;margin-top:6px;">本项参考图</div><div class="wf-ref-images-area" style="gap:6px;">';
+    refs.forEach(function (url, i) {
+      html += '<div class="wf-ref-img-item"><img class="wf-ref-img wf-preview-img" src="' + esc(url) + '" style="max-height:60px;"><button class="wf-ref-del-btn" data-del-item-ref="' + itemPath + '" data-del-item-ref-idx="' + i + '"><i class="fa fa-times"></i></button></div>';
+    });
+    html += '<label class="wf-upload-btn" style="padding:4px 8px;font-size:11px;"><i class="fa fa-plus"></i> 添加<input type="file" accept="image/*" class="wf-file-input" data-upload-item-ref="' + itemPath + '" style="display:none"></label>';
+    html += '</div></div>';
+    return html;
+  }
+
   /* ── Node: input ── */
   NR.register({
     id: "input", label: "输入", icon: "fa-pencil", color: "#8b5cf6",
@@ -288,7 +300,21 @@
         ref_image_urls: nd.refImages || [],
         image_count: getImageCount("mainCharacters"),
       });
-      return { characters: data.characters || [] };
+      var resultChars = data.characters || [];
+      var errs = data.errors || [];
+      var errMap = {};
+      errs.forEach(function (e) { errMap[e.index] = e.message || "生成失败"; });
+      if (ctx.engine) {
+        resultChars.forEach(function (c, i) {
+          var label = c.name || ("人物" + (i + 1));
+          if (errMap[i]) {
+            ctx.engine._addHistory(wf, "mainCharacters", 0, null, "error", errMap[i], label);
+          } else if (c.imageUrl) {
+            ctx.engine._addHistory(wf, "mainCharacters", 0, null, "done", null, label);
+          }
+        });
+      }
+      return { characters: resultChars };
     },
     renderDetail: function (nd, wf, ctx) {
       var v = NR.getActiveVersion(nd);
@@ -302,6 +328,7 @@
           html += '<div class="wf-detail-section"><div class="wf-detail-label">' + esc(c.name) + '</div>'
             + '<textarea class="wf-detail-textarea wf-editable" data-edit-field="characters.' + ci + '.description" rows="3">' + esc(c.description) + '</textarea>'
             + (c.imageUrl ? '<img class="wf-detail-img wf-preview-img" src="' + esc(c.imageUrl) + '">' : '')
+            + renderItemRefImagesSection(c, "characters." + ci)
             + '<div class="wf-upload-wrap"><label class="wf-upload-btn"><i class="fa fa-upload"></i> 替换图片<input type="file" accept="image/*" class="wf-file-input" data-upload-field="characters.' + ci + '.imageUrl" style="display:none"></label>'
             + '<button class="wf-char-gen-btn" data-gen-char="' + ci + '" data-gen-char-type="mainCharacters"' + charDis + '>'
             + (charRunning ? '<i class="fa fa-spinner fa-spin"></i> 生成中' : '<i class="fa fa-refresh"></i> ' + (c.imageUrl ? '重新生成' : '生成图片'))
@@ -338,7 +365,21 @@
         ref_image_urls: nd.refImages || [],
         image_count: getImageCount("minorCharacters"),
       });
-      return { characters: data.characters || [] };
+      var resultChars = data.characters || [];
+      var errs = data.errors || [];
+      var errMap = {};
+      errs.forEach(function (e) { errMap[e.index] = e.message || "生成失败"; });
+      if (ctx.engine) {
+        resultChars.forEach(function (c, i) {
+          var label = c.name || ("人物" + (i + 1));
+          if (errMap[i]) {
+            ctx.engine._addHistory(wf, "minorCharacters", 0, ctx.segIndex, "error", errMap[i], label);
+          } else if (c.imageUrl) {
+            ctx.engine._addHistory(wf, "minorCharacters", 0, ctx.segIndex, "done", null, label);
+          }
+        });
+      }
+      return { characters: resultChars };
     },
     renderDetail: function (nd, wf, ctx) {
       var v = NR.getActiveVersion(nd);
@@ -351,6 +392,7 @@
           html += '<div class="wf-detail-section"><div class="wf-detail-label">' + esc(c.name) + '</div>'
             + '<textarea class="wf-detail-textarea wf-editable" data-edit-field="characters.' + ci + '.description" rows="3">' + esc(c.description) + '</textarea>'
             + (c.imageUrl ? '<img class="wf-detail-img wf-preview-img" src="' + esc(c.imageUrl) + '">' : '')
+            + renderItemRefImagesSection(c, "characters." + ci)
             + '<div class="wf-upload-wrap"><label class="wf-upload-btn"><i class="fa fa-upload"></i> 替换图片<input type="file" accept="image/*" class="wf-file-input" data-upload-field="characters.' + ci + '.imageUrl" style="display:none"></label>'
             + '<button class="wf-char-gen-btn" data-gen-char="' + ci + '" data-gen-char-type="minorCharacters" data-gen-char-seg="' + ctx.segIndex + '"' + charDis + '>'
             + (charRunning ? '<i class="fa fa-spinner fa-spin"></i> 生成中' : '<i class="fa fa-refresh"></i> ' + (c.imageUrl ? '重新生成' : '生成图片'))
@@ -396,17 +438,39 @@
         style: wf.input.style, ref_image_urls: nd.refImages || [],
         image_count: getImageCount("scene"),
       });
-      return { scenes: data.scenes || [], sceneCount: data.scene_count || 0 };
+      var resultScenes = data.scenes || [];
+      var errs = data.errors || [];
+      var errMap = {};
+      errs.forEach(function (e) { errMap[e.index] = e.message || "生成失败"; });
+      if (ctx.engine) {
+        resultScenes.forEach(function (s, i) {
+          var label = s.name || ("场景" + (i + 1));
+          if (errMap[i]) {
+            ctx.engine._addHistory(wf, "scene", 0, ctx.segIndex, "error", errMap[i], label);
+          } else if (s.imageUrl) {
+            ctx.engine._addHistory(wf, "scene", 0, ctx.segIndex, "done", null, label);
+          }
+        });
+      }
+      return { scenes: resultScenes, sceneCount: data.scene_count || 0 };
     },
     renderDetail: function (nd, wf, ctx) {
       var v = NR.getActiveVersion(nd);
       var html = "";
+      var segIdx = (ctx.segIndex !== undefined && ctx.segIndex !== null) ? ctx.segIndex : null;
       if (v && v.scenes && v.scenes.length) {
         v.scenes.forEach(function (sc, i) {
+          var sceneRunKey = "seg_" + segIdx + "_scene_0_item_" + i;
+          var sceneRunning = ctx.engine && ctx.engine.runningNodes[sceneRunKey];
+          var sceneDis = sceneRunning ? " disabled" : _getDisabledAttr(ctx, "scene");
           html += '<div class="wf-detail-section"><div class="wf-detail-label">场景' + (i + 1) + ': ' + esc(sc.name || "") + '</div>'
             + '<textarea class="wf-detail-textarea wf-editable" data-edit-field="scenes.' + i + '.description" rows="3">' + esc(sc.description || "") + '</textarea>'
             + (sc.imageUrl ? '<img class="wf-detail-img wf-preview-img" src="' + esc(sc.imageUrl) + '">' : '')
-            + '<div class="wf-upload-wrap"><label class="wf-upload-btn"><i class="fa fa-upload"></i> 替换图片<input type="file" accept="image/*" class="wf-file-input" data-upload-field="scenes.' + i + '.imageUrl" style="display:none"></label></div>'
+            + renderItemRefImagesSection(sc, "scenes." + i)
+            + '<div class="wf-upload-wrap"><label class="wf-upload-btn"><i class="fa fa-upload"></i> 替换图片<input type="file" accept="image/*" class="wf-file-input" data-upload-field="scenes.' + i + '.imageUrl" style="display:none"></label>'
+            + '<button class="wf-char-gen-btn" data-gen-scene="' + i + '" data-gen-scene-seg="' + segIdx + '"' + sceneDis + '>'
+            + (sceneRunning ? '<i class="fa fa-spinner fa-spin"></i> 生成中' : '<i class="fa fa-refresh"></i> ' + (sc.imageUrl ? '重新生成' : '生成图片'))
+            + '</button></div>'
             + '</div>';
         });
       } else if (v && v.description) {
@@ -417,7 +481,7 @@
         + '<input class="wf-detail-input wf-manual-label" placeholder="场景名称（如：竹林小径）" style="margin-bottom:6px;">'
         + '<div class="wf-upload-wrap"><label class="wf-upload-btn"><i class="fa fa-upload"></i> 上传场景图<input type="file" accept="image/*" class="wf-file-input" data-upload-add="scene" style="display:none"></label></div></div>';
       html += renderRefImagesSection(nd, "scene");
-      if (!ctx.isPipelineNode) { var _dis = _getDisabledAttr(ctx, "scene"); html += '<div class="wf-detail-actions"><button class="wf-tb-btn primary" data-gen-seg="' + ctx.segIndex + '" data-gen-type="scene"' + _dis + '><i class="fa fa-refresh"></i> ' + (v && v.scenes && v.scenes.some(function(s){return s.imageUrl;}) ? "重新生成图片" : "生成图片") + '</button></div>'; }
+      if (!ctx.isPipelineNode) { var _dis = _getDisabledAttr(ctx, "scene"); html += '<div class="wf-detail-actions"><button class="wf-tb-btn primary" data-gen-seg="' + ctx.segIndex + '" data-gen-type="scene"' + _dis + '><i class="fa fa-refresh"></i> ' + (v && v.scenes && v.scenes.some(function(s){return s.imageUrl;}) ? "全部重新生成" : "全部生成图片") + '</button></div>'; }
       return html;
     },
   });
@@ -821,6 +885,7 @@
       var sceneV = NR.getActiveVersion((seg.scenes || [])[0]);
       var sbV = NR.getActiveVersion((seg.storyboards || [])[0]);
       var grid = getStoryboardGrid();
+      var sbGridPrompts = normalizeGridPrompts((sbV && sbV.gridPrompts) || []);
 
       var data = await callApi("/api/workflow/generate/story-template", {
         workflow_id: wf.id,
@@ -833,6 +898,7 @@
         scenes: sceneV && sceneV.scenes ? sceneV.scenes : [],
         storyboard_images: sbV ? (sbV.images || []) : [],
         storyboard_grid: grid,
+        grid_prompts: sbGridPrompts,
         orientation: getStoryTemplateOrientation(),
         style: wf.input.style,
         image_count: getImageCount("storyTemplate"),
@@ -976,6 +1042,14 @@
         var charSeg = genChar.getAttribute("data-gen-char-seg");
         var segIdx = (charSeg !== null && charSeg !== undefined && charSeg !== "") ? parseInt(charSeg) : null;
         runSingleCharacter(engine, charType, ci, segIdx, rerender);
+        return;
+      }
+
+      var genScene = e.target.closest && e.target.closest("[data-gen-scene]");
+      if (genScene) {
+        var sceneIdx = parseInt(genScene.getAttribute("data-gen-scene"));
+        var sceneSeg = parseInt(genScene.getAttribute("data-gen-scene-seg"));
+        runSingleScene(engine, sceneSeg, sceneIdx, rerender);
         return;
       }
 
@@ -1179,30 +1253,106 @@
     var charRunKey = (segIdx !== null && segIdx !== undefined)
       ? "seg_" + segIdx + "_" + charType + "_0_char_" + charIndex
       : charType + "_0_char_" + charIndex;
-    if (engine.runningNodes[charRunKey]) return;
-    engine.runningNodes[charRunKey] = true;
+    var state = engine._state(wf.id);
+    if (state.runningNodes[charRunKey]) return;
+    state.runningNodes[charRunKey] = true;
     rerender();
 
+    var singleChar = v.characters[charIndex];
+    var charLabel = singleChar.name || ("人物" + (charIndex + 1));
     try {
-      var singleChar = v.characters[charIndex];
+      // 合并节点级参考图 + 本项参考图，本项优先
+      var nodeRefs = nd.refImages || [];
+      var itemRefs = singleChar.refImages || [];
+      var refImageUrls = itemRefs.concat(nodeRefs.filter(function (u) { return itemRefs.indexOf(u) < 0; }));
       var data = await callApi("/api/workflow/generate/" + (charType === "mainCharacters" ? "main-characters" : "minor-characters"), {
         workflow_id: wf.id,
         image_config_id: getConfigId("image", charType),
         characters: [singleChar],
         style: wf.input.style,
-        ref_image_urls: nd.refImages || [],
+        ref_image_urls: refImageUrls,
         image_count: getImageCount(charType),
       });
       var resultChars = data.characters || [];
-      if (resultChars[0]) {
+      var errs = data.errors || [];
+      if (errs.length) {
+        engine._addHistory(wf, charType, 0, segIdx, "error", errs[0].message || "生成失败", charLabel);
+      } else if (resultChars[0] && resultChars[0].imageUrl) {
         if (resultChars[0].imageUrl) v.characters[charIndex].imageUrl = resultChars[0].imageUrl;
         if (resultChars[0].imageUrls) v.characters[charIndex].imageUrls = resultChars[0].imageUrls;
+        engine._addHistory(wf, charType, 0, segIdx, "done", null, charLabel);
+      } else {
+        engine._addHistory(wf, charType, 0, segIdx, "error", "未返回图片", charLabel);
       }
-      engine.save();
+      engine.saveWorkflow(wf);
     } catch (err) {
+      engine._addHistory(wf, charType, 0, segIdx, "error", err.message || "生成失败", charLabel);
+      engine.saveWorkflow(wf);
       alert("生成失败：" + err.message);
     } finally {
-      delete engine.runningNodes[charRunKey];
+      delete state.runningNodes[charRunKey];
+      rerender();
+    }
+  }
+
+  async function runSingleScene(engine, segIdx, sceneIndex, rerender) {
+    var wf = engine.current();
+    if (!wf) return;
+    _syncEditableFields(engine);
+    var seg = wf.segments[segIdx];
+    if (!seg) return;
+    var nd = (seg.scenes || [])[0];
+    if (!nd) return;
+    var v = NR.getActiveVersion(nd);
+    if (!v || !v.scenes || !v.scenes[sceneIndex]) return;
+
+    var sceneRunKey = "seg_" + segIdx + "_scene_0_item_" + sceneIndex;
+    var state = engine._state(wf.id);
+    if (state.runningNodes[sceneRunKey]) return;
+    state.runningNodes[sceneRunKey] = true;
+    rerender();
+
+    var singleScene = v.scenes[sceneIndex];
+    var sceneLabel = singleScene.name || ("场景" + (sceneIndex + 1));
+    try {
+      var prevScenes = [];
+      if (segIdx > 0) {
+        var prevSeg = wf.segments[segIdx - 1];
+        if (prevSeg) {
+          var prevV = NR.getActiveVersion((prevSeg.scenes || [])[0]);
+          if (prevV && prevV.scenes) prevScenes = prevV.scenes;
+        }
+      }
+      var nodeRefs = nd.refImages || [];
+      var itemRefs = singleScene.refImages || [];
+      var refImageUrls = itemRefs.concat(nodeRefs.filter(function (u) { return itemRefs.indexOf(u) < 0; }));
+      var data = await callApi("/api/workflow/generate/scene", {
+        workflow_id: wf.id,
+        image_config_id: getConfigId("image", "scene"),
+        scenes: [singleScene],
+        prev_segment_scenes: prevScenes,
+        style: wf.input.style,
+        ref_image_urls: refImageUrls,
+        image_count: getImageCount("scene"),
+      });
+      var resultScenes = data.scenes || [];
+      var errs = data.errors || [];
+      if (errs.length) {
+        engine._addHistory(wf, "scene", 0, segIdx, "error", errs[0].message || "生成失败", sceneLabel);
+      } else if (resultScenes[0] && resultScenes[0].imageUrl) {
+        if (resultScenes[0].imageUrl) v.scenes[sceneIndex].imageUrl = resultScenes[0].imageUrl;
+        if (resultScenes[0].imageUrls) v.scenes[sceneIndex].imageUrls = resultScenes[0].imageUrls;
+        engine._addHistory(wf, "scene", 0, segIdx, "done", null, sceneLabel);
+      } else {
+        engine._addHistory(wf, "scene", 0, segIdx, "error", "未返回图片", sceneLabel);
+      }
+      engine.saveWorkflow(wf);
+    } catch (err) {
+      engine._addHistory(wf, "scene", 0, segIdx, "error", err.message || "生成失败", sceneLabel);
+      engine.saveWorkflow(wf);
+      alert("生成失败：" + err.message);
+    } finally {
+      delete state.runningNodes[sceneRunKey];
       rerender();
     }
   }
@@ -1222,9 +1372,10 @@
     if (!v) { pcsNd.reviewStatus = "passed"; return; }
     var scriptV = NR.getActiveVersion((wf.scripts || [])[0]);
     if (!scriptV || !scriptV.fullText) { pcsNd.reviewStatus = "passed"; return; }
+    var state = engine._state(wf.id);
 
     for (var attempt = 0; attempt < maxRetries; attempt++) {
-      engine.setNodeReviewing("planCharactersScenes", null, true);
+      engine.setNodeReviewing("planCharactersScenes", null, true, wf.id);
       engine._addHistory(wf, "planCharactersScenes", 0, null, "reviewing");
       if (rerender) rerender();
       try {
@@ -1254,19 +1405,19 @@
             if (sceneNd && sp.scenes) NR.addVersion(sceneNd, { scenes: sp.scenes, sceneCount: sp.scenes.length });
           });
           NR.addVersion(pcsNd, v);
-          engine.save();
+          engine.saveWorkflow(wf);
         }
       } catch (err) {
         engine._addHistory(wf, "planCharactersScenes", 0, null, "error", "审核调用失败: " + err.message);
         break;
       } finally {
-        engine.setNodeReviewing("planCharactersScenes", null, false);
-        delete engine.runningNodes["planCharactersScenes_0"];
+        engine.setNodeReviewing("planCharactersScenes", null, false, wf.id);
+        delete state.runningNodes["planCharactersScenes_0"];
         if (rerender) rerender();
       }
     }
     pcsNd.reviewStatus = "passed";
-    engine.save();
+    engine.saveWorkflow(wf);
   }
 
   async function reviewSceneImage(engine, wf, segIdx, rerender) {
@@ -1279,9 +1430,10 @@
     var v = NR.getActiveVersion(sceneNd);
     if (!v || !v.scenes || !v.scenes.length) { sceneNd.reviewStatus = "passed"; return; }
     if (!v.scenes.some(function(s){ return s.imageUrl; })) { sceneNd.reviewStatus = "passed"; return; }
+    var state = engine._state(wf.id);
 
     for (var attempt = 0; attempt < maxRetries; attempt++) {
-      engine.setNodeReviewing("scene", segIdx, true);
+      engine.setNodeReviewing("scene", segIdx, true, wf.id);
       engine._addHistory(wf, "scene", 0, segIdx, "reviewing");
       if (rerender) rerender();
       try {
@@ -1304,8 +1456,7 @@
               v.scenes[idx].visual_prompt = rs.visual_prompt;
             }
           });
-          engine.save();
-          // 重新生成场景图
+          engine.saveWorkflow(wf);
           var step = { nodeType: "scene", category: "segment" };
           await engine._runSegmentStep(wf, step, segIdx, rerender, true);
           v = NR.getActiveVersion(sceneNd);
@@ -1315,13 +1466,13 @@
         engine._addHistory(wf, "scene", 0, segIdx, "error", "审核调用失败: " + err.message);
         break;
       } finally {
-        engine.setNodeReviewing("scene", segIdx, false);
-        delete engine.runningNodes["seg_" + segIdx + "_scene_0"];
+        engine.setNodeReviewing("scene", segIdx, false, wf.id);
+        delete state.runningNodes["seg_" + segIdx + "_scene_0"];
         if (rerender) rerender();
       }
     }
     sceneNd.reviewStatus = "passed";
-    engine.save();
+    engine.saveWorkflow(wf);
   }
 
   // PLACEHOLDER_MORE_REVIEW_FUNCTIONS
@@ -1335,13 +1486,14 @@
     if (maxRetries <= 0) { pfNd.reviewStatus = "passed"; return; }
     var v = NR.getActiveVersion(pfNd);
     if (!v) { pfNd.reviewStatus = "passed"; return; }
+    var state = engine._state(wf.id);
 
     var skipFF = !!(wf.firstFrameSkip || seg.firstFrameSkip);
     var skipSB = !!(wf.storyboardSkip || seg.storyboardSkip);
     var skipLF = !!(wf.lastFrameSkip || seg.lastFrameSkip);
 
     for (var attempt = 0; attempt < maxRetries; attempt++) {
-      engine.setNodeReviewing("planFrames", segIdx, true);
+      engine.setNodeReviewing("planFrames", segIdx, true, wf.id);
       engine._addHistory(wf, "planFrames", 0, segIdx, "reviewing");
       if (rerender) rerender();
       try {
@@ -1373,19 +1525,19 @@
             var lfNd = (seg.lastFrames || [])[0];
             if (lfNd) NR.addVersion(lfNd, { description: rd.last_frame.description, visualPrompt: rd.last_frame.visual_prompt || "" });
           }
-          engine.save();
+          engine.saveWorkflow(wf);
         } else { break; }
       } catch (err) {
         engine._addHistory(wf, "planFrames", 0, segIdx, "error", "审核调用失败: " + err.message);
         break;
       } finally {
-        engine.setNodeReviewing("planFrames", segIdx, false);
-        delete engine.runningNodes["seg_" + segIdx + "_planFrames_0"];
+        engine.setNodeReviewing("planFrames", segIdx, false, wf.id);
+        delete state.runningNodes["seg_" + segIdx + "_planFrames_0"];
         if (rerender) rerender();
       }
     }
     pfNd.reviewStatus = "passed";
-    engine.save();
+    engine.saveWorkflow(wf);
   }
 
   async function reviewImage(engine, wf, segIdx, nodeType, rerender) {
@@ -1397,6 +1549,7 @@
     if (maxRetries <= 0) { nd.reviewStatus = "passed"; return; }
     var v = NR.getActiveVersion(nd);
     if (!v) { nd.reviewStatus = "passed"; return; }
+    var state = engine._state(wf.id);
 
     var imageUrls = [];
     if (nodeType === "storyboard") { imageUrls = v.images || []; }
@@ -1404,7 +1557,7 @@
     if (!imageUrls.length) { nd.reviewStatus = "passed"; return; }
 
     for (var attempt = 0; attempt < maxRetries; attempt++) {
-      engine.setNodeReviewing(nodeType, segIdx, true);
+      engine.setNodeReviewing(nodeType, segIdx, true, wf.id);
       engine._addHistory(wf, nodeType, 0, segIdx, "reviewing");
       if (rerender) rerender();
       try {
@@ -1425,7 +1578,7 @@
         engine._updateLastReviewHistory(wf, nodeType, segIdx, "review_failed", data.analysis || "审核不通过");
         if (data.revised_visual_prompt) {
           v.visualPrompt = data.revised_visual_prompt;
-          engine.save();
+          engine.saveWorkflow(wf);
           var step = { nodeType: nodeType, category: "segment" };
           await engine._runSegmentStep(wf, step, segIdx, rerender, true);
           v = NR.getActiveVersion(nd);
@@ -1438,13 +1591,13 @@
         engine._addHistory(wf, nodeType, 0, segIdx, "error", "审核调用失败: " + err.message);
         break;
       } finally {
-        engine.setNodeReviewing(nodeType, segIdx, false);
-        delete engine.runningNodes["seg_" + segIdx + "_" + nodeType + "_0"];
+        engine.setNodeReviewing(nodeType, segIdx, false, wf.id);
+        delete state.runningNodes["seg_" + segIdx + "_" + nodeType + "_0"];
         if (rerender) rerender();
       }
     }
     nd.reviewStatus = "passed";
-    engine.save();
+    engine.saveWorkflow(wf);
   }
 
   async function reviewVideoPrompt(engine, wf, segIdx, rerender) {
@@ -1456,13 +1609,14 @@
     if (maxRetries <= 0) { vpNd.reviewStatus = "passed"; return; }
     var v = NR.getActiveVersion(vpNd);
     if (!v || !v.fullText) { vpNd.reviewStatus = "passed"; return; }
+    var state = engine._state(wf.id);
 
     var ffV = NR.getActiveVersion((seg.firstFrames || [])[0]);
     var sbV = NR.getActiveVersion((seg.storyboards || [])[0]);
     var lfV = NR.getActiveVersion((seg.lastFrames || [])[0]);
 
     for (var attempt = 0; attempt < maxRetries; attempt++) {
-      engine.setNodeReviewing("videoPrompt", segIdx, true);
+      engine.setNodeReviewing("videoPrompt", segIdx, true, wf.id);
       engine._addHistory(wf, "videoPrompt", 0, segIdx, "reviewing");
       if (rerender) rerender();
       try {
@@ -1483,20 +1637,20 @@
         engine._updateLastReviewHistory(wf, "videoPrompt", segIdx, "review_failed", data.analysis || "审核不通过");
         if (data.revised_full_text) {
           NR.addVersion(vpNd, { fullText: data.revised_full_text });
-          engine.save();
+          engine.saveWorkflow(wf);
           v = NR.getActiveVersion(vpNd);
         } else { break; }
       } catch (err) {
         engine._addHistory(wf, "videoPrompt", 0, segIdx, "error", "审核调用失败: " + err.message);
         break;
       } finally {
-        engine.setNodeReviewing("videoPrompt", segIdx, false);
-        delete engine.runningNodes["seg_" + segIdx + "_videoPrompt_0"];
+        engine.setNodeReviewing("videoPrompt", segIdx, false, wf.id);
+        delete state.runningNodes["seg_" + segIdx + "_videoPrompt_0"];
         if (rerender) rerender();
       }
     }
     vpNd.reviewStatus = "passed";
-    engine.save();
+    engine.saveWorkflow(wf);
   }
 
   async function reviewStoryTemplate(engine, wf, segIdx, rerender) {
@@ -1508,10 +1662,11 @@
     if (maxRetries <= 0) { stNd.reviewStatus = "passed"; return; }
     var v = NR.getActiveVersion(stNd);
     if (!v || !v.imageUrl) { stNd.reviewStatus = "passed"; return; }
+    var state = engine._state(wf.id);
 
     var didPass = false;
     for (var attempt = 0; attempt < maxRetries; attempt++) {
-      engine.setNodeReviewing("storyTemplate", segIdx, true);
+      engine.setNodeReviewing("storyTemplate", segIdx, true, wf.id);
       engine._addHistory(wf, "storyTemplate", 0, segIdx, "reviewing");
       if (rerender) rerender();
       var shouldRegen = false;
@@ -1555,8 +1710,8 @@
         engine._addHistory(wf, "storyTemplate", 0, segIdx, "error", "审核调用失败: " + err.message);
         break;
       } finally {
-        engine.setNodeReviewing("storyTemplate", segIdx, false);
-        delete engine.runningNodes["seg_" + segIdx + "_storyTemplate_0"];
+        engine.setNodeReviewing("storyTemplate", segIdx, false, wf.id);
+        delete state.runningNodes["seg_" + segIdx + "_storyTemplate_0"];
         if (rerender) rerender();
       }
 
@@ -1564,7 +1719,7 @@
       if (attempt === maxRetries - 1) break;
 
       try {
-        engine.save();
+        engine.saveWorkflow(wf);
         var step = { nodeType: "storyTemplate", category: "segment" };
         await engine._runSegmentStep(wf, step, segIdx, rerender, true);
         v = NR.getActiveVersion(stNd);
@@ -1576,7 +1731,7 @@
     }
     stNd.reviewStatus = "passed";
     if (didPass) stNd.reviewHint = "";
-    engine.save();
+    engine.saveWorkflow(wf);
   }
 
   /* ── Manual Review Handlers ── */

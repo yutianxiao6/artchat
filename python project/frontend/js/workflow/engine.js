@@ -28,8 +28,6 @@
     this.defTitle = pipelineDef.title || "工作流";
     this.workflows = [];
     this.currentId = null;
-    this.running = false;
-    this.runningNodes = {};
     this.execRange = { from: null, to: null, segments: "all" };
     this.solidDividers = {};
     this.selectedNodeKey = null;
@@ -38,15 +36,64 @@
     this.historyOpen = false;
     this.panX = 0; this.panY = 0; this.zoom = 1;
     this.panning = false; this.panStartX = 0; this.panStartY = 0;
-    this._stopFlag = false;
     this.execHistoryOpen = false;
-    this.segmentRunning = {};
-    this._segStopFlags = {};
-    this._inReview = false;
-    this._autoExecMode = false;
+    this._wfStates = {};
   }
 
   var P = WorkflowEngine.prototype;
+
+  /* ── Per-workflow execution state ──
+   * 每个工作流维护独立的执行状态，互不影响。
+   * 渲染默认读当前工作流（_currentState），执行链路用 _state(wf.id) 显式锁定。
+   */
+  function _newWfState() {
+    return {
+      running: false,
+      runningNodes: {},
+      segmentRunning: {},
+      _stopFlag: false,
+      _segStopFlags: {},
+      _inReview: false,
+      _autoExecMode: false,
+    };
+  }
+
+  P._state = function (wfId) {
+    if (!wfId) return _newWfState();
+    if (!this._wfStates[wfId]) this._wfStates[wfId] = _newWfState();
+    return this._wfStates[wfId];
+  };
+
+  P._currentState = function () {
+    return this._state(this.currentId);
+  };
+
+  /* 兼容性访问器 —— 渲染/旧调用读写时代理到当前工作流状态。
+   * 注意：异步场景下，执行链路应显式使用 _state(wf.id) 持有状态，避免
+   * 用户切换会话后写入错误的桶。
+   */
+  Object.defineProperty(P, "running", {
+    get: function () { return !!this._currentState().running; },
+    set: function (v) { this._currentState().running = v; },
+  });
+  Object.defineProperty(P, "runningNodes", {
+    get: function () { return this._currentState().runningNodes; },
+    set: function (v) { this._currentState().runningNodes = v; },
+  });
+  Object.defineProperty(P, "segmentRunning", {
+    get: function () { return this._currentState().segmentRunning; },
+    set: function (v) { this._currentState().segmentRunning = v; },
+  });
+  Object.defineProperty(P, "runningWfId", {
+    get: function () {
+      var ids = Object.keys(this._wfStates);
+      for (var i = 0; i < ids.length; i++) {
+        if (this._wfStates[ids[i]].running) return ids[i];
+      }
+      return null;
+    },
+    set: function () { /* 只读：runningWfId 由 state.running 推导 */ },
+  });
 
   P.getPipeline = function () {
     var id = this.currentId;
@@ -114,6 +161,7 @@
   P.delete = function (id) {
     this.workflows = this.workflows.filter(function (w) { return w.id !== id; });
     if (this.currentId === id) this.currentId = this.workflows[0] ? this.workflows[0].id : null;
+    delete this._wfStates[id];
     this.save();
     fetch("/api/workflow/" + id, { method: "DELETE" }).catch(function () {});
   };
@@ -446,7 +494,7 @@
     if (!v) return false;
     if (typeDef && typeDef.needsImage && !_allImagesReady(v, nodeType)) return false;
 
-    if (REVIEWABLE_NODES[nodeType] && this._autoExecMode && this._reviewEnabled()) {
+    if (REVIEWABLE_NODES[nodeType] && this._state(wf.id)._autoExecMode && this._reviewEnabled()) {
       if (nd && nd.reviewStatus === "pending") return false;
     }
     return true;
@@ -501,8 +549,10 @@
     return deps;
   };
 
-  P.isNodeRunning = function (nodeType, segIdx) {
-    var keys = Object.keys(this.runningNodes);
+  P.isNodeRunning = function (nodeType, segIdx, wfId) {
+    var state = this._state(wfId || this.currentId);
+    if (!state) return false;
+    var keys = Object.keys(state.runningNodes);
     for (var i = 0; i < keys.length; i++) {
       var k = keys[i];
       if (segIdx !== null && segIdx !== undefined) {
@@ -517,7 +567,7 @@
   P.canExecute = function (nodeType, segIdx, wf) {
     if (!wf) return false;
     if (this.isNodeSkipped(nodeType, segIdx, wf)) return false;
-    if (this.isNodeRunning(nodeType, segIdx)) return false;
+    if (this.isNodeRunning(nodeType, segIdx, wf.id)) return false;
     var deps = this.getDependencies(nodeType, segIdx, wf);
     for (var i = 0; i < deps.length; i++) {
       if (!this.isNodeComplete(deps[i].nodeType, deps[i].segIdx, wf)) return false;
@@ -525,8 +575,9 @@
     return true;
   };
 
-  P.isAnyRunning = function () {
-    return Object.keys(this.runningNodes).length > 0;
+  P.isAnyRunning = function (wfId) {
+    var state = this._state(wfId || this.currentId);
+    return !!(state && Object.keys(state.runningNodes).length > 0);
   };
 
   /* ── Execution Engine ── */
@@ -534,14 +585,14 @@
   P.run = async function (onUpdate) {
     var wf = this.current();
     if (!wf) return;
-    if (this.running && this.runningWfId === wf.id) return;
-    if (this.isAnyRunning()) { alert("有节点正在生成中，请等待完成或停止后再执行"); return; }
+    var state = this._state(wf.id);
+    if (state.running) return;
+    if (this.isAnyRunning(wf.id)) { alert("当前工作流有节点正在生成中，请等待完成或停止后再执行"); return; }
     if (!wf.input.plot) { alert("请先填写输入信息"); return; }
-    this.running = true;
-    this.runningWfId = wf.id;
-    this._stopFlag = false;
-    this._autoExecMode = true;
-    this.runningNodes = {};
+    state.running = true;
+    state._stopFlag = false;
+    state._autoExecMode = true;
+    state.runningNodes = {};
     this._resetStuckNodes(wf);
 
     var self = this;
@@ -562,7 +613,7 @@
     }
 
     function scheduleReady() {
-      if (self._stopFlag) return;
+      if (state._stopFlag) return;
       tasks.forEach(function (t) {
         var tk = taskKey(t);
         if (started[tk] || completed[tk]) return;
@@ -596,7 +647,7 @@
           }
           completed[tk] = true;
           var isCritical = t.nodeType === "script" || t.nodeType === "planCharactersScenes";
-          if (isCritical) { self._stopFlag = true; }
+          if (isCritical) { state._stopFlag = true; }
         } else {
           completed[tk] = true;
         }
@@ -611,8 +662,8 @@
     await new Promise(function (resolve) {
       var interval = setInterval(function () {
         var allDone = tasks.every(function (t) { return completed[taskKey(t)]; });
-        var noneRunning = !self.isAnyRunning();
-        if (allDone || (self._stopFlag && noneRunning)) {
+        var noneRunning = !self.isAnyRunning(wf.id);
+        if (allDone || (state._stopFlag && noneRunning)) {
           clearInterval(interval);
           resolve();
         }
@@ -620,9 +671,8 @@
     });
 
     if (_rerenderTimer) { clearTimeout(_rerenderTimer); _rerenderTimer = null; }
-    self.running = false;
-    self.runningWfId = null;
-    self._autoExecMode = false;
+    state.running = false;
+    state._autoExecMode = false;
     self.saveWorkflow(wf);
     if (onUpdate) onUpdate();
   };
@@ -671,32 +721,33 @@
     if (!arr || !arr.length) { arr = [NR.createNodeData()]; wf[step.nodeType + "s"] = arr; }
 
     var self = this;
+    var state = this._state(wf.id);
     var nd = arr[0];
     if (!forceAll && NR.getActiveVersion(nd)) {
       if (!typeDef.needsImage || _allImagesReady(NR.getActiveVersion(nd), step.nodeType)) return;
     }
     nd.status = "running";
     nd.errorMsg = null;
-    if (self._autoExecMode && REVIEWABLE_NODES[step.nodeType]) nd.reviewStatus = "pending";
-    self.runningNodes[step.nodeType + "_0"] = true;
+    if (state._autoExecMode && REVIEWABLE_NODES[step.nodeType]) nd.reviewStatus = "pending";
+    state.runningNodes[step.nodeType + "_0"] = true;
     if (onUpdate) onUpdate();
 
     try {
-      var result = await typeDef.generate({ workflow: wf, nodeData: nd, branchIdx: 0 });
+      var result = await typeDef.generate({ workflow: wf, nodeData: nd, branchIdx: 0, engine: self });
       if (result) NR.addVersion(nd, result);
       nd.errorMsg = null;
       self._addHistory(wf, step.nodeType, 0, null, "done");
-      if (!self._inReview && window.WF_ReviewHooks && window.WF_ReviewHooks.afterNodeComplete) {
-        self._inReview = true;
+      if (!state._inReview && window.WF_ReviewHooks && window.WF_ReviewHooks.afterNodeComplete) {
+        state._inReview = true;
         try { await window.WF_ReviewHooks.afterNodeComplete(self, wf, step.nodeType, null, onUpdate); } catch (e) {}
-        self._inReview = false;
+        state._inReview = false;
       }
     } catch (err) {
       nd.status = "error";
       nd.errorMsg = err.message || "生成失败";
       self._addHistory(wf, step.nodeType, 0, null, "error", err.message);
     } finally {
-      delete self.runningNodes[step.nodeType + "_0"];
+      delete state.runningNodes[step.nodeType + "_0"];
       if (onUpdate) onUpdate();
     }
   };
@@ -712,6 +763,7 @@
     while (arr.length < branchCount) arr.push(NR.createNodeData());
 
     var self = this;
+    var state = this._state(wf.id);
     var promises = [];
     for (var bi = 0; bi < branchCount; bi++) {
       (function (idx) {
@@ -723,12 +775,12 @@
         if (nd.status === "running") return;
         nd.status = "running";
         nd.errorMsg = null;
-        if (self._autoExecMode && REVIEWABLE_NODES[step.nodeType]) nd.reviewStatus = "pending";
+        if (state._autoExecMode && REVIEWABLE_NODES[step.nodeType]) nd.reviewStatus = "pending";
         var nk = "seg_" + segIdx + "_" + step.nodeType + "_" + idx;
-        self.runningNodes[nk] = true;
+        state.runningNodes[nk] = true;
         if (onUpdate) onUpdate();
 
-        var p = typeDef.generate({ workflow: wf, nodeData: nd, branchIdx: idx, segIndex: segIdx, segment: seg })
+        var p = typeDef.generate({ workflow: wf, nodeData: nd, branchIdx: idx, segIndex: segIdx, segment: seg, engine: self })
           .then(function (result) {
             if (result) NR.addVersion(nd, result);
             nd.errorMsg = null;
@@ -740,7 +792,7 @@
             self._addHistory(wf, step.nodeType, idx, segIdx, "error", err.message);
           })
           .finally(function () {
-            delete self.runningNodes[nk];
+            delete state.runningNodes[nk];
             if (onUpdate) onUpdate();
           });
         promises.push(p);
@@ -752,27 +804,30 @@
       var cnd = arr[ci];
       if (cnd && cnd.status === "error") { anyError = true; break; }
     }
-    if (!anyError && !self._inReview && window.WF_ReviewHooks && window.WF_ReviewHooks.afterNodeComplete) {
-      self._inReview = true;
+    if (!anyError && !state._inReview && window.WF_ReviewHooks && window.WF_ReviewHooks.afterNodeComplete) {
+      state._inReview = true;
       try { await window.WF_ReviewHooks.afterNodeComplete(self, wf, step.nodeType, segIdx, onUpdate); } catch (e) {}
-      self._inReview = false;
+      state._inReview = false;
     }
   };
 
-  P.stop = function () {
-    this._stopFlag = true;
-    this.running = false;
+  P.stop = function (wfId) {
+    var state = this._state(wfId || this.currentId);
+    if (!state) return;
+    state._stopFlag = true;
+    state.running = false;
   };
 
   /* ── Segment-level execution ── */
   P.runSegment = async function (segIdx, onUpdate) {
     var wf = this.current();
     if (!wf || !wf.segments || !wf.segments[segIdx]) return;
-    if (this.segmentRunning[segIdx]) return;
-    if (this.running) return;
-    this.segmentRunning[segIdx] = true;
-    this._segStopFlags[segIdx] = false;
-    this._autoExecMode = true;
+    var state = this._state(wf.id);
+    if (state.segmentRunning[segIdx]) return;
+    if (state.running) return;
+    state.segmentRunning[segIdx] = true;
+    state._segStopFlags[segIdx] = false;
+    state._autoExecMode = true;
     if (onUpdate) onUpdate();
 
     var self = this;
@@ -788,7 +843,7 @@
     function taskKey(t) { return "seg_" + t.segIdx + "_" + t.nodeType; }
 
     function scheduleReady() {
-      if (self._segStopFlags[segIdx]) return;
+      if (state._segStopFlags[segIdx]) return;
       tasks.forEach(function (t) {
         var tk = taskKey(t);
         if (started[tk] || completed[tk]) return;
@@ -809,31 +864,34 @@
     await new Promise(function (resolve) {
       var interval = setInterval(function () {
         var allDone = tasks.every(function (t) { return completed[taskKey(t)]; });
-        var noneRunning = !Object.keys(self.runningNodes).some(function (k) { return k.indexOf("seg_" + segIdx + "_") === 0; });
-        if (allDone || (self._segStopFlags[segIdx] && noneRunning)) {
+        var noneRunning = !Object.keys(state.runningNodes).some(function (k) { return k.indexOf("seg_" + segIdx + "_") === 0; });
+        if (allDone || (state._segStopFlags[segIdx] && noneRunning)) {
           clearInterval(interval);
           resolve();
         }
       }, 200);
     });
 
-    delete self.segmentRunning[segIdx];
-    delete self._segStopFlags[segIdx];
-    if (!self.running && !Object.keys(self.segmentRunning).length) self._autoExecMode = false;
+    delete state.segmentRunning[segIdx];
+    delete state._segStopFlags[segIdx];
+    if (!state.running && !Object.keys(state.segmentRunning).length) state._autoExecMode = false;
     self.saveWorkflow(wf);
     if (onUpdate) onUpdate();
   };
 
-  P.stopSegment = function (segIdx) {
-    this._segStopFlags[segIdx] = true;
-    delete this.segmentRunning[segIdx];
+  P.stopSegment = function (segIdx, wfId) {
+    var state = this._state(wfId || this.currentId);
+    if (!state) return;
+    state._segStopFlags[segIdx] = true;
+    delete state.segmentRunning[segIdx];
   };
 
-  P.isSegmentRunning = function (segIdx) {
-    return !!this.segmentRunning[segIdx];
+  P.isSegmentRunning = function (segIdx, wfId) {
+    var state = this._state(wfId || this.currentId);
+    return !!(state && state.segmentRunning[segIdx]);
   };
 
-  P._addHistory = function (wf, nodeType, branchIdx, segIdx, status, errorMsg) {
+  P._addHistory = function (wf, nodeType, branchIdx, segIdx, status, errorMsg, itemLabel) {
     if (!wf.history) wf.history = [];
     wf.history.push({
       id: NR.makeVersionId(),
@@ -843,6 +901,7 @@
       segIndex: segIdx,
       status: status,
       error: errorMsg || null,
+      itemLabel: itemLabel || null,
     });
     if (wf.history.length > 500) wf.history = wf.history.slice(-500);
   };
@@ -866,26 +925,30 @@
     this._addHistory(wf, nodeType, 0, segIdx, newStatus, errorMsg);
   };
 
-  P.setNodeReviewing = function (nodeType, segIdx, reviewing) {
-    var keys = Object.keys(this.runningNodes);
+  P.setNodeReviewing = function (nodeType, segIdx, reviewing, wfId) {
+    var state = this._state(wfId || this.currentId);
+    if (!state) return;
+    var keys = Object.keys(state.runningNodes);
     var prefix = (segIdx !== null && segIdx !== undefined) ? "seg_" + segIdx + "_" + nodeType + "_" : nodeType + "_";
     for (var i = 0; i < keys.length; i++) {
       if (keys[i].indexOf(prefix) === 0 || keys[i] === prefix + "0") {
-        this.runningNodes[keys[i]] = reviewing ? "reviewing" : true;
+        state.runningNodes[keys[i]] = reviewing ? "reviewing" : true;
         return;
       }
     }
     if (reviewing) {
       var nk = (segIdx !== null && segIdx !== undefined) ? "seg_" + segIdx + "_" + nodeType + "_0" : nodeType + "_0";
-      this.runningNodes[nk] = "reviewing";
+      state.runningNodes[nk] = "reviewing";
     }
   };
 
-  P.isNodeReviewing = function (nodeType, segIdx) {
+  P.isNodeReviewing = function (nodeType, segIdx, wfId) {
+    var state = this._state(wfId || this.currentId);
+    if (!state) return false;
     var prefix = (segIdx !== null && segIdx !== undefined) ? "seg_" + segIdx + "_" + nodeType + "_" : nodeType + "_";
-    var keys = Object.keys(this.runningNodes);
+    var keys = Object.keys(state.runningNodes);
     for (var i = 0; i < keys.length; i++) {
-      if (keys[i].indexOf(prefix) === 0 && this.runningNodes[keys[i]] === "reviewing") return true;
+      if (keys[i].indexOf(prefix) === 0 && state.runningNodes[keys[i]] === "reviewing") return true;
     }
     return false;
   };

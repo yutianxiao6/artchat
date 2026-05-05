@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import asyncio
 import base64 as b64mod
 from fastapi import APIRouter, HTTPException
@@ -76,6 +77,31 @@ def compute_grid_layout(grid: int, resolution: str = "") -> tuple:
         cols = rows
         grid_label = {4: "2x2", 9: "3x3", 16: "4x4"}[grid]
     return grid, rows, cols, grid_label
+
+
+def _strip_style_prefix(text: str, style: str = "") -> str:
+    """剥离描述文本里嵌入的风格词（如"水墨国风风格，"），保留其他内容（包括"第N格"编号）。
+    能处理"水墨国风风格，..."、"第1格：水墨国风风格，..."、"...，水墨国风风格，..."等位置。
+    """
+    if style:
+        s = style.strip()
+        if s:
+            esc = re.escape(s)
+            # 任意位置的"{style}风格 + 标点/空白"，直接删除短语本身，保留周围上下文
+            text = re.sub(rf"{esc}\s*风格\s*[，,、.。\s]*", "", text)
+    # 兜底：清理任意"XX风格，"（≤20字），但只在行首或标点之后，避免误伤画面内容里的"风格"
+    text = re.sub(r"^\s*[一-龥A-Za-z0-9]{1,20}风格\s*[，,、:：.。\s]+", "", text)
+    text = re.sub(r"([，,、:：。.])\s*[一-龥A-Za-z0-9]{1,20}风格\s*[，,、:：.。\s]+", r"\1", text)
+    return text.strip(" ，,、:：.。")
+
+
+def _strip_grid_position_and_style(text: str, style: str = "") -> str:
+    """移除分镜描述里自带的行列定位与风格前缀（用于故事板拼接）。"""
+    text = re.sub(r"第\s*[一二三四五六七八九十0-9]+\s*排\s*第\s*[一二三四五六七八九十0-9]+\s*格[:：,，.。\s]*", "", text)
+    text = re.sub(r"第\s*[一二三四五六七八九十0-9]+\s*[排行列][:：,，.。\s]*", "", text)
+    text = re.sub(r"第\s*[一二三四五六七八九十0-9]+\s*格[:：,，.。\s]*", "", text)
+    text = re.sub(r"(画面|镜头|分镜)\s*\d+[:：]\s*", "", text)
+    return _strip_style_prefix(text, style)
 
 
 def get_config_by_id(config_id: str):
@@ -522,6 +548,9 @@ async def plan_frames(body: dict):
 
     storyboard_rules = ""
     if not skip_storyboard:
+        # 按宫格数限定每格字数，总提示词压在 2000 中文字以内（不含数组包装/逗号等）
+        # 2x2=4格 → 每格约 200 字；2x3=6格 → 每格约 150 字；3x3=9格 → 每格约 100 字；4x4=16格 → 每格约 60 字
+        per_cell_budget = max(40, min(200, 2000 // max(grid, 1)))
         storyboard_rules = f"""
 分镜图严格要求（{grid}格，{grid_label}布局，格位：{grid_pos_text}）：
 - grid_prompts 数组中每个元素只用"第X排第Y格"标识格位，不要写"第N格"
@@ -532,6 +561,7 @@ async def plan_frames(body: dict):
   c) 背景环境的详细描述（光线、天气、物体摆放）
   d) 镜头景别（特写/近景/中景/全景/远景）和角度（俯拍/仰拍/平拍/斜角）
   e) 画面中的关键物体和道具
+- **长度预算（硬限制）**：每格描述不超过 {per_cell_budget} 个中文字；grid_prompts 所有元素加起来不超过 2000 字。宫格越密（3x3/4x4）越要精简，只写画面关键信息，省略形容词堆砌和重复铺陈。
 - 每格描述中不要重复写风格，风格会统一附加在生图提示词末尾
 - 相邻格之间必须有逻辑连贯性，动作和情节能自然衔接
 - 不要描述无意义的过渡画面，每格都必须有明确的叙事功能"""
@@ -573,6 +603,8 @@ async def plan_frames(body: dict):
 4. 相邻格之间的动作和情节是否连贯合理
 5. 事件的因果关系是否合理（人物的动作要有动机和结果）
 6. visual_prompt 是否足够详细，能让AI直接生成准确的图片
+7. **长度预算**：grid_prompts 每一格不超过 {per_cell_budget if not skip_storyboard else 200} 个中文字，全部格子加起来不超过 2000 字。超长必须精简。
+8. 每格描述中不要含有风格词（如"{style}风格""水墨""赛博朋克风格"等），风格统一在生图时附加。发现保留了风格词的要删掉。
 
 风格：{style}
 出场人物：{char_desc}
@@ -597,6 +629,28 @@ async def plan_frames(body: dict):
         result["first_frame"] = {}
     if skip_storyboard:
         result["storyboard"] = {}
+    else:
+        # 兜底：即使模型没完全遵守规则，也强制剥除残留风格前缀并截断到每格预算内
+        sb = result.get("storyboard") or {}
+        raw_prompts = sb.get("grid_prompts") or []
+        if raw_prompts:
+            cleaned = []
+            total_budget = 2000
+            used = 0
+            per_cell = max(40, min(200, 2000 // max(grid, 1)))
+            for gp in raw_prompts:
+                if isinstance(gp, dict):
+                    gp = gp.get("description") or gp.get("visual_prompt") or gp.get("text") or ""
+                text = _strip_grid_position_and_style(str(gp or ""), style)
+                if len(text) > per_cell:
+                    text = text[:per_cell].rstrip("，,、 。.") + "…"
+                if used + len(text) > total_budget:
+                    remain = max(0, total_budget - used)
+                    text = text[:remain].rstrip("，,、 。.") + "…" if remain > 20 else ""
+                cleaned.append(text)
+                used += len(text)
+            sb["grid_prompts"] = cleaned
+            result["storyboard"] = sb
     if skip_last_frame:
         result["last_frame"] = {}
 
@@ -613,11 +667,15 @@ async def gen_main_characters(body: dict):
     wf_id = body.get("workflow_id", "")
     ref_image_urls = body.get("ref_image_urls", [])
     image_count = max(1, min(int(body.get("image_count", 1)), 4))
-    user_refs = collect_ref_images(extra_urls=ref_image_urls)
-    async def gen_char_img(char):
+    node_refs = collect_ref_images(extra_urls=ref_image_urls)
+    errors = []
+    async def gen_char_img(idx, char):
         try:
-            prompt = f"{style}风格，2x2四视图网格，角色模型图，白色背景，直立姿势，正面/侧面/背面/四分之三角度，{char.get('visual_prompt', char.get('description', ''))}"
-            img_res = await generate_image(ImageGenerateRequest(config_id=img_config["id"], prompt=prompt, width=1152, height=2048, n=image_count, image_base64_list=user_refs))
+            desc = char.get("description") or char.get("visual_prompt") or ""
+            item_refs = collect_ref_images(extra_urls=char.get("refImages", []))
+            all_refs = item_refs + [r for r in node_refs if r not in item_refs]
+            prompt = f"{style}风格，2x2四视图网格，角色模型图，白色背景，直立姿势，正面/侧面/背面/四分之三角度，{desc}"
+            img_res = await generate_image(ImageGenerateRequest(config_id=img_config["id"], prompt=prompt, width=1152, height=2048, n=image_count, image_base64_list=all_refs))
             img_data = img_res.get("data", [])
             urls = []
             for item in img_data:
@@ -628,10 +686,13 @@ async def gen_main_characters(body: dict):
             if urls:
                 char["imageUrl"] = urls[0]
                 char["imageUrls"] = urls
+            else:
+                errors.append({"index": idx, "name": char.get("name", ""), "message": "未返回图片"})
         except Exception as e:
             print(f"[workflow] 人物图生成失败: {e}")
-    await asyncio.gather(*[gen_char_img(c) for c in characters])
-    return JSONResponse({"code": 0, "data": {"characters": characters}})
+            errors.append({"index": idx, "name": char.get("name", ""), "message": str(e)})
+    await asyncio.gather(*[gen_char_img(i, c) for i, c in enumerate(characters)])
+    return JSONResponse({"code": 0, "data": {"characters": characters, "errors": errors}})
 
 
 @router.post("/generate/minor-characters")
@@ -644,12 +705,16 @@ async def gen_minor_characters(body: dict):
     wf_id = body.get("workflow_id", "")
     ref_image_urls = body.get("ref_image_urls", [])
     image_count = max(1, min(int(body.get("image_count", 1)), 4))
-    user_refs = collect_ref_images(extra_urls=ref_image_urls)
+    node_refs = collect_ref_images(extra_urls=ref_image_urls)
+    errors = []
     if characters:
-        async def gen_minor_img(char):
+        async def gen_minor_img(idx, char):
             try:
-                prompt = f"{style}风格，2x2四视图网格，角色模型图，白色背景，直立姿势，正面/侧面/背面/四分之三角度，{char.get('visual_prompt', char.get('description', ''))}"
-                img_res = await generate_image(ImageGenerateRequest(config_id=img_config["id"], prompt=prompt, width=1152, height=2048, n=image_count, image_base64_list=user_refs))
+                desc = char.get("description") or char.get("visual_prompt") or ""
+                item_refs = collect_ref_images(extra_urls=char.get("refImages", []))
+                all_refs = item_refs + [r for r in node_refs if r not in item_refs]
+                prompt = f"{style}风格，2x2四视图网格，角色模型图，白色背景，直立姿势，正面/侧面/背面/四分之三角度，{desc}"
+                img_res = await generate_image(ImageGenerateRequest(config_id=img_config["id"], prompt=prompt, width=1152, height=2048, n=image_count, image_base64_list=all_refs))
                 img_data = img_res.get("data", [])
                 urls = []
                 for item in img_data:
@@ -660,10 +725,13 @@ async def gen_minor_characters(body: dict):
                 if urls:
                     char["imageUrl"] = urls[0]
                     char["imageUrls"] = urls
+                else:
+                    errors.append({"index": idx, "name": char.get("name", ""), "message": "未返回图片"})
             except Exception as e:
                 print(f"[workflow] 次要人物图生成失败: {e}")
-        await asyncio.gather(*[gen_minor_img(c) for c in characters])
-    return JSONResponse({"code": 0, "data": {"has_minor": len(characters) > 0, "characters": characters}})
+                errors.append({"index": idx, "name": char.get("name", ""), "message": str(e)})
+        await asyncio.gather(*[gen_minor_img(i, c) for i, c in enumerate(characters)])
+    return JSONResponse({"code": 0, "data": {"has_minor": len(characters) > 0, "characters": characters, "errors": errors}})
 
 
 @router.post("/generate/scene")
@@ -678,11 +746,14 @@ async def gen_scene(body: dict):
     image_count = max(1, min(int(body.get("image_count", 1)), 4))
     prev_scenes = body.get("prev_segment_scenes", [])
     prev_ref_imgs = collect_ref_images(scenes=prev_scenes[:1])
-    user_refs = collect_ref_images(extra_urls=ref_image_urls)
-    all_refs = prev_ref_imgs + user_refs
-    async def gen_scene_img(sc):
+    node_refs = collect_ref_images(extra_urls=ref_image_urls)
+    errors = []
+    async def gen_scene_img(idx, sc):
         try:
-            prompt = f"{style}风格，2x2四机位全景图网格，纯场景环境，无人物无人影，从四个不同角度拍摄同一场景，{sc.get('visual_prompt', sc.get('description', ''))}"
+            desc = sc.get("description") or sc.get("visual_prompt") or ""
+            item_refs = collect_ref_images(extra_urls=sc.get("refImages", []))
+            all_refs = item_refs + [r for r in node_refs if r not in item_refs] + [r for r in prev_ref_imgs if r not in item_refs and r not in node_refs]
+            prompt = f"{style}风格，2x2四机位全景图网格，纯场景环境，无人物无人影，从四个不同角度拍摄同一场景，{desc}"
             img_res = await generate_image(ImageGenerateRequest(config_id=img_config["id"], prompt=prompt, width=2048, height=1536, n=image_count, image_base64_list=all_refs))
             img_data = img_res.get("data", [])
             urls = []
@@ -694,10 +765,13 @@ async def gen_scene(body: dict):
             if urls:
                 sc["imageUrl"] = urls[0]
                 sc["imageUrls"] = urls
+            else:
+                errors.append({"index": idx, "name": sc.get("name", ""), "message": "未返回图片"})
         except Exception as e:
             print(f"[workflow] 场景图生成失败: {e}")
-    await asyncio.gather(*[gen_scene_img(s) for s in scenes])
-    return JSONResponse({"code": 0, "data": {"scene_count": len(scenes), "scenes": scenes}})
+            errors.append({"index": idx, "name": sc.get("name", ""), "message": str(e)})
+    await asyncio.gather(*[gen_scene_img(i, s) for i, s in enumerate(scenes)])
+    return JSONResponse({"code": 0, "data": {"scene_count": len(scenes), "scenes": scenes, "errors": errors}})
 
 
 @router.post("/generate/storyboard")
@@ -716,7 +790,12 @@ async def gen_storyboard(body: dict):
     resolution = body.get("resolution", "")
     image_count = max(1, min(int(body.get("image_count", 1)), 4))
     grid, _rows, _cols, grid_label = compute_grid_layout(grid, resolution)
-    prompt = f"{style}风格，{grid_label}宫格分镜图，电影分镜，每格一个镜头，{storyboard_prompt}，清晰的格线分隔，每格内容不同，保持人物和场景一致性"
+    # 清洗 storyboard_prompt 里可能残留的风格前缀，避免"{style}风格...第X格：{style}风格..."重复
+    # 注意：分镜图端要保留"第N格"编号（前端就是按这种格式拼的）
+    cleaned_sb_prompt = _strip_style_prefix(storyboard_prompt or "", style) if storyboard_prompt else ""
+    prompt = f"{grid_label}宫格分镜图，电影分镜，每格一个镜头，{cleaned_sb_prompt}，清晰的格线分隔，每格内容不同，保持人物和场景一致性"
+    if style and style.strip():
+        prompt += f"\n整体画面风格：{style.strip()}"
     ref_imgs = collect_ref_images(characters=characters, scenes=scenes, extra_urls=([first_frame_url] if first_frame_url else []) + ref_image_urls)
 
     # 解析分辨率，支持前端传入 "宽x高" 格式，自动添加降级分辨率
@@ -1146,6 +1225,7 @@ async def gen_story_template(body: dict):
     scenes = body.get("scenes", [])
     storyboard_images = body.get("storyboard_images", [])
     storyboard_grid = body.get("storyboard_grid", 4)
+    grid_prompts = body.get("grid_prompts", []) or []
     style = body.get("style", "")
     wf_id = body.get("workflow_id", "")
     image_count = max(1, min(int(body.get("image_count", 1)), 4))
@@ -1161,40 +1241,61 @@ async def gen_story_template(body: dict):
     char_desc = "、".join(f"{c.get('name','')}" for c in characters) if characters else "无特定角色"
     scene_desc = "、".join(f"{s.get('name','')}: {s.get('description','')[:60]}" for s in scenes) if scenes else "无特定场景"
 
-    avg_sec = round(duration / storyboard_grid, 1)
-    time_marks = []
-    for i in range(storyboard_grid):
-        t_start = round(i * duration / storyboard_grid, 1)
-        t_end = round((i + 1) * duration / storyboard_grid, 1)
-        time_marks.append(f"Cut{i+1} [{t_start}s~{t_end}s]")
-    time_layout = "、".join(time_marks)
+    # 用分镜节点给出的每格描述作为每格画面依据；缺失时才退化为"依据剧情自行拆分"
+    # 分镜节点的描述里自带"第X排第Y格"行列定位（按分镜图宫格比例规划），
+    # 但故事板的比例/排布不同，位置对不上会误导模型，所以这里剥掉行列定位，只保留画面描述本身。
+    cut_lines = []
+    effective_grid = storyboard_grid
+    if grid_prompts:
+        effective_grid = len(grid_prompts)
+        for i, gp in enumerate(grid_prompts):
+            text = _strip_grid_position_and_style((gp or "").strip(), style)
+            if len(text) > 280:
+                text = text[:280] + "…"
+            cut_lines.append(f"第{i+1}格：{text}")
+    else:
+        for i in range(storyboard_grid):
+            cut_lines.append(f"第{i+1}格：依据剧情自行拆分本格画面内容")
+    cut_block = "\n".join(cut_lines)
+
+    style_tag = f"\n整体画面风格：{style}" if (style and style.strip()) else ""
 
     if orientation == "vertical":
         prompt = (
-            f"{style}风格，故事板设计图，竖版9:16比例，电影分镜板布局。"
-            f"剧情：{segment_text[:200]}。总时长{duration}秒。"
-            f"人物：{char_desc}。场景：{scene_desc}。"
-            f"结构要求："
-            f"【分镜板】画面上部，{storyboard_grid}个分镜从上到下竖直顺序排列（单列纵向堆叠），每一格为一行，占据画面主要面积，"
-            f"时间分配：{time_layout}。"
-            f"每格必须标注：Cut编号与时间区间（如Cut1 0.0s~3.8s）、分镜画面、主体描述、动作、画面描述、镜头景别与运镜、台词、音效。"
-            f"【场景图】分镜板下方，2张俯视角场景全景图横向并列，无人物。"
-            f"【光影与氛围】底部排列，灯光效果、色彩板、风格标注。"
+            f"故事板设计图，竖版9:16比例，电影分镜板布局。\n"
+            f"剧情：{segment_text[:300]}\n"
+            f"总时长：{duration}秒（时间在各分镜之间按画面信息量和叙事节奏自由分配，不要求等分，只需保证总和=总时长）。\n"
+            f"人物：{char_desc}。场景：{scene_desc}。\n"
+            f"分镜内容（共{effective_grid}格，必须按顺序逐格对应以下描述绘制，画面主体/动作/构图/景别必须与下述一致）：\n"
+            f"{cut_block}\n"
+            f"结构要求：\n"
+            f"【分镜板】画面上部，{effective_grid}个分镜从上到下竖直顺序单列排列，每一格占一行，占据画面主要面积。\n"
+            f"每格必须标注：格编号（第1格、第2格…，严禁使用第X排第Y格或行列坐标）、"
+            f"该格的持续时长（由你根据该格画面节奏自行决定，如第1格 3.2s）、"
+            f"分镜画面、主体描述、动作、画面描述、镜头景别与运镜、台词、音效。\n"
+            f"【场景图】分镜板下方，2张俯视角场景全景图横向并列，无人物。\n"
+            f"【光影与氛围】底部排列，灯光效果、色彩板、风格标注。\n"
             f"整体排版清晰，竖向长屏故事板风格，适配手机/短视频竖屏阅读，中文标注。"
+            f"{style_tag}"
         )
         resolutions = [(2160, 3840), (1080, 1920)]
     else:
         prompt = (
-            f"{style}风格，故事板设计图，横版16:9比例，电影分镜板布局。"
-            f"剧情：{segment_text[:200]}。总时长{duration}秒。"
-            f"人物：{char_desc}。场景：{scene_desc}。"
-            f"结构要求："
-            f"【分镜板】画面中央靠上，{grid_label}宫格图顺序排列，共{storyboard_grid}个分镜，"
-            f"时间分配：{time_layout}。"
-            f"每格必须标注：Cut编号与时间区间（如Cut1 0.0s~3.8s）、分镜画面、主体描述、动作、画面描述、镜头景别与运镜、台词、音效。"
-            f"【场景图】分镜板下方，2张俯视角场景全景图，无人物。"
-            f"【光影与氛围】底部排列，灯光效果、色彩板、风格标注。"
+            f"故事板设计图，横版16:9比例，电影分镜板布局。\n"
+            f"剧情：{segment_text[:300]}\n"
+            f"总时长：{duration}秒（时间在各分镜之间按画面信息量和叙事节奏自由分配，不要求等分，只需保证总和=总时长）。\n"
+            f"人物：{char_desc}。场景：{scene_desc}。\n"
+            f"分镜内容（共{effective_grid}格，必须按顺序逐格对应以下描述绘制，画面主体/动作/构图/景别必须与下述一致）：\n"
+            f"{cut_block}\n"
+            f"结构要求：\n"
+            f"【分镜板】画面中央靠上，{grid_label}宫格图顺序排列，共{effective_grid}个分镜。\n"
+            f"每格必须标注：格编号（第1格、第2格…，严禁使用第X排第Y格或行列坐标）、"
+            f"该格的持续时长（由你根据该格画面节奏自行决定，如第1格 3.2s）、"
+            f"分镜画面、主体描述、动作、画面描述、镜头景别与运镜、台词、音效。\n"
+            f"【场景图】分镜板下方，2张俯视角场景全景图，无人物。\n"
+            f"【光影与氛围】底部排列，灯光效果、色彩板、风格标注。\n"
             f"整体排版清晰，专业电影故事板风格，中文标注。"
+            f"{style_tag}"
         )
         resolutions = [(3840, 2160), (2560, 1440)]
 
@@ -1584,8 +1685,9 @@ async def review_story_template(body: dict):
     has_ref = bool(storyboard_urls)
     gp_text = ""
     if grid_prompts:
-        gp_text = "\n\n分镜分格描述（用于校对）：\n" + "\n".join(
-            f"第{i+1}格：{p}" for i, p in enumerate(grid_prompts)
+        gp_text = "\n\n分镜分格描述（用于校对，已去除行列定位与重复风格前缀）：\n" + "\n".join(
+            f"第{i+1}格：{_strip_grid_position_and_style(str(p or ''), style)}"
+            for i, p in enumerate(grid_prompts)
         )
 
     ref_section = ""
