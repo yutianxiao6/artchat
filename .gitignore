@@ -4,6 +4,8 @@
 # Keep .gitignore and python project
 !/.gitignore
 !/python project/
+!/.github/
+!/.github/**
 
 # Python
 __pycache__/

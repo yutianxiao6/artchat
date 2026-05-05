@@ -74,6 +74,21 @@
     return parseInt((gc[nodeType] || {}).imageCount) || 1;
   }
 
+  function getStoryboardGrid() {
+    var gc = _getGlobalNodeConfigs();
+    return parseInt((gc.storyboard || {}).grid) || 4;
+  }
+
+  function getStoryboardResolution() {
+    var gc = _getGlobalNodeConfigs();
+    return (gc.storyboard || {}).resolution || "2160x3840";
+  }
+
+  function getStoryTemplateOrientation() {
+    var gc = _getGlobalNodeConfigs();
+    return (gc.storyTemplate || {}).orientation === "vertical" ? "vertical" : "horizontal";
+  }
+
   function normalizeGridPrompts(arr) {
     if (!arr || !arr.length) return arr;
     return arr.map(function (item) {
@@ -246,7 +261,9 @@
         }
         html += '<div class="wf-detail-text" style="font-size:11px;color:#64748b;margin-top:6px;">完整描述请查看对应节点</div>';
       }
-      html += '<div class="wf-detail-actions"><button class="wf-tb-btn primary" data-gen-global="planCharactersScenes"' + dis + '><i class="fa fa-magic"></i> ' + (v ? "重新规划" : "开始规划") + '</button></div>';
+      html += '<div class="wf-detail-actions"><button class="wf-tb-btn primary" data-gen-global="planCharactersScenes"' + dis + '><i class="fa fa-magic"></i> ' + (v ? "重新规划" : "开始规划") + '</button>'
+        + (v ? '<button class="wf-review-btn" data-review-plan><i class="fa fa-search"></i> 审核规划</button>' : '')
+        + '</div>';
       return html;
     },
   });
@@ -441,8 +458,8 @@
         characters: mcV ? mcV.characters : [],
         minor_characters: minorV ? minorV.characters : [],
         scenes: scenes, style: wf.input.style,
-        grid: wf.storyboardGrid || seg.storyboardGrid || 4,
-        resolution: wf.storyboardResolution || "",
+        grid: getStoryboardGrid(),
+        resolution: getStoryboardResolution(),
         is_last_segment: isLast,
         prev_last_frame_desc: prevLastDesc,
         user_hint: (planV && planV.userHint) || (planNd && planNd.userHint) || "",
@@ -500,7 +517,9 @@
         html += '<div class="wf-detail-text" style="font-size:11px;color:#94a3b8;">' + (parts.length ? parts.join(' + ') + ' 已规划' : '已规划') + '</div>';
         html += '<div class="wf-detail-text" style="font-size:11px;color:#64748b;">完整描述请查看对应节点</div>';
       }
-      if (!ctx.isPipelineNode) { html += '<div class="wf-detail-actions"><button class="wf-tb-btn primary" data-gen-seg="' + ctx.segIndex + '" data-gen-type="planFrames"' + dis + '><i class="fa fa-magic"></i> ' + (v ? "重新规划" : "开始规划") + '</button></div>'; }
+      if (!ctx.isPipelineNode) { html += '<div class="wf-detail-actions"><button class="wf-tb-btn primary" data-gen-seg="' + ctx.segIndex + '" data-gen-type="planFrames"' + dis + '><i class="fa fa-magic"></i> ' + (v ? "重新规划" : "开始规划") + '</button>'
+        + (v ? '<button class="wf-review-btn" data-review-frame-plan="' + ctx.segIndex + '"><i class="fa fa-search"></i> 审核规划</button>' : '')
+        + '</div>'; }
       return html;
     },
   });
@@ -593,10 +612,10 @@
         characters: mcV ? mcV.characters : [],
         scenes: scenes,
         first_frame_url: ffV ? (ffV.imageUrl || "") : "",
-        grid: wf.storyboardGrid || seg.storyboardGrid || 4,
+        grid: getStoryboardGrid(),
         style: wf.input.style,
         ref_image_urls: nd.refImages || [],
-        resolution: wf.storyboardResolution || "",
+        resolution: getStoryboardResolution(),
         image_count: getImageCount("storyboard"),
       });
       return { description: desc, gridPrompts: gridPrompts, images: data.images || [], grid: data.grid || 4, gridLabel: data.grid_label || "" };
@@ -742,7 +761,7 @@
         scenes: scenes,
         characters: mcV ? mcV.characters : [],
         minor_characters: minorV ? minorV.characters : [],
-        storyboard_grid: !sbSkip ? (wf.storyboardGrid || seg.storyboardGrid || 4) : 0,
+        storyboard_grid: !sbSkip ? getStoryboardGrid() : 0,
         storyboard_images: sbV ? sbV.images : [],
         grid_prompts: gridPrompts,
         first_frame: ffV ? { description: ffV.description, imageUrl: ffV.imageUrl } : {},
@@ -796,11 +815,12 @@
     generate: async function (ctx) {
       var wf = ctx.workflow;
       var seg = ctx.segment;
+      var nd = ctx.nodeData;
 
       var mcV = NR.getActiveVersion((wf.mainCharacterss || [])[0]);
       var sceneV = NR.getActiveVersion((seg.scenes || [])[0]);
       var sbV = NR.getActiveVersion((seg.storyboards || [])[0]);
-      var grid = (sbV && sbV.grid) || (sbV && sbV.gridPrompts && sbV.gridPrompts.length) || wf.storyboardGrid || seg.storyboardGrid || 4;
+      var grid = getStoryboardGrid();
 
       var data = await callApi("/api/workflow/generate/story-template", {
         workflow_id: wf.id,
@@ -813,8 +833,10 @@
         scenes: sceneV && sceneV.scenes ? sceneV.scenes : [],
         storyboard_images: sbV ? (sbV.images || []) : [],
         storyboard_grid: grid,
+        orientation: getStoryTemplateOrientation(),
         style: wf.input.style,
         image_count: getImageCount("storyTemplate"),
+        extra_hint: (nd && nd.reviewHint) || "",
       });
       return { imageUrl: data.imageUrl || "", imageUrls: data.imageUrls || [], prompt: data.prompt || "" };
     },
@@ -964,6 +986,19 @@
 
       if (e.target.closest && e.target.closest("#wf-sb-chat-send")) {
         iterateStoryboard(engine, rerender);
+        return;
+      }
+
+      var reviewPlanBtn = e.target.closest && e.target.closest("[data-review-plan]");
+      if (reviewPlanBtn) {
+        runManualReviewPlan(engine, rerender);
+        return;
+      }
+
+      var reviewFrameBtn = e.target.closest && e.target.closest("[data-review-frame-plan]");
+      if (reviewFrameBtn) {
+        var si = parseInt(reviewFrameBtn.getAttribute("data-review-frame-plan"));
+        runManualReviewFramePlan(engine, si, rerender);
         return;
       }
     });
@@ -1171,6 +1206,431 @@
       rerender();
     }
   }
+
+  /* ── Review Functions ── */
+
+  function getMaxRetries() {
+    return window.WF_Renderer && window.WF_Renderer.getReviewMaxRetries ? window.WF_Renderer.getReviewMaxRetries() : 2;
+  }
+
+  async function reviewPlanCharactersScenes(engine, wf, rerender) {
+    var maxRetries = getMaxRetries();
+    var pcsNd = (wf.planCharactersSceness || [])[0];
+    if (!pcsNd) return;
+    if (maxRetries <= 0) { pcsNd.reviewStatus = "passed"; return; }
+    var v = NR.getActiveVersion(pcsNd);
+    if (!v) { pcsNd.reviewStatus = "passed"; return; }
+    var scriptV = NR.getActiveVersion((wf.scripts || [])[0]);
+    if (!scriptV || !scriptV.fullText) { pcsNd.reviewStatus = "passed"; return; }
+
+    for (var attempt = 0; attempt < maxRetries; attempt++) {
+      engine.setNodeReviewing("planCharactersScenes", null, true);
+      engine._addHistory(wf, "planCharactersScenes", 0, null, "reviewing");
+      if (rerender) rerender();
+      try {
+        var data = await callApi("/api/workflow/review/plan", {
+          chat_config_id: getConfigId("chat", "planCharactersScenes"),
+          full_text: scriptV.fullText,
+          main_characters: v.mainCharacters || [],
+          segments: v.segments || [],
+          style: wf.input.style,
+        });
+        if (data.passed) {
+          engine._updateLastReviewHistory(wf, "planCharactersScenes", null, "review_passed");
+          pcsNd.reviewStatus = "passed";
+          break;
+        }
+        engine._updateLastReviewHistory(wf, "planCharactersScenes", null, "review_failed", data.analysis || "审核不通过");
+        if (data.revised_data) {
+          if (data.revised_data.main_characters) v.mainCharacters = data.revised_data.main_characters;
+          if (data.revised_data.segments) v.segments = data.revised_data.segments;
+          var mcNd = (wf.mainCharacterss || [])[0];
+          if (mcNd && data.revised_data.main_characters) NR.addVersion(mcNd, { characters: data.revised_data.main_characters });
+          (wf.segments || []).forEach(function (seg, i) {
+            var sp = (data.revised_data.segments || [])[i] || {};
+            var minorNd = (seg.minorCharacterss || [])[0];
+            if (minorNd && sp.minor_characters) NR.addVersion(minorNd, { characters: sp.minor_characters });
+            var sceneNd = (seg.scenes || [])[0];
+            if (sceneNd && sp.scenes) NR.addVersion(sceneNd, { scenes: sp.scenes, sceneCount: sp.scenes.length });
+          });
+          NR.addVersion(pcsNd, v);
+          engine.save();
+        }
+      } catch (err) {
+        engine._addHistory(wf, "planCharactersScenes", 0, null, "error", "审核调用失败: " + err.message);
+        break;
+      } finally {
+        engine.setNodeReviewing("planCharactersScenes", null, false);
+        delete engine.runningNodes["planCharactersScenes_0"];
+        if (rerender) rerender();
+      }
+    }
+    pcsNd.reviewStatus = "passed";
+    engine.save();
+  }
+
+  async function reviewSceneImage(engine, wf, segIdx, rerender) {
+    var maxRetries = getMaxRetries();
+    var seg = wf.segments[segIdx];
+    if (!seg) return;
+    var sceneNd = (seg.scenes || [])[0];
+    if (!sceneNd) return;
+    if (maxRetries <= 0) { sceneNd.reviewStatus = "passed"; return; }
+    var v = NR.getActiveVersion(sceneNd);
+    if (!v || !v.scenes || !v.scenes.length) { sceneNd.reviewStatus = "passed"; return; }
+    if (!v.scenes.some(function(s){ return s.imageUrl; })) { sceneNd.reviewStatus = "passed"; return; }
+
+    for (var attempt = 0; attempt < maxRetries; attempt++) {
+      engine.setNodeReviewing("scene", segIdx, true);
+      engine._addHistory(wf, "scene", 0, segIdx, "reviewing");
+      if (rerender) rerender();
+      try {
+        var data = await callApi("/api/workflow/review/scene-image", {
+          chat_config_id: getConfigId("chat", "planCharactersScenes"),
+          scenes: v.scenes,
+          segment_text: seg.scriptText || "",
+          style: wf.input.style,
+        });
+        if (data.passed) {
+          engine._updateLastReviewHistory(wf, "scene", segIdx, "review_passed");
+          sceneNd.reviewStatus = "passed";
+          break;
+        }
+        engine._updateLastReviewHistory(wf, "scene", segIdx, "review_failed", data.analysis || "审核不通过");
+        if (data.revised_scenes && data.revised_scenes.length) {
+          data.revised_scenes.forEach(function (rs) {
+            var idx = rs.index;
+            if (idx !== undefined && v.scenes[idx] && rs.visual_prompt) {
+              v.scenes[idx].visual_prompt = rs.visual_prompt;
+            }
+          });
+          engine.save();
+          // 重新生成场景图
+          var step = { nodeType: "scene", category: "segment" };
+          await engine._runSegmentStep(wf, step, segIdx, rerender, true);
+          v = NR.getActiveVersion(sceneNd);
+          if (!v || !v.scenes) break;
+        } else { break; }
+      } catch (err) {
+        engine._addHistory(wf, "scene", 0, segIdx, "error", "审核调用失败: " + err.message);
+        break;
+      } finally {
+        engine.setNodeReviewing("scene", segIdx, false);
+        delete engine.runningNodes["seg_" + segIdx + "_scene_0"];
+        if (rerender) rerender();
+      }
+    }
+    sceneNd.reviewStatus = "passed";
+    engine.save();
+  }
+
+  // PLACEHOLDER_MORE_REVIEW_FUNCTIONS
+
+  async function reviewFramePlan(engine, wf, segIdx, rerender) {
+    var maxRetries = getMaxRetries();
+    var seg = wf.segments[segIdx];
+    if (!seg) return;
+    var pfNd = (seg.planFramess || [])[0];
+    if (!pfNd) return;
+    if (maxRetries <= 0) { pfNd.reviewStatus = "passed"; return; }
+    var v = NR.getActiveVersion(pfNd);
+    if (!v) { pfNd.reviewStatus = "passed"; return; }
+
+    var skipFF = !!(wf.firstFrameSkip || seg.firstFrameSkip);
+    var skipSB = !!(wf.storyboardSkip || seg.storyboardSkip);
+    var skipLF = !!(wf.lastFrameSkip || seg.lastFrameSkip);
+
+    for (var attempt = 0; attempt < maxRetries; attempt++) {
+      engine.setNodeReviewing("planFrames", segIdx, true);
+      engine._addHistory(wf, "planFrames", 0, segIdx, "reviewing");
+      if (rerender) rerender();
+      try {
+        var data = await callApi("/api/workflow/review/frame-plan", {
+          chat_config_id: getConfigId("chat", "planFrames"),
+          segment_text: seg.scriptText || "",
+          first_frame: skipFF ? {} : (v.firstFrame || {}),
+          storyboard: skipSB ? {} : (v.storyboard || {}),
+          last_frame: skipLF ? {} : (v.lastFrame || {}),
+          style: wf.input.style,
+        });
+        if (data.passed) {
+          engine._updateLastReviewHistory(wf, "planFrames", segIdx, "review_passed");
+          pfNd.reviewStatus = "passed";
+          break;
+        }
+        engine._updateLastReviewHistory(wf, "planFrames", segIdx, "review_failed", data.analysis || "审核不通过");
+        if (data.revised_data) {
+          var rd = data.revised_data;
+          if (!skipFF && rd.first_frame && rd.first_frame.description) {
+            var ffNd = (seg.firstFrames || [])[0];
+            if (ffNd) NR.addVersion(ffNd, { description: rd.first_frame.description, visualPrompt: rd.first_frame.visual_prompt || "" });
+          }
+          if (!skipSB && rd.storyboard && rd.storyboard.grid_prompts) {
+            var sbNd = (seg.storyboards || [])[0];
+            if (sbNd) NR.addVersion(sbNd, { description: rd.storyboard.description || "", gridPrompts: normalizeGridPrompts(rd.storyboard.grid_prompts) });
+          }
+          if (!skipLF && rd.last_frame && rd.last_frame.description) {
+            var lfNd = (seg.lastFrames || [])[0];
+            if (lfNd) NR.addVersion(lfNd, { description: rd.last_frame.description, visualPrompt: rd.last_frame.visual_prompt || "" });
+          }
+          engine.save();
+        } else { break; }
+      } catch (err) {
+        engine._addHistory(wf, "planFrames", 0, segIdx, "error", "审核调用失败: " + err.message);
+        break;
+      } finally {
+        engine.setNodeReviewing("planFrames", segIdx, false);
+        delete engine.runningNodes["seg_" + segIdx + "_planFrames_0"];
+        if (rerender) rerender();
+      }
+    }
+    pfNd.reviewStatus = "passed";
+    engine.save();
+  }
+
+  async function reviewImage(engine, wf, segIdx, nodeType, rerender) {
+    var maxRetries = getMaxRetries();
+    var seg = wf.segments[segIdx];
+    if (!seg) return;
+    var nd = (seg[nodeType + "s"] || [])[0];
+    if (!nd) return;
+    if (maxRetries <= 0) { nd.reviewStatus = "passed"; return; }
+    var v = NR.getActiveVersion(nd);
+    if (!v) { nd.reviewStatus = "passed"; return; }
+
+    var imageUrls = [];
+    if (nodeType === "storyboard") { imageUrls = v.images || []; }
+    else { imageUrls = v.imageUrl ? [v.imageUrl] : (v.imageUrls || []); }
+    if (!imageUrls.length) { nd.reviewStatus = "passed"; return; }
+
+    for (var attempt = 0; attempt < maxRetries; attempt++) {
+      engine.setNodeReviewing(nodeType, segIdx, true);
+      engine._addHistory(wf, nodeType, 0, segIdx, "reviewing");
+      if (rerender) rerender();
+      try {
+        var data = await callApi("/api/workflow/review/image", {
+          chat_config_id: getConfigId("chat", "planFrames"),
+          node_type: nodeType,
+          image_urls: imageUrls,
+          description: v.description || "",
+          visual_prompt: v.visualPrompt || "",
+          segment_text: seg.scriptText || "",
+          style: wf.input.style,
+        });
+        if (data.passed) {
+          engine._updateLastReviewHistory(wf, nodeType, segIdx, "review_passed");
+          nd.reviewStatus = "passed";
+          break;
+        }
+        engine._updateLastReviewHistory(wf, nodeType, segIdx, "review_failed", data.analysis || "审核不通过");
+        if (data.revised_visual_prompt) {
+          v.visualPrompt = data.revised_visual_prompt;
+          engine.save();
+          var step = { nodeType: nodeType, category: "segment" };
+          await engine._runSegmentStep(wf, step, segIdx, rerender, true);
+          v = NR.getActiveVersion(nd);
+          if (!v) break;
+          if (nodeType === "storyboard") { imageUrls = v.images || []; }
+          else { imageUrls = v.imageUrl ? [v.imageUrl] : (v.imageUrls || []); }
+          if (!imageUrls.length) break;
+        } else { break; }
+      } catch (err) {
+        engine._addHistory(wf, nodeType, 0, segIdx, "error", "审核调用失败: " + err.message);
+        break;
+      } finally {
+        engine.setNodeReviewing(nodeType, segIdx, false);
+        delete engine.runningNodes["seg_" + segIdx + "_" + nodeType + "_0"];
+        if (rerender) rerender();
+      }
+    }
+    nd.reviewStatus = "passed";
+    engine.save();
+  }
+
+  async function reviewVideoPrompt(engine, wf, segIdx, rerender) {
+    var maxRetries = getMaxRetries();
+    var seg = wf.segments[segIdx];
+    if (!seg) return;
+    var vpNd = (seg.videoPrompts || [])[0];
+    if (!vpNd) return;
+    if (maxRetries <= 0) { vpNd.reviewStatus = "passed"; return; }
+    var v = NR.getActiveVersion(vpNd);
+    if (!v || !v.fullText) { vpNd.reviewStatus = "passed"; return; }
+
+    var ffV = NR.getActiveVersion((seg.firstFrames || [])[0]);
+    var sbV = NR.getActiveVersion((seg.storyboards || [])[0]);
+    var lfV = NR.getActiveVersion((seg.lastFrames || [])[0]);
+
+    for (var attempt = 0; attempt < maxRetries; attempt++) {
+      engine.setNodeReviewing("videoPrompt", segIdx, true);
+      engine._addHistory(wf, "videoPrompt", 0, segIdx, "reviewing");
+      if (rerender) rerender();
+      try {
+        var data = await callApi("/api/workflow/review/video-prompt", {
+          chat_config_id: getConfigId("chat", "videoPrompt"),
+          full_text: v.fullText,
+          segment_text: seg.scriptText || "",
+          style: wf.input.style,
+          first_frame_url: ffV ? (ffV.imageUrl || "") : "",
+          last_frame_url: lfV ? (lfV.imageUrl || "") : "",
+          storyboard_urls: sbV ? (sbV.images || []) : [],
+        });
+        if (data.passed) {
+          engine._updateLastReviewHistory(wf, "videoPrompt", segIdx, "review_passed");
+          vpNd.reviewStatus = "passed";
+          break;
+        }
+        engine._updateLastReviewHistory(wf, "videoPrompt", segIdx, "review_failed", data.analysis || "审核不通过");
+        if (data.revised_full_text) {
+          NR.addVersion(vpNd, { fullText: data.revised_full_text });
+          engine.save();
+          v = NR.getActiveVersion(vpNd);
+        } else { break; }
+      } catch (err) {
+        engine._addHistory(wf, "videoPrompt", 0, segIdx, "error", "审核调用失败: " + err.message);
+        break;
+      } finally {
+        engine.setNodeReviewing("videoPrompt", segIdx, false);
+        delete engine.runningNodes["seg_" + segIdx + "_videoPrompt_0"];
+        if (rerender) rerender();
+      }
+    }
+    vpNd.reviewStatus = "passed";
+    engine.save();
+  }
+
+  async function reviewStoryTemplate(engine, wf, segIdx, rerender) {
+    var maxRetries = getMaxRetries();
+    var seg = wf.segments[segIdx];
+    if (!seg) return;
+    var stNd = (seg.storyTemplates || [])[0];
+    if (!stNd) return;
+    if (maxRetries <= 0) { stNd.reviewStatus = "passed"; return; }
+    var v = NR.getActiveVersion(stNd);
+    if (!v || !v.imageUrl) { stNd.reviewStatus = "passed"; return; }
+
+    var didPass = false;
+    for (var attempt = 0; attempt < maxRetries; attempt++) {
+      engine.setNodeReviewing("storyTemplate", segIdx, true);
+      engine._addHistory(wf, "storyTemplate", 0, segIdx, "reviewing");
+      if (rerender) rerender();
+      var shouldRegen = false;
+      try {
+        var sbV = NR.getActiveVersion((seg.storyboards || [])[0]);
+        var sbUrls = sbV && sbV.images ? sbV.images : [];
+        var sbGridPrompts = normalizeGridPrompts((sbV && sbV.gridPrompts) || []);
+        var data = await callApi("/api/workflow/review/story-template", {
+          chat_config_id: getConfigId("chat", "planFrames"),
+          image_url: v.imageUrl,
+          segment_text: seg.scriptText || "",
+          style: wf.input.style,
+          current_prompt: v.prompt || "",
+          storyboard_urls: sbUrls,
+          grid_prompts: sbGridPrompts,
+        });
+        var analysis = (data.analysis || "").trim();
+        if (data.passed) {
+          engine._updateLastReviewHistory(wf, "storyTemplate", segIdx, "review_passed", analysis || "审核通过");
+          stNd.reviewStatus = "passed";
+          stNd.reviewHint = "";
+          didPass = true;
+          break;
+        }
+        var hint = (data.revise_hint || "").trim();
+        var failMsg = analysis || hint || "审核不通过（模型未给出具体原因）";
+        engine._updateLastReviewHistory(wf, "storyTemplate", segIdx, "review_failed", failMsg);
+
+        if (data.revised_prompt && data.revised_prompt.trim()) {
+          v.prompt = data.revised_prompt.trim();
+          stNd.reviewHint = hint;
+          shouldRegen = true;
+        } else if (hint) {
+          stNd.reviewHint = hint;
+          shouldRegen = true;
+        } else {
+          stNd.reviewHint = analysis || "请根据上一次审核意见进一步优化画面与分镜对照";
+          shouldRegen = true;
+        }
+      } catch (err) {
+        engine._addHistory(wf, "storyTemplate", 0, segIdx, "error", "审核调用失败: " + err.message);
+        break;
+      } finally {
+        engine.setNodeReviewing("storyTemplate", segIdx, false);
+        delete engine.runningNodes["seg_" + segIdx + "_storyTemplate_0"];
+        if (rerender) rerender();
+      }
+
+      if (!shouldRegen) break;
+      if (attempt === maxRetries - 1) break;
+
+      try {
+        engine.save();
+        var step = { nodeType: "storyTemplate", category: "segment" };
+        await engine._runSegmentStep(wf, step, segIdx, rerender, true);
+        v = NR.getActiveVersion(stNd);
+        if (!v || !v.imageUrl) break;
+      } catch (err2) {
+        engine._addHistory(wf, "storyTemplate", 0, segIdx, "error", "重新生成失败: " + err2.message);
+        break;
+      }
+    }
+    stNd.reviewStatus = "passed";
+    if (didPass) stNd.reviewHint = "";
+    engine.save();
+  }
+
+  /* ── Manual Review Handlers ── */
+
+  async function runManualReviewPlan(engine, rerender) {
+    var wf = engine.current();
+    if (!wf) return;
+    await reviewPlanCharactersScenes(engine, wf, rerender);
+    engine.save();
+    rerender();
+  }
+
+  async function runManualReviewFramePlan(engine, segIdx, rerender) {
+    var wf = engine.current();
+    if (!wf) return;
+    await reviewFramePlan(engine, wf, segIdx, rerender);
+    engine.save();
+    rerender();
+  }
+
+  /* ── Hook reviews into one-click execution ── */
+  window.WF_ReviewHooks = {
+    afterNodeComplete: async function (engine, wf, nodeType, segIdx, rerender) {
+      var maxRetries = getMaxRetries();
+      if (maxRetries <= 0) return;
+      switch (nodeType) {
+        case "planCharactersScenes":
+          await reviewPlanCharactersScenes(engine, wf, rerender);
+          break;
+        case "scene":
+          if (segIdx !== null && segIdx !== undefined)
+            await reviewSceneImage(engine, wf, segIdx, rerender);
+          break;
+        case "planFrames":
+          if (segIdx !== null && segIdx !== undefined)
+            await reviewFramePlan(engine, wf, segIdx, rerender);
+          break;
+        case "firstFrame":
+        case "storyboard":
+        case "lastFrame":
+          if (segIdx !== null && segIdx !== undefined)
+            await reviewImage(engine, wf, segIdx, nodeType, rerender);
+          break;
+        case "videoPrompt":
+          if (segIdx !== null && segIdx !== undefined)
+            await reviewVideoPrompt(engine, wf, segIdx, rerender);
+          break;
+        case "storyTemplate":
+          if (segIdx !== null && segIdx !== undefined)
+            await reviewStoryTemplate(engine, wf, segIdx, rerender);
+          break;
+      }
+    }
+  };
 
   window.initWorkflowModule = initWorkflowModule;
   window._getGlobalNodeConfigs = _getGlobalNodeConfigs;

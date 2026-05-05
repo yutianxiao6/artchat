@@ -955,6 +955,7 @@ async def gen_video_prompt(body: dict):
 3. 场景环境细节（光线方向、色调、氛围物体）
 4. 特效和视觉效果（粒子、光效、物理效果）
 5. 景别变化（特写→近景→中景→全景→远景）
+6. 如果剧情中有台词或对白，必须在对应时间段内完整写出台词内容（用引号标注），并注明说话人、语气和情绪
 
 参考示例格式：
 {"@图片1 是主要人物·小明" + chr(10) + "@图片2 是场景·竹林" + chr(10) + chr(10) if has_any_ref else ""}{example_cuts}
@@ -1148,6 +1149,10 @@ async def gen_story_template(body: dict):
     style = body.get("style", "")
     wf_id = body.get("workflow_id", "")
     image_count = max(1, min(int(body.get("image_count", 1)), 4))
+    orientation = body.get("orientation", "horizontal")
+    if orientation not in ("horizontal", "vertical"):
+        orientation = "horizontal"
+    extra_hint = (body.get("extra_hint") or "").strip()
 
     if storyboard_grid not in (4, 6, 9, 16):
         storyboard_grid = 4
@@ -1164,22 +1169,40 @@ async def gen_story_template(body: dict):
         time_marks.append(f"Cut{i+1} [{t_start}s~{t_end}s]")
     time_layout = "、".join(time_marks)
 
-    prompt = (
-        f"{style}风格，故事板设计图，横版16:9比例，电影分镜板布局。"
-        f"剧情：{segment_text[:200]}。总时长{duration}秒。"
-        f"人物：{char_desc}。场景：{scene_desc}。"
-        f"结构要求："
-        f"【分镜板】画面中央靠上，{grid_label}宫格图顺序排列，共{storyboard_grid}个分镜，"
-        f"时间分配：{time_layout}。"
-        f"每格必须标注：Cut编号与时间区间（如Cut1 0.0s~3.8s）、分镜画面、主体描述、动作、画面描述、镜头景别与运镜、台词、音效。"
-        f"【场景图】分镜板下方，2张俯视角场景全景图，无人物。"
-        f"【光影与氛围】底部排列，灯光效果、色彩板、风格标注。"
-        f"整体排版清晰，专业电影故事板风格，中文标注。"
-    )
+    if orientation == "vertical":
+        prompt = (
+            f"{style}风格，故事板设计图，竖版9:16比例，电影分镜板布局。"
+            f"剧情：{segment_text[:200]}。总时长{duration}秒。"
+            f"人物：{char_desc}。场景：{scene_desc}。"
+            f"结构要求："
+            f"【分镜板】画面上部，{storyboard_grid}个分镜从上到下竖直顺序排列（单列纵向堆叠），每一格为一行，占据画面主要面积，"
+            f"时间分配：{time_layout}。"
+            f"每格必须标注：Cut编号与时间区间（如Cut1 0.0s~3.8s）、分镜画面、主体描述、动作、画面描述、镜头景别与运镜、台词、音效。"
+            f"【场景图】分镜板下方，2张俯视角场景全景图横向并列，无人物。"
+            f"【光影与氛围】底部排列，灯光效果、色彩板、风格标注。"
+            f"整体排版清晰，竖向长屏故事板风格，适配手机/短视频竖屏阅读，中文标注。"
+        )
+        resolutions = [(2160, 3840), (1080, 1920)]
+    else:
+        prompt = (
+            f"{style}风格，故事板设计图，横版16:9比例，电影分镜板布局。"
+            f"剧情：{segment_text[:200]}。总时长{duration}秒。"
+            f"人物：{char_desc}。场景：{scene_desc}。"
+            f"结构要求："
+            f"【分镜板】画面中央靠上，{grid_label}宫格图顺序排列，共{storyboard_grid}个分镜，"
+            f"时间分配：{time_layout}。"
+            f"每格必须标注：Cut编号与时间区间（如Cut1 0.0s~3.8s）、分镜画面、主体描述、动作、画面描述、镜头景别与运镜、台词、音效。"
+            f"【场景图】分镜板下方，2张俯视角场景全景图，无人物。"
+            f"【光影与氛围】底部排列，灯光效果、色彩板、风格标注。"
+            f"整体排版清晰，专业电影故事板风格，中文标注。"
+        )
+        resolutions = [(3840, 2160), (2560, 1440)]
+
+    if extra_hint:
+        prompt = prompt + f"\n【审核反馈（需在本次生成中解决）】：{extra_hint}"
 
     ref_imgs = collect_ref_images(characters=characters, scenes=scenes, extra_urls=storyboard_images)
 
-    resolutions = [(3840, 2160), (2560, 1440)]
     for w, h in resolutions:
         try:
             img_res = await generate_image(ImageGenerateRequest(
@@ -1253,6 +1276,353 @@ async def gen_frame_prompt(body: dict):
         b = load_ref_image_b64(last_frame_url)
         if b:
             vision_images.append({"b64": b, "label": "尾帧画面"})
+
+    if vision_images:
+        result = await call_llm_vision_json(config, system_prompt, user_prompt, vision_images)
+    else:
+        result = await call_llm_json(config, system_prompt, user_prompt)
+    return JSONResponse({"code": 0, "data": result})
+
+
+# ═══════════════════════════════════════════════════
+#  审核 API
+# ═══════════════════════════════════════════════════
+
+@router.post("/review/plan")
+async def review_plan(body: dict):
+    """审核人物场景规划：剧情 + 人物 + 场景 → 判断规划合理性"""
+    config = get_config_by_id(body.get("chat_config_id", "")) or get_first_config("chat")
+    if not config:
+        raise HTTPException(status_code=400, detail="未找到聊天配置")
+    full_text = body.get("full_text", "")
+    main_characters = body.get("main_characters", [])
+    segments = body.get("segments", [])
+    style = body.get("style", "")
+
+    chars_desc = "\n".join(
+        f"- {c.get('name','')}: {c.get('description','')}" for c in main_characters
+    ) or "无"
+    segs_desc = ""
+    for i, sp in enumerate(segments):
+        minors = sp.get("minor_characters", [])
+        scenes = sp.get("scenes", [])
+        minor_text = "\n    ".join(f"{c.get('name','')}: {c.get('description','')[:80]}" for c in minors) if minors else "无"
+        scene_text = "\n    ".join(f"{s.get('name','')}: {s.get('description','')[:80]}" for s in scenes) if scenes else "无"
+        segs_desc += f"\n第{i+1}段:\n  次要人物: {minor_text}\n  场景: {scene_text}"
+
+    system_prompt = f"""你是一位资深影视制片人和美术总监。请审核以下视频项目的人物场景规划是否合理。
+风格：{style}
+
+审核原则（重要）：
+- 你的职责是判断"已有的规划内容质量是否可用"，而不是追求完美覆盖剧本中的每一个细节
+- 如果规划中的人物描述足够详细、场景描述足够具体、整体风格一致，即使有些剧本中提到的次要元素未被单独列出，也应该判定为通过
+- 只有在存在明显的质量问题时才判定不通过，例如：描述过于模糊无法生成图片、人物描述前后矛盾、关键主角缺失等
+- 次要人物和场景为"无"不一定是问题——有些段落确实不需要额外的次要人物或独立场景
+
+审核要点：
+1. 主要人物的外貌描述是否足够详细，能让AI准确生成角色图
+2. 已列出的次要人物描述是否清晰（不要求剧本中每个提及的角色都必须列出）
+3. 已列出的场景描述是否具体，能让AI生成准确的场景图
+4. 人物和场景在不同段落间的一致性
+5. 整体视觉风格是否统一
+
+如果规划质量可用，返回 passed=true。
+只有存在明显质量缺陷时才返回 passed=false，并在 revised_data 中给出修改后的完整规划。
+所有输出内容必须使用中文。
+
+只输出JSON：
+{{"passed": true/false, "analysis": "必填，详细说明审核结论和理由，不可为空", "revised_data": {{"main_characters": [...], "segments": [...]}}}}
+revised_data 的格式与输入完全一致。如果 passed=true，revised_data 可以为空对象。"""
+
+    user_prompt = f"完整剧本：\n{full_text}\n\n主要人物：\n{chars_desc}\n\n各段规划：{segs_desc}"
+    result = await call_llm_json(config, system_prompt, user_prompt)
+    return JSONResponse({"code": 0, "data": result})
+
+
+@router.post("/review/scene-image")
+async def review_scene_image(body: dict):
+    """审核场景图片：图片 + 描述 + 剧情 → 判断场景图是否合理"""
+    config = get_config_by_id(body.get("chat_config_id", "")) or get_first_config("chat")
+    if not config:
+        raise HTTPException(status_code=400, detail="未找到聊天配置")
+    scenes = body.get("scenes", [])
+    segment_text = body.get("segment_text", "")
+    style = body.get("style", "")
+
+    vision_images = []
+    scene_descs = []
+    for i, sc in enumerate(scenes):
+        scene_descs.append(f"场景{i+1} {sc.get('name','')}: {sc.get('description','')}")
+        b = load_ref_image_b64(sc.get("imageUrl", ""))
+        if b:
+            vision_images.append({"b64": b, "label": f"场景{i+1}·{sc.get('name','')}"})
+
+    system_prompt = f"""你是一位资深影视美术指导。请审核以下场景图片是否与剧情和描述匹配。
+风格：{style}
+
+审核要点：
+1. 图片中的环境是否与场景描述一致
+2. 图片风格是否符合项目整体风格
+3. 图片中是否意外出现了人物（场景图应该是纯环境）
+4. 光线、氛围是否与剧情匹配
+
+如果所有场景图都合理，返回 passed=true。
+如果有问题，返回 passed=false，并在 revised_scenes 中给出修改后的 visual_prompt。
+所有输出内容必须使用中文。
+
+只输出JSON：
+{{"passed": true/false, "analysis": "必填，详细说明审核结论和理由，不可为空", "revised_scenes": [{{"index": 0, "visual_prompt": "修改后的生图提示词"}}]}}
+如果 passed=true，revised_scenes 可以为空数组。"""
+
+    user_prompt = f"段落剧情：{segment_text}\n\n场景描述：\n" + "\n".join(scene_descs)
+
+    if vision_images:
+        result = await call_llm_vision_json(config, system_prompt, user_prompt, vision_images)
+    else:
+        result = await call_llm_json(config, system_prompt, user_prompt)
+    return JSONResponse({"code": 0, "data": result})
+
+
+@router.post("/review/frame-plan")
+async def review_frame_plan(body: dict):
+    """审核帧画面规划：剧情 → 判断首帧/分镜/尾帧规划合理性"""
+    config = get_config_by_id(body.get("chat_config_id", "")) or get_first_config("chat")
+    if not config:
+        raise HTTPException(status_code=400, detail="未找到聊天配置")
+    segment_text = body.get("segment_text", "")
+    first_frame = body.get("first_frame", {})
+    storyboard = body.get("storyboard", {})
+    last_frame = body.get("last_frame", {})
+    style = body.get("style", "")
+
+    ff_desc = first_frame.get("description", "") or first_frame.get("visual_prompt", "")
+    lf_desc = last_frame.get("description", "") or last_frame.get("visual_prompt", "")
+    grid_prompts = storyboard.get("grid_prompts", [])
+
+    has_ff = bool(ff_desc)
+    has_sb = bool(grid_prompts)
+    has_lf = bool(lf_desc)
+
+    if not has_ff and not has_sb and not has_lf:
+        return JSONResponse({"code": 0, "data": {"passed": True, "analysis": "所有帧节点均已跳过，无需审核", "revised_data": {}}})
+
+    review_parts = []
+    review_points = []
+    json_fields = []
+    user_parts = []
+
+    if has_ff:
+        review_parts.append("首帧")
+        review_points.append("- 首帧是否有足够的视觉冲击力，能抓住观众注意力")
+        json_fields.append('"first_frame": {"description": "...", "visual_prompt": "..."}')
+        user_parts.append(f"首帧：{ff_desc}")
+    if has_sb:
+        sb_text = "\n".join(f"格{i+1}: {gp}" for i, gp in enumerate(grid_prompts))
+        review_parts.append("分镜")
+        review_points.append("- 分镜各格是否都是关键叙事节点（不是无意义的过渡）")
+        review_points.append("- 分镜格之间的动作和情节是否连贯")
+        json_fields.append('"storyboard": {"description": "...", "grid_prompts": [...]}')
+        user_parts.append(f"分镜：\n{sb_text}")
+    if has_lf:
+        review_parts.append("尾帧")
+        review_points.append("- 尾帧是否有合适的收束感或过渡感")
+        json_fields.append('"last_frame": {"description": "...", "visual_prompt": "..."}')
+        user_parts.append(f"尾帧：{lf_desc}")
+    if len(review_parts) > 1:
+        review_points.append("- " + "→".join(review_parts) + " 的整体节奏是否流畅")
+
+    target = "、".join(review_parts)
+    points_text = "\n".join(review_points)
+    json_structure = ", ".join(json_fields)
+
+    system_prompt = f"""你是一位资深电影分镜师。请审核以下帧画面规划中的 {target} 是否合理。
+风格：{style}
+注意：用户只启用了 {target}，其他帧节点已跳过，不要评价未启用的部分。
+
+审核要点：
+{points_text}
+
+如果规划合理，返回 passed=true。
+如果有问题，返回 passed=false，并在 revised_data 中给出修改后的规划。
+所有输出内容必须使用中文。
+
+只输出JSON：
+{{"passed": true/false, "analysis": "必填，详细说明审核结论和理由，不可为空", "revised_data": {{{json_structure}}}}}
+如果 passed=true，revised_data 可以为空对象。只修改有问题的部分，没问题的保持原样。"""
+
+    user_prompt = f"段落剧情：{segment_text}\n\n" + "\n\n".join(user_parts)
+    result = await call_llm_json(config, system_prompt, user_prompt)
+    return JSONResponse({"code": 0, "data": result})
+
+
+# PLACEHOLDER_REVIEW_IMAGE_AND_MORE
+
+@router.post("/review/image")
+async def review_image(body: dict):
+    """审核图片节点（首帧/分镜/尾帧）：图片 + 描述 + 剧情 → 判断合理性"""
+    config = get_config_by_id(body.get("chat_config_id", "")) or get_first_config("chat")
+    if not config:
+        raise HTTPException(status_code=400, detail="未找到聊天配置")
+    node_type = body.get("node_type", "")
+    image_urls = body.get("image_urls", [])
+    description = body.get("description", "")
+    visual_prompt = body.get("visual_prompt", "")
+    segment_text = body.get("segment_text", "")
+    style = body.get("style", "")
+
+    node_label = {"firstFrame": "首帧画面", "storyboard": "分镜图", "lastFrame": "尾帧画面"}.get(node_type, node_type)
+
+    vision_images = []
+    for url in image_urls:
+        b = load_ref_image_b64(url)
+        if b:
+            vision_images.append({"b64": b, "label": node_label})
+
+    system_prompt = f"""你是一位资深影视美术指导。请审核以下{node_label}是否与剧情和描述匹配。
+风格：{style}
+
+审核要点：
+1. 图片内容是否准确反映了描述中的画面
+2. 人物的动作、表情、站位是否与描述一致
+3. 场景环境、光线、氛围是否正确
+4. 构图和镜头角度是否合理
+5. 整体风格是否统一
+
+如果图片合理，返回 passed=true。
+如果有问题，返回 passed=false，并给出修改后的 visual_prompt 用于重新生成。
+所有输出内容必须使用中文。
+
+只输出JSON：
+{{"passed": true/false, "analysis": "必填，详细说明审核结论和理由，不可为空", "revised_visual_prompt": "修改后的生图提示词（passed=true时为空字符串）"}}"""
+
+    user_prompt = f"段落剧情：{segment_text}\n\n{node_label}描述：{description}\n生图提示词：{visual_prompt}"
+
+    if vision_images:
+        result = await call_llm_vision_json(config, system_prompt, user_prompt, vision_images)
+    else:
+        result = await call_llm_json(config, system_prompt, user_prompt)
+    return JSONResponse({"code": 0, "data": result})
+
+
+@router.post("/review/video-prompt")
+async def review_video_prompt(body: dict):
+    """审核视频提示词：提示词 + 剧情 + 分镜图 + 首尾帧图片 → 多模态判断"""
+    config = get_config_by_id(body.get("chat_config_id", "")) or get_first_config("chat")
+    if not config:
+        raise HTTPException(status_code=400, detail="未找到聊天配置")
+    full_text = body.get("full_text", "")
+    segment_text = body.get("segment_text", "")
+    style = body.get("style", "")
+    first_frame_url = body.get("first_frame_url", "")
+    last_frame_url = body.get("last_frame_url", "")
+    storyboard_urls = body.get("storyboard_urls", [])
+
+    vision_images = []
+    if first_frame_url:
+        b = load_ref_image_b64(first_frame_url)
+        if b: vision_images.append({"b64": b, "label": "首帧画面"})
+    for url in storyboard_urls:
+        b = load_ref_image_b64(url)
+        if b: vision_images.append({"b64": b, "label": "分镜图"})
+    if last_frame_url:
+        b = load_ref_image_b64(last_frame_url)
+        if b: vision_images.append({"b64": b, "label": "尾帧画面"})
+
+    system_prompt = f"""你是一位资深视频导演和AI视频提示词专家。请审核以下视频提示词是否存在会影响视频生成质量的明显错误。
+
+仔细观察提供的参考图片（首帧、分镜图、尾帧），逐格对照提示词中的动作描述进行审核。
+
+审核范围（只关注以下问题，其他方面不要评价）：
+1. 人物动作/姿态描述是否与参考图片中的实际画面一致（这是最重要的，仔细观察每张图中人物的手、脚、身体姿态）
+2. 运镜描述是否合理（推/拉/摇/移/跟等是否流畅、是否有助于叙事）
+3. 时间分配是否合理，关键动作是否有足够时长
+4. 画面之间的过渡是否连贯
+
+不要审核的内容（以下问题直接忽略，不影响通过）：
+- 风格描述（风格会在生成时统一附加）
+- 背景场景细节（光线、天气、环境物体等）
+- 色调、氛围等美术方向
+
+如果提示词没有明显的动作描述错误和运镜问题，返回 passed=true。
+只有存在动作与画面明显不符、运镜逻辑错误等会直接影响视频生成的问题时，才返回 passed=false，并给出修改后的完整提示词。
+所有输出内容必须使用中文。
+
+只输出JSON：
+{{"passed": true/false, "analysis": "必填，详细说明审核结论和理由，不可为空", "revised_full_text": "修改后的完整提示词（passed=true时为空字符串）"}}"""
+
+    user_prompt = f"段落剧情：{segment_text}\n\n当前视频提示词：\n{full_text}"
+
+    if vision_images:
+        result = await call_llm_vision_json(config, system_prompt, user_prompt, vision_images)
+    else:
+        result = await call_llm_json(config, system_prompt, user_prompt)
+    return JSONResponse({"code": 0, "data": result})
+
+
+@router.post("/review/story-template")
+async def review_story_template(body: dict):
+    """审核故事模板：图片 + 剧情 + 分镜图对照 → 专业编导视角判断"""
+    config = get_config_by_id(body.get("chat_config_id", "")) or get_first_config("chat")
+    if not config:
+        raise HTTPException(status_code=400, detail="未找到聊天配置")
+    image_url = body.get("image_url", "")
+    segment_text = body.get("segment_text", "")
+    style = body.get("style", "")
+    current_prompt = body.get("current_prompt", "")
+    storyboard_urls = body.get("storyboard_urls", []) or []
+    grid_prompts = body.get("grid_prompts", []) or []
+
+    vision_images = []
+    b = load_ref_image_b64(image_url)
+    if b:
+        vision_images.append({"b64": b, "label": "故事模板"})
+    for idx, url in enumerate(storyboard_urls):
+        sb_b = load_ref_image_b64(url)
+        if sb_b:
+            vision_images.append({"b64": sb_b, "label": f"分镜图{idx+1}"})
+
+    has_ref = bool(storyboard_urls)
+    gp_text = ""
+    if grid_prompts:
+        gp_text = "\n\n分镜分格描述（用于校对）：\n" + "\n".join(
+            f"第{i+1}格：{p}" for i, p in enumerate(grid_prompts)
+        )
+
+    ref_section = ""
+    if has_ref:
+        ref_section = (
+            "\n\n本次审核提供了该段的【分镜图】作为标准对照。故事模板中的每一格分镜必须与分镜图逐格对应，"
+            "包括主体、动作、构图、景别、镜头语言、场景要素等都应保持一致。\n"
+            "重点检查：\n"
+            "A. 故事模板的分镜数量、顺序是否与分镜图一致\n"
+            "B. 每一格画面内容是否忠实还原对应的分镜图（主体姿态、构图、景别、镜头、场景）\n"
+            "C. 如果有明显偏离分镜图的地方，必须 passed=false，并在 revised_prompt 中针对性地微调生图提示词，"
+            "强调与分镜图对照一致的要求（例如补充景别、运镜、构图、场景、姿态等约束）。"
+        )
+
+    system_prompt = f"""你是一位资深影视编导。请以专业编导的视角审核以下故事模板图片。
+风格：{style}
+
+审核要点：
+1. 故事模板中的分镜内容是否与剧情匹配
+2. 分镜的叙事节奏是否合理（起承转合）
+3. 画面构图是否专业，镜头语言是否丰富
+4. 人物动作和表情是否自然、有表现力
+5. 场景切换是否流畅，视觉连贯性如何
+6. 整体是否达到专业编导的制作标准{ref_section}
+
+输出要求：
+- analysis 必填。无论 passed 是 true 还是 false，都必须给出详细的中文审核理由（至少 30 字），说明看到了什么、为什么通过或不通过。禁止返回空字符串。
+- 如果故事模板合理且与分镜图（若提供）一致，passed=true。
+- 如果有问题，passed=false，并在 revise_hint 中给出**简短具体的中文微调指令**（50~200字），用于在下一轮重新生成时叠加到原提示词末尾。revise_hint 必须是可执行的整改要点，例如"第2格改为俯拍全景，人物姿态改为抬头仰望"，而不是整篇提示词。
+- revised_prompt 可选：如果你认为必须整段重写原提示词才能修复，再填入完整新提示词；否则保持空字符串。
+
+所有输出内容必须使用中文。
+
+只输出JSON：
+{{"passed": true/false, "analysis": "必填，不可为空", "revise_hint": "微调指令（passed=true时为空字符串）", "revised_prompt": "可选，仅在需要整段重写时填入"}}"""
+
+    user_prompt = f"段落剧情：{segment_text}\n\n当前生图提示词：{current_prompt}{gp_text}"
 
     if vision_images:
         result = await call_llm_vision_json(config, system_prompt, user_prompt, vision_images)

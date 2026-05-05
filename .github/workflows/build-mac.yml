@@ -1,0 +1,94 @@
+name: Build macOS App
+
+on:
+  workflow_dispatch:
+    inputs:
+      arch:
+        description: "目标架构"
+        required: true
+        default: "both"
+        type: choice
+        options:
+          - both
+          - arm64
+          - x86_64
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            runner: macos-14
+          - arch: x86_64
+            runner: macos-13
+    runs-on: ${{ matrix.runner }}
+
+    defaults:
+      run:
+        working-directory: python project
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Skip if not requested
+        if: github.event_name == 'workflow_dispatch' && github.event.inputs.arch != 'both' && github.event.inputs.arch != matrix.arch
+        run: |
+          echo "用户只请求了 ${{ github.event.inputs.arch }}，跳过 ${{ matrix.arch }}"
+          echo "SKIP_JOB=1" >> $GITHUB_ENV
+
+      - name: Setup Python
+        if: env.SKIP_JOB != '1'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Python deps
+        if: env.SKIP_JOB != '1'
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Install create-dmg
+        if: env.SKIP_JOB != '1'
+        run: brew install create-dmg
+
+      - name: Build .app + DMG
+        if: env.SKIP_JOB != '1'
+        run: python3 build_mac.py
+
+      - name: Rename artifacts with arch suffix
+        if: env.SKIP_JOB != '1'
+        run: |
+          cd dist
+          for f in LiuHui.dmg; do
+            if [ -f "$f" ]; then
+              mv "$f" "LiuHui-${{ matrix.arch }}.dmg"
+            fi
+          done
+          if [ -d "流绘.app" ]; then
+            tar -czf "LiuHui-${{ matrix.arch }}.app.tar.gz" "流绘.app"
+          fi
+
+      - name: Upload artifacts
+        if: env.SKIP_JOB != '1'
+        uses: actions/upload-artifact@v4
+        with:
+          name: LiuHui-macOS-${{ matrix.arch }}
+          path: |
+            python project/dist/LiuHui-${{ matrix.arch }}.dmg
+            python project/dist/LiuHui-${{ matrix.arch }}.app.tar.gz
+          if-no-files-found: error
+
+      - name: Attach to release
+        if: env.SKIP_JOB != '1' && startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            python project/dist/LiuHui-${{ matrix.arch }}.dmg
+            python project/dist/LiuHui-${{ matrix.arch }}.app.tar.gz

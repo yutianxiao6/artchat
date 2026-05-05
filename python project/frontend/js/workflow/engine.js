@@ -40,6 +40,10 @@
     this.panning = false; this.panStartX = 0; this.panStartY = 0;
     this._stopFlag = false;
     this.execHistoryOpen = false;
+    this.segmentRunning = {};
+    this._segStopFlags = {};
+    this._inReview = false;
+    this._autoExecMode = false;
   }
 
   var P = WorkflowEngine.prototype;
@@ -124,8 +128,6 @@
     if (!wf.mode) wf.mode = "single";
     if (!wf.multiCount) wf.multiCount = 1;
     if (!wf.segments) wf.segments = [];
-    if (!wf.storyboardGrid) wf.storyboardGrid = 4;
-    if (!wf.storyboardResolution) wf.storyboardResolution = "2160x3840";
 
     var wfPipeline = this.defaultPipeline;
     if (wf.templateId) {
@@ -394,6 +396,12 @@
 
   /* ── Dependency Resolution System ── */
 
+  var REVIEWABLE_NODES = {
+    planCharactersScenes: true, scene: true, planFrames: true,
+    firstFrame: true, storyboard: true, lastFrame: true,
+    videoPrompt: true, storyTemplate: true,
+  };
+
   P.isNodeSkipped = function (nodeType, segIdx, wf) {
     if (!wf) return false;
     if (wf[nodeType + "Skip"]) return true;
@@ -436,8 +444,16 @@
     }
     var v = NR.getActiveVersion(nd);
     if (!v) return false;
-    if (typeDef && typeDef.needsImage) return _allImagesReady(v, nodeType);
+    if (typeDef && typeDef.needsImage && !_allImagesReady(v, nodeType)) return false;
+
+    if (REVIEWABLE_NODES[nodeType] && this._autoExecMode && this._reviewEnabled()) {
+      if (nd && nd.reviewStatus === "pending") return false;
+    }
     return true;
+  };
+
+  P._reviewEnabled = function () {
+    try { return parseInt(localStorage.getItem("flowdraw:wfReviewMaxRetries")) > 0; } catch(e) { return true; }
   };
 
   P.getDependencies = function (nodeType, segIdx, wf) {
@@ -519,10 +535,12 @@
     var wf = this.current();
     if (!wf) return;
     if (this.running && this.runningWfId === wf.id) return;
+    if (this.isAnyRunning()) { alert("有节点正在生成中，请等待完成或停止后再执行"); return; }
     if (!wf.input.plot) { alert("请先填写输入信息"); return; }
     this.running = true;
     this.runningWfId = wf.id;
     this._stopFlag = false;
+    this._autoExecMode = true;
     this.runningNodes = {};
     this._resetStuckNodes(wf);
 
@@ -604,6 +622,7 @@
     if (_rerenderTimer) { clearTimeout(_rerenderTimer); _rerenderTimer = null; }
     self.running = false;
     self.runningWfId = null;
+    self._autoExecMode = false;
     self.saveWorkflow(wf);
     if (onUpdate) onUpdate();
   };
@@ -658,6 +677,7 @@
     }
     nd.status = "running";
     nd.errorMsg = null;
+    if (self._autoExecMode && REVIEWABLE_NODES[step.nodeType]) nd.reviewStatus = "pending";
     self.runningNodes[step.nodeType + "_0"] = true;
     if (onUpdate) onUpdate();
 
@@ -666,6 +686,11 @@
       if (result) NR.addVersion(nd, result);
       nd.errorMsg = null;
       self._addHistory(wf, step.nodeType, 0, null, "done");
+      if (!self._inReview && window.WF_ReviewHooks && window.WF_ReviewHooks.afterNodeComplete) {
+        self._inReview = true;
+        try { await window.WF_ReviewHooks.afterNodeComplete(self, wf, step.nodeType, null, onUpdate); } catch (e) {}
+        self._inReview = false;
+      }
     } catch (err) {
       nd.status = "error";
       nd.errorMsg = err.message || "生成失败";
@@ -698,6 +723,7 @@
         if (nd.status === "running") return;
         nd.status = "running";
         nd.errorMsg = null;
+        if (self._autoExecMode && REVIEWABLE_NODES[step.nodeType]) nd.reviewStatus = "pending";
         var nk = "seg_" + segIdx + "_" + step.nodeType + "_" + idx;
         self.runningNodes[nk] = true;
         if (onUpdate) onUpdate();
@@ -721,11 +747,90 @@
       })(bi);
     }
     await Promise.all(promises);
+    var anyError = false;
+    for (var ci = 0; ci < branchCount; ci++) {
+      var cnd = arr[ci];
+      if (cnd && cnd.status === "error") { anyError = true; break; }
+    }
+    if (!anyError && !self._inReview && window.WF_ReviewHooks && window.WF_ReviewHooks.afterNodeComplete) {
+      self._inReview = true;
+      try { await window.WF_ReviewHooks.afterNodeComplete(self, wf, step.nodeType, segIdx, onUpdate); } catch (e) {}
+      self._inReview = false;
+    }
   };
 
   P.stop = function () {
     this._stopFlag = true;
     this.running = false;
+  };
+
+  /* ── Segment-level execution ── */
+  P.runSegment = async function (segIdx, onUpdate) {
+    var wf = this.current();
+    if (!wf || !wf.segments || !wf.segments[segIdx]) return;
+    if (this.segmentRunning[segIdx]) return;
+    if (this.running) return;
+    this.segmentRunning[segIdx] = true;
+    this._segStopFlags[segIdx] = false;
+    this._autoExecMode = true;
+    if (onUpdate) onUpdate();
+
+    var self = this;
+    var segSteps = this.getSegmentSteps();
+    var tasks = [];
+    segSteps.forEach(function (step) {
+      if (self.isNodeSkipped(step.nodeType, segIdx, wf)) return;
+      if (self.isNodeComplete(step.nodeType, segIdx, wf)) return;
+      tasks.push({ nodeType: step.nodeType, segIdx: segIdx, category: "segment" });
+    });
+
+    var started = {}, completed = {};
+    function taskKey(t) { return "seg_" + t.segIdx + "_" + t.nodeType; }
+
+    function scheduleReady() {
+      if (self._segStopFlags[segIdx]) return;
+      tasks.forEach(function (t) {
+        var tk = taskKey(t);
+        if (started[tk] || completed[tk]) return;
+        if (!self.canExecute(t.nodeType, t.segIdx, wf)) return;
+        started[tk] = true;
+        var step = { nodeType: t.nodeType, category: "segment" };
+        self._runSegmentStep(wf, step, t.segIdx, onUpdate, false).then(function () {
+          completed[tk] = true;
+          self.saveWorkflow(wf);
+          if (onUpdate) onUpdate();
+          scheduleReady();
+        });
+      });
+    }
+
+    scheduleReady();
+
+    await new Promise(function (resolve) {
+      var interval = setInterval(function () {
+        var allDone = tasks.every(function (t) { return completed[taskKey(t)]; });
+        var noneRunning = !Object.keys(self.runningNodes).some(function (k) { return k.indexOf("seg_" + segIdx + "_") === 0; });
+        if (allDone || (self._segStopFlags[segIdx] && noneRunning)) {
+          clearInterval(interval);
+          resolve();
+        }
+      }, 200);
+    });
+
+    delete self.segmentRunning[segIdx];
+    delete self._segStopFlags[segIdx];
+    if (!self.running && !Object.keys(self.segmentRunning).length) self._autoExecMode = false;
+    self.saveWorkflow(wf);
+    if (onUpdate) onUpdate();
+  };
+
+  P.stopSegment = function (segIdx) {
+    this._segStopFlags[segIdx] = true;
+    delete this.segmentRunning[segIdx];
+  };
+
+  P.isSegmentRunning = function (segIdx) {
+    return !!this.segmentRunning[segIdx];
   };
 
   P._addHistory = function (wf, nodeType, branchIdx, segIdx, status, errorMsg) {
@@ -740,6 +845,49 @@
       error: errorMsg || null,
     });
     if (wf.history.length > 500) wf.history = wf.history.slice(-500);
+  };
+
+  P._updateLastReviewHistory = function (wf, nodeType, segIdx, newStatus, errorMsg) {
+    if (!wf.history) return;
+    for (var i = wf.history.length - 1; i >= 0; i--) {
+      var h = wf.history[i];
+      if (h.nodeType === nodeType && h.status === "reviewing") {
+        var segMatch = (segIdx === null || segIdx === undefined)
+          ? (h.segIndex === null || h.segIndex === undefined)
+          : h.segIndex === segIdx;
+        if (segMatch) {
+          h.status = newStatus;
+          h.error = errorMsg || null;
+          h.time = new Date().toISOString();
+          return;
+        }
+      }
+    }
+    this._addHistory(wf, nodeType, 0, segIdx, newStatus, errorMsg);
+  };
+
+  P.setNodeReviewing = function (nodeType, segIdx, reviewing) {
+    var keys = Object.keys(this.runningNodes);
+    var prefix = (segIdx !== null && segIdx !== undefined) ? "seg_" + segIdx + "_" + nodeType + "_" : nodeType + "_";
+    for (var i = 0; i < keys.length; i++) {
+      if (keys[i].indexOf(prefix) === 0 || keys[i] === prefix + "0") {
+        this.runningNodes[keys[i]] = reviewing ? "reviewing" : true;
+        return;
+      }
+    }
+    if (reviewing) {
+      var nk = (segIdx !== null && segIdx !== undefined) ? "seg_" + segIdx + "_" + nodeType + "_0" : nodeType + "_0";
+      this.runningNodes[nk] = "reviewing";
+    }
+  };
+
+  P.isNodeReviewing = function (nodeType, segIdx) {
+    var prefix = (segIdx !== null && segIdx !== undefined) ? "seg_" + segIdx + "_" + nodeType + "_" : nodeType + "_";
+    var keys = Object.keys(this.runningNodes);
+    for (var i = 0; i < keys.length; i++) {
+      if (keys[i].indexOf(prefix) === 0 && this.runningNodes[keys[i]] === "reviewing") return true;
+    }
+    return false;
   };
 
   P._resetStuckNodes = function (wf) {
@@ -796,7 +944,6 @@
         minorCharactersHint: segData.minor_characters || [],
         scenesHint: segData.scenes || [],
         mainCharacterNames: segData.main_character_names || [],
-        storyboardGrid: segData.storyboard_grid || 4,
         hasMinor: !!(segData.minor_characters && segData.minor_characters.length),
       };
       segSteps.forEach(function (step) {

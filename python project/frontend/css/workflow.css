@@ -268,3 +268,29 @@
 .wf-exec-history-time { color:#64748b; font-size:10px; }
 .wf-exec-error-text { width:100%; color:#fca5a5; font-size:10px; padding-left:14px; margin-top:2px; }
 .wf-exec-history-empty { padding:20px; text-align:center; color:#64748b; font-size:12px; }
+
+/* ── Segment Run Button ── */
+.wf-seg-run-btn { width:28px; height:28px; border-radius:50%; border:none; cursor:pointer; display:flex; align-items:center; justify-content:center; font-size:12px; transition:all .15s; margin-top:4px; flex-shrink:0; }
+.wf-seg-run-btn.play { background:rgba(34,197,94,.15); color:#22c55e; border:1.5px solid rgba(34,197,94,.4); }
+.wf-seg-run-btn.play:hover { background:rgba(34,197,94,.25); border-color:#22c55e; }
+.wf-seg-run-btn.stop { background:rgba(239,68,68,.15); color:#ef4444; border:1.5px solid rgba(239,68,68,.4); }
+.wf-seg-run-btn.stop:hover { background:rgba(239,68,68,.25); border-color:#ef4444; }
+.wf-seg-run-btn:disabled { opacity:.35; pointer-events:none; }
+
+/* ── Review Button ── */
+.wf-review-btn { padding:6px 12px; border-radius:8px; border:1px solid rgba(245,158,11,.3); background:rgba(245,158,11,.1); color:#f59e0b; cursor:pointer; font-size:11px; font-weight:600; display:inline-flex; align-items:center; gap:5px; transition:all .12s; }
+.wf-review-btn:hover { background:rgba(245,158,11,.2); border-color:#f59e0b; }
+.wf-review-btn:disabled { opacity:.4; pointer-events:none; }
+
+/* ── Review Setting ── */
+.wf-review-setting { display:flex; align-items:center; gap:6px; font-size:11px; color:#94a3b8; font-weight:600; }
+.wf-review-setting select { padding:4px 8px; background:#0f172a; border:1px solid rgba(148,163,184,.18); color:#e5e7eb; border-radius:6px; font-size:11px; }
+
+/* ── Review Status in Cards ── */
+.wf-card-reviewing { color:#f59e0b; font-size:12px; padding:8px 0; display:flex; align-items:center; gap:6px; }
+
+/* ── Exec History Review Dots ── */
+.wf-exec-dot-reviewing { width:6px; height:6px; border-radius:50%; background:#f59e0b; margin-top:4px; flex-shrink:0; animation:wf-pulse-review .8s ease-in-out infinite; }
+.wf-exec-dot-review-passed { width:6px; height:6px; border-radius:50%; background:#22c55e; margin-top:4px; flex-shrink:0; box-shadow:0 0 4px rgba(34,197,94,.5); }
+.wf-exec-dot-review-failed { width:6px; height:6px; border-radius:50%; background:#f97316; margin-top:4px; flex-shrink:0; }
+@keyframes wf-pulse-review { 0%,100%{opacity:1} 50%{opacity:.4} }

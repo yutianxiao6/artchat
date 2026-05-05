@@ -8,6 +8,13 @@
   var NR = window.WF_NodeRegistry;
   var esc = window.WF_escapeHtml;
 
+  function _getReviewMaxRetries() {
+    try { return parseInt(localStorage.getItem("flowdraw:wfReviewMaxRetries")) || 2; } catch(e) { return 2; }
+  }
+  function _setReviewMaxRetries(n) {
+    localStorage.setItem("flowdraw:wfReviewMaxRetries", String(n));
+  }
+
   /* ── Mini Pipeline (toolbar) ── */
   function renderMiniPipeline(engine) {
     var wf = engine.current();
@@ -55,6 +62,7 @@
     var wf = engine.current();
     var mode = wf ? wf.mode : "single";
     var isAutoRunning = engine.running && engine.runningWfId === (wf && wf.id);
+    var isBusy = isAutoRunning || engine.isAnyRunning();
     var templates = window.WF_Templates || [];
     var tplOpts = templates.map(function (t) {
       return '<option value="' + t.id + '">' + esc(t.name) + '</option>';
@@ -70,7 +78,11 @@
       + '</div>'
       + (mode === "single" && wf ? '<div class="wf-multi-count"><span>输出数量:</span><button class="wf-count-btn" data-mc-delta="-1">-</button><span class="wf-count-value">' + (wf.multiCount || 1) + '</span><button class="wf-count-btn" data-mc-delta="1">+</button></div>' : '')
       + '<div class="wf-toolbar-sep"></div>'
-      + '<button class="wf-tb-btn primary" id="wf-run-btn"' + (isAutoRunning ? " disabled" : "") + '><i class="fa fa-play"></i> 一键执行</button>'
+      + '<div class="wf-review-setting"><span>审核重试:</span><select id="wf-review-retries">'
+      + [0,1,2,3,5].map(function(n){ var sel = _getReviewMaxRetries() === n ? " selected" : ""; return '<option value="'+n+'"'+sel+'>'+(n===0?'关闭':n+'次')+'</option>'; }).join("")
+      + '</select></div>'
+      + '<div class="wf-toolbar-sep"></div>'
+      + '<button class="wf-tb-btn primary" id="wf-run-btn"' + (isBusy ? " disabled" : "") + '><i class="fa fa-play"></i> 一键执行</button>'
       + (isAutoRunning ? '<button class="wf-tb-btn danger" id="wf-stop-btn"><i class="fa fa-stop"></i> 停止</button>' : '')
       + '</div>';
   }
@@ -235,8 +247,13 @@
           html += '<div class="wf-branch-header">分支 ' + (bi + 1) + '</div>';
         }
         segments.forEach(function (seg, segIdx) {
+          var segRunning = engine.isSegmentRunning(segIdx);
+          var segRunBtn = segRunning
+            ? '<button class="wf-seg-run-btn stop" data-seg-stop="' + segIdx + '" title="停止"><i class="fa fa-stop"></i></button>'
+            : '<button class="wf-seg-run-btn play" data-seg-run="' + segIdx + '" title="执行本段"><i class="fa fa-play"></i></button>';
           html += '<div class="wf-seg-row">';
           html += '<div class="wf-seg-label-cell"><div class="wf-seg-num">第' + (segIdx + 1) + '段</div>'
+            + segRunBtn
             + '<div class="wf-seg-script-preview">' + esc((seg.scriptText || "").slice(0, 40)) + '</div></div>';
 
           allSegCols.forEach(function (col) {
@@ -327,6 +344,7 @@
     var key = segIndex !== null ? "seg_" + segIndex + "_" + nodeType + "_" + branchIdx : nodeType + "_" + branchIdx;
     var branchLabel = branchIdx > 0 ? ' <span class="wf-branch-badge">#' + (branchIdx + 1) + '</span>' : "";
     var isRunning = !!engine.runningNodes[key];
+    var isReviewing = engine.runningNodes[key] === "reviewing";
 
     var html = '<div class="wf-content-card status-' + statusCls + (isRunning ? ' running' : '') + '" data-node-key="' + key + '">';
 
@@ -335,7 +353,9 @@
     var typeDef = NR.get(nodeType);
     var isImageNode = typeDef && typeDef.needsImage;
 
-    if (isRunning && !v) {
+    if (isReviewing) {
+      html += '<div class="wf-card-reviewing"><i class="fa fa-search"></i> 审核中...</div>';
+    } else if (isRunning && !v) {
       html += '<div class="wf-card-loading"><i class="fa fa-spinner fa-spin"></i> 生成中...</div>';
     } else if (!v) {
       html += '<div class="wf-card-empty">未生成</div>';
@@ -459,6 +479,9 @@
       if (nodeType === "storyboard") {
         html += renderGridControl(engine);
       }
+      if (nodeType === "storyTemplate") {
+        html += renderStoryTemplateOrientation(engine);
+      }
     }
 
     if (def.renderDetail) {
@@ -555,8 +578,10 @@
   function renderGridControl(engine) {
     var wf = engine.current();
     if (!wf) return "";
-    var grid = wf.storyboardGrid || 4;
-    var res = wf.storyboardResolution || "2160x3840";
+    var gc = window._getGlobalNodeConfigs ? window._getGlobalNodeConfigs() : {};
+    var sbCfg = gc.storyboard || {};
+    var grid = parseInt(sbCfg.grid) || 4;
+    var res = sbCfg.resolution || "2160x3840";
     var resOptions = [
       { value: "2160x3840", label: "2160×3840 (9:16 竖版)" },
       { value: "1080x1920", label: "1080×1920 (9:16 竖版)" },
@@ -580,6 +605,17 @@
       + '<div class="wf-detail-section"><div class="wf-detail-label">分镜分辨率（全局）</div>'
       + '<select class="wf-detail-input" id="wf-sb-resolution">' + resHtml + '</select>'
       + '</div>';
+  }
+
+  function renderStoryTemplateOrientation(engine) {
+    var gc = window._getGlobalNodeConfigs ? window._getGlobalNodeConfigs() : {};
+    var cfg = gc.storyTemplate || {};
+    var orient = cfg.orientation === "vertical" ? "vertical" : "horizontal";
+    return '<div class="wf-detail-section"><div class="wf-detail-label">排版方向（全局）</div>'
+      + '<div class="wf-grid-btns">'
+      + '<button class="wf-grid-btn' + (orient === "horizontal" ? " active" : "") + '" data-orientation="horizontal">横版 16:9</button>'
+      + '<button class="wf-grid-btn' + (orient === "vertical" ? " active" : "") + '" data-orientation="vertical">竖版 9:16</button>'
+      + '</div></div>';
   }
 
   function renderSkipToggle(engine, key) {
@@ -678,12 +714,22 @@
         var pad = function (n) { return n < 10 ? '0' + n : '' + n; };
         time = pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
       } catch (e) { time = ''; }
-      var dotCls = h.status === 'done' ? 'wf-exec-dot-done' : 'wf-exec-dot-error';
-      var errText = h.error ? '<div class="wf-exec-error-text">' + esc(h.error).slice(0, 80) + '</div>' : '';
+      var dotCls = h.status === 'done' ? 'wf-exec-dot-done'
+        : h.status === 'reviewing' ? 'wf-exec-dot-reviewing'
+        : h.status === 'review_passed' ? 'wf-exec-dot-review-passed'
+        : h.status === 'review_failed' ? 'wf-exec-dot-review-failed'
+        : 'wf-exec-dot-error';
+      var statusLabel = '';
+      if (h.status === 'reviewing') statusLabel = ' <span style="color:#f59e0b;">[审核中]</span>';
+      else if (h.status === 'review_passed') statusLabel = ' <span style="color:#22c55e;">[审核通过]</span>';
+      else if (h.status === 'review_failed') statusLabel = ' <span style="color:#f97316;">[审核不通过]</span>';
+      else if (h.status === 'review_retry') statusLabel = ' <span style="color:#f59e0b;">[重试]</span>';
+      var errText = h.error ? '<div class="wf-exec-error-text">' + esc(h.error).slice(0, 200) + '</div>' : '';
+      if (h.status === 'review_failed' && !h.error) errText = '<div class="wf-exec-error-text">审核不通过（模型未给出具体原因）</div>';
       return '<div class="wf-exec-history-item">'
         + '<div class="' + dotCls + '"></div>'
         + '<div class="wf-exec-history-info">'
-        + '<span class="wf-exec-history-label">' + label + segLabel + '</span>'
+        + '<span class="wf-exec-history-label">' + label + segLabel + statusLabel + '</span>'
         + '<span class="wf-exec-history-time">' + time + '</span>'
         + '</div>'
         + errText
@@ -860,6 +906,20 @@
       if (e.target.closest && e.target.closest("#wf-run-btn")) { engine.run(rerender); return; }
       if (e.target.closest && e.target.closest("#wf-stop-btn")) { engine.stop(); rerender(); return; }
 
+      var segRunBtn = e.target.closest && e.target.closest("[data-seg-run]");
+      if (segRunBtn) {
+        var si = parseInt(segRunBtn.getAttribute("data-seg-run"));
+        if (!engine.isSegmentRunning(si)) engine.runSegment(si, rerender);
+        return;
+      }
+      var segStopBtn = e.target.closest && e.target.closest("[data-seg-stop]");
+      if (segStopBtn) {
+        var si = parseInt(segStopBtn.getAttribute("data-seg-stop"));
+        engine.stopSegment(si);
+        rerender();
+        return;
+      }
+
       var modeBtn = e.target.closest && e.target.closest(".wf-mode-btn");
       if (modeBtn) {
         var wf = engine.current();
@@ -909,20 +969,30 @@
       var gridBtn = e.target.closest && e.target.closest("[data-grid]");
       if (gridBtn) {
         var grid = parseInt(gridBtn.getAttribute("data-grid"));
-        var wf = engine.current();
-        if (wf) {
-          wf.storyboardGrid = grid;
-          if (wf.segments) {
-            wf.segments.forEach(function (seg) { seg.storyboardGrid = grid; });
-          }
-          engine.save();
-        }
+        var gc = window._getGlobalNodeConfigs ? window._getGlobalNodeConfigs() : {};
+        if (!gc.storyboard) gc.storyboard = {};
+        gc.storyboard.grid = grid;
+        if (window._saveGlobalNodeConfigs) window._saveGlobalNodeConfigs(gc);
+        rerender();
+        return;
+      }
+
+      var orientBtn = e.target.closest && e.target.closest("[data-orientation]");
+      if (orientBtn) {
+        var orient = orientBtn.getAttribute("data-orientation");
+        var gc2 = window._getGlobalNodeConfigs ? window._getGlobalNodeConfigs() : {};
+        if (!gc2.storyTemplate) gc2.storyTemplate = {};
+        gc2.storyTemplate.orientation = orient;
+        if (window._saveGlobalNodeConfigs) window._saveGlobalNodeConfigs(gc2);
         rerender();
         return;
       }
     });
 
     document.addEventListener("change", function (e) {
+      if (e.target.id === "wf-review-retries") {
+        _setReviewMaxRetries(parseInt(e.target.value) || 0);
+      }
       if (e.target.id === "wf-skip-check") {
         var key = e.target.getAttribute("data-skip-node");
         var nodeType = parseNodeType(key);
@@ -951,11 +1021,10 @@
         }
       }
       if (e.target.id === "wf-sb-resolution") {
-        var wf = engine.current();
-        if (wf) {
-          wf.storyboardResolution = e.target.value;
-          engine.save();
-        }
+        var gc3 = window._getGlobalNodeConfigs ? window._getGlobalNodeConfigs() : {};
+        if (!gc3.storyboard) gc3.storyboard = {};
+        gc3.storyboard.resolution = e.target.value;
+        if (window._saveGlobalNodeConfigs) window._saveGlobalNodeConfigs(gc3);
       }
     });
 
@@ -1182,5 +1251,6 @@
     render: render, bindEvents: bindEvents,
     parseNodeType: parseNodeType, parseSegIndex: parseSegIndex,
     parseBranchIdx: parseBranchIdx, getNodeDataByKey: getNodeDataByKey,
+    getReviewMaxRetries: _getReviewMaxRetries,
   };
 })();
