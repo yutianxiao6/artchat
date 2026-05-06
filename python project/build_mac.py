@@ -87,6 +87,9 @@ def run_pyinstaller(icon_path):
         f"--osx-bundle-identifier={BUNDLE_ID}",
         "--add-data", f"{FRONTEND_DIR}{os.pathsep}frontend",
     ]
+    target_arch = os.environ.get("TARGET_ARCH", "").strip()
+    if target_arch in ("x86_64", "arm64", "universal2"):
+        args.append(f"--target-architecture={target_arch}")
     if icon_path:
         args.append(f"--icon={icon_path}")
 

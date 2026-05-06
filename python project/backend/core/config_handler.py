@@ -18,12 +18,18 @@ CONFIG_FILE = get_config_file_path()
 # 加载配置
 def load_configs() -> List[Dict]:
     if not os.path.exists(CONFIG_FILE):
+        print(f"[config] CONFIG_FILE 不存在: {CONFIG_FILE}")
         return []
     try:
         with open(CONFIG_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
+            data = json.load(f)
+        if not isinstance(data, list):
+            print(f"[config] CONFIG_FILE 不是数组: {CONFIG_FILE} type={type(data).__name__}")
+            return []
+        print(f"[config] 已加载 {len(data)} 条配置: {CONFIG_FILE}")
+        return data
     except Exception as e:
-        print(f"配置文件加载失败: {str(e)}")
+        print(f"[config] 配置文件加载失败 ({CONFIG_FILE}): {type(e).__name__}: {e}")
         return []
 
 # 保存配置
