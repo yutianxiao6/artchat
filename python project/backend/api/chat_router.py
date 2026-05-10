@@ -19,15 +19,66 @@ router = APIRouter(prefix="/api/chat", tags=["聊天对话"])
 CHAT_IMAGES_DIR = os.path.join(get_data_root(), "chat_images")
 os.makedirs(CHAT_IMAGES_DIR, exist_ok=True)
 
-ALLOWED_IMAGE_SIZES = {
-    "1024x1024",
-    "1536x1024",
-    "1024x1536",
-    "2048x2048",
-    "2048x1152",
-    "2160x3840",
-    "3840x2160",
-}
+MAX_IMAGE_EDGE = 3840
+MIN_IMAGE_EDGE = 256
+MAX_RATIO = 3.0
+MIN_PIXELS = 655360
+MAX_PIXELS = 8294400
+
+
+def _align16(n: int) -> int:
+    """对齐到 16 的倍数（向下取整，最小 MIN_IMAGE_EDGE）。"""
+    v = max(MIN_IMAGE_EDGE, (int(n) // 16) * 16)
+    return min(v, MAX_IMAGE_EDGE)
+
+
+def _clamp_image_size(w: int, h: int) -> tuple:
+    """确保满足：最长边≤3840、16倍数、长短边比≤3:1、总像素在[655360, 8294400]。"""
+    w, h = int(w), int(h)
+    if w <= 0 or h <= 0:
+        return 1024, 1024
+
+    # 1) 最长边不超过 MAX_IMAGE_EDGE
+    longest = max(w, h)
+    if longest > MAX_IMAGE_EDGE:
+        scale = MAX_IMAGE_EDGE / longest
+        w = int(w * scale)
+        h = int(h * scale)
+
+    # 2) 对齐到 16 的倍数
+    w = _align16(w)
+    h = _align16(h)
+
+    # 3) 长短边比不超过 3:1
+    long_side = max(w, h)
+    short_side = min(w, h)
+    if short_side > 0 and long_side / short_side > MAX_RATIO:
+        new_short = _align16(int(long_side / MAX_RATIO))
+        if w >= h:
+            h = new_short
+        else:
+            w = new_short
+
+    # 4) 总像素不超过 MAX_PIXELS（等比缩小）
+    pixels = w * h
+    if pixels > MAX_PIXELS:
+        scale = (MAX_PIXELS / pixels) ** 0.5
+        w = _align16(int(w * scale))
+        h = _align16(int(h * scale))
+
+    # 5) 总像素不少于 MIN_PIXELS（等比放大，对齐后可能偏小则再补一档）
+    pixels = w * h
+    if pixels < MIN_PIXELS:
+        scale = (MIN_PIXELS / pixels) ** 0.5
+        w = _align16(max(MIN_IMAGE_EDGE, int(w * scale) + 15))
+        h = _align16(max(MIN_IMAGE_EDGE, int(h * scale) + 15))
+        if w * h < MIN_PIXELS:
+            if w <= h:
+                w += 16
+            else:
+                h += 16
+
+    return w, h
 
 
 def get_config_by_id(config_id: str):
@@ -41,7 +92,7 @@ def get_first_config(config_type: str):
 
 def parse_image_request_rules(message: str) -> dict:
     text = (message or "").lower()
-    size = None
+    width, height = None, None
     count = 1
 
     match = re.search(r"([1-4])\s*[张个幅版]", text)
@@ -55,24 +106,24 @@ def parse_image_request_rules(message: str) -> dict:
                 break
 
     if any(k in text for k in ["手机壁纸", "竖版", "竖图", "封面", "story", "stories"]):
-        size = "1024x1536"
+        width, height = 1024, 1536
     if any(k in text for k in ["高清壁纸", "超清壁纸", "手机桌面"]):
-        size = "2160x3840"
+        width, height = 2160, 3840
     if any(k in text for k in ["横版", "横图", "banner", "海报横版"]):
-        size = "1536x1024"
+        width, height = 1536, 1024
     if any(k in text for k in ["宽屏", "电脑壁纸", "桌面壁纸", "landscape"]):
-        size = "3840x2160"
+        width, height = 3840, 2160
     if any(k in text for k in ["头像", "方图", "方形", "icon", "logo"]):
-        size = "1024x1024"
+        width, height = 1024, 1024
     if any(k in text for k in ["超清", "8k", "4k"]):
-        if size in {None, "1024x1024"}:
-            size = "2048x2048"
-        elif size == "1536x1024":
-            size = "2048x1152"
-        elif size == "1024x1536":
-            size = "2160x3840"
+        if width is None:
+            width, height = 2048, 2048
+        else:
+            width = min(width * 2, MAX_IMAGE_EDGE)
+            height = min(height * 2, MAX_IMAGE_EDGE)
+            width, height = _clamp_image_size(width, height)
 
-    return {"image_size": size, "image_count": max(1, min(count, 4))}
+    return {"image_width": width, "image_height": height, "image_count": max(1, min(count, 4))}
 
 
 def _resolve_image_url(url: str) -> str:
@@ -283,61 +334,126 @@ async def create_chat_response(config: dict, request_data: dict, stream: bool, t
     return response.json()
 
 
+_GREETING_ONLY_RE = re.compile(
+    r"^\s*(你好|您好|hi|hello|hey|在吗|嗨|哈喽|早上好|中午好|下午好|晚上好)[\s!?。！？~.]*$",
+    re.IGNORECASE,
+)
+
+_IMAGE_KEYWORD_RE = re.compile(
+    r"画|绘|生成|图片|图像|插画|海报|封面|壁纸|头像|立绘|画面|出图|渲染|示意图|可视化|一张|一幅|"
+    r"draw|paint|sketch|render|illustrat|image|picture|photo|poster|wallpaper|avatar",
+    re.IGNORECASE,
+)
+
+_CONFIRMATION_RE = re.compile(
+    r"^\s*(是|对|好|好的|好啊|可以|行|没错|确认|确定|ok|okay|yes|sure|go|嗯|嗯嗯|来吧|那就|就这样|麻烦了?|帮我|请|需要|要)"
+    r"[\s!?。！？~.,]*$",
+    re.IGNORECASE,
+)
+
+
+def _recent_history_has_image_topic(messages) -> bool:
+    """最近 ~6 条消息里是否出现过任何图像相关语义。"""
+    window = (messages or [])[-6:]
+    for m in window:
+        txt = str(m.get("content") or "")
+        if _IMAGE_KEYWORD_RE.search(txt):
+            return True
+    return False
+
+
 async def classify_task(message: str, has_files: bool, file_names: list, messages: list, classifier_config: dict) -> dict:
     rule_result = parse_image_request_rules(message)
     normalized_message = (message or "").strip()
-    lower_message = normalized_message.lower()
+    has_history = bool(messages)
 
-    simple_chat_patterns = [
-        "你好", "hi", "hello", "在吗", "介绍一下", "解释一下", "帮我写", "帮我改", "翻译", "润色", "总结", "怎么", "为什么", "如何", "是什么", "啥意思", "代码", "报错", "排查", "优化", "修复"
-    ]
-    if not has_files and len(normalized_message) <= 120 and any(k in lower_message or k in normalized_message for k in simple_chat_patterns):
+    if (not has_files
+            and not has_history
+            and len(normalized_message) <= 20
+            and _GREETING_ONLY_RE.match(normalized_message)):
         return {
             "task_type": "chat",
-            "reason": "普通短文本问答，跳过分类模型直通聊天",
+            "reason": "纯打招呼且无历史，直通聊天",
             "rewritten_prompt": None,
-            "image_size": rule_result.get("image_size") or "1024x1024",
-            "image_count": rule_result.get("image_count") or 1,
+            "image_size": "1024x1024",
+            "image_count": 1,
+        }
+
+    # 快速闸门：本轮 + 近 6 轮历史均无图像信号 → 明确是 chat，跳过分类器
+    msg_has_image_keyword = bool(_IMAGE_KEYWORD_RE.search(normalized_message))
+    msg_is_confirmation = bool(_CONFIRMATION_RE.match(normalized_message))
+    history_has_image_topic = _recent_history_has_image_topic(messages)
+
+    if (not has_files
+            and not msg_has_image_keyword
+            and not history_has_image_topic
+            and not msg_is_confirmation):
+        return {
+            "task_type": "chat",
+            "reason": "本轮与近 6 轮历史均无图像相关信号，跳过分类器",
+            "rewritten_prompt": None,
+            "image_size": "1024x1024",
+            "image_count": 1,
         }
 
     files_hint = ""
     if has_files and file_names:
-        files_hint = f"\n用户同时上传了以下文件：{', '.join(file_names)}。判断任务类型时只看用户文字意图，文件会作为辅助材料一并发送给对应模型。"
+        files_hint = f"\n\n用户本轮同时上传了文件：{', '.join(file_names)}。文件本身会作为材料一并发送给对应模型，不影响你判断任务类型。"
 
     system_prompt = (
-        "你是任务路由器。根据用户文字输入判断任务类型，只能返回 JSON，不要输出多余文字。"
-        "\n任务类型:"
-        " chat = 普通问答、写作、分析、翻译、代码讨论、总结文件、读取文件、分析文件内容等;"
-        " image = 明确要求生成/画/绘制/创作一张具体的图片（包括参考已有素材来生成新图片、分镜图、多场景图等）。"
-        " 注意：要求写提示词、描述画面等属于chat而非image。"
+        "你是一个多模态意图识别代理。用户在一个同时支持『聊天』和『图像生成』的助手里发消息。"
+        "你的任务：结合【完整对话历史 + 用户本轮消息】，像一个真正的助手那样先在心里理解整个对话脉络，再判断用户这一轮到底想要什么。"
+        "你只能输出一个 JSON 对象，不要输出任何多余文字。"
+        "\n\n== 判断流程（必须这样思考，但不要输出思考过程） =="
+        "\n1) 先在心里简要概括整段历史：用户此前在聊什么主题、有没有提到画面/角色/场景/风格；助手有没有提议、承诺、或正在引导用户去生图。"
+        "\n2) 识别用户本轮消息的真实意图。本轮消息可能是：全新请求；延续之前话题的补充描述；对助手提议的确认（是/好/可以/来吧/那就/行/嗯/ok 等）；对之前图像结果的修改请求（再画一张、换个风格、改成竖版、加点光效）；纯聊天。"
+        "\n3) 本轮消息语义可能不完整。比如用户只说『是』或『就这样』，必须结合历史补全：助手承诺要画什么、用户之前描述的画面元素、已经约定的风格和尺寸——把这些信息全部吸收后再判定。"
+        "\n4) 做最终判断。"
+        "\n\n== 两种任务类型 =="
+        "\n• chat：普通问答、分析、代码、翻译、写作、总结/分析文件、解释概念、帮写文案或绘图提示词文本但不要出图、描述某张画但不要求生成、只是讨论画面构思等。"
+        "\n• image：用户想要一张实际生成的图片。包括直接命令（画一张…/生成…/给我出一张…）、隐含意图（想看看长什么样、可视化一下、给我个封面/海报/壁纸/头像/立绘/插画/示意图）、对助手主动提议的肯定或确认、对既有图像的修改/变体请求。"
+        "\n\n== 当你判定为 image 时，rewritten_prompt 的要求 =="
+        "\n必须生成一段可以直接喂给绘图模型的中文（或中英混合）提示词。语义来源：融合『用户本轮消息 + 整段历史中与画面相关的所有约定信息（主体/角色/风格/场景/氛围/视角/尺寸/参考图意图）』。"
+        "\n即便用户本轮只说『是』『好』『继续』，也必须回溯历史把画面补齐——不得只写用户那一个字。"
+        "\n结构建议依次包含：主体与角色、风格（写实/二次元/国风/赛博朋克/水彩/3D/吉卜力…）、场景与环境、构图与视角（特写/全景/俯视/第一视角…）、光影与氛围、关键细节、画质词（高清/8K/电影感/精致细节）。"
+        "\n不要加『Prompt:』『提示词：』等前缀；不要解释；直接写内容。"
+        "\n\n== image_size（宽x高）判定 =="
+        "\n输出格式为 \"宽x高\"（如 1024x1024）。规则："
+        "\n• 宽和高都必须是 16 的倍数，最长边不超过 3840，最短边不小于 256。"
+        "\n• 如果用户明确给了数字尺寸（如 1920x1080、512x768），直接使用（你来校验是否合法，不合法则按比例缩放到合法范围）。"
+        "\n• 如果用户给了比例（如 16:9、4:3、3:2、9:16、1:1），按该比例选一个合理分辨率。"
+        "\n• 常用参考：1:1→1024x1024；16:9→1536x864；9:16→864x1536；4:3→1024x768；3:4→768x1024；3:2→1536x1024；2:3→1024x1536。"
+        "\n• 如果用户说了场景关键词但没给数字："
+        "\n  - 头像/icon/logo/方图 → 1024x1024"
+        "\n  - 横版/banner/海报横版/风景 → 1536x1024"
+        "\n  - 竖版/手机壁纸/封面/立绘/story → 1024x1536"
+        "\n  - 电脑壁纸/桌面/宽屏 → 1920x1080"
+        "\n• 如果用户提到超清/4K/8K，在保持比例的前提下放大（最长边可到 3840）。"
+        "\n• 如果什么都没提，默认 1024x1024。"
+        "\n• 判定依据同样要看完整对话历史中约定过的尺寸/比例。"
+        "\n\n== image_count =="
+        "\n1-4 的整数。用户或历史未明确说『几张/多版』则填 1。"
+        "\n\n== 输出格式 =="
+        '\n{"task_type":"chat|image","reason":"一句话写出你的判断依据，可以引用历史中的关键片段","rewritten_prompt":"image 必填；chat 填空字符串","image_size":"宽x高","image_count":1}'
         f"{files_hint}"
-        "\n如果是图片任务，根据用户描述提取image_size和image_count。用户可能说横屏/竖屏/正方形/4K/2K/比例等，请合理映射到对应尺寸。"
-        " image_size 只能取 1024x1024 / 1536x1024 / 1024x1536 / 2048x2048 / 2048x1152 / 2160x3840 / 3840x2160 中一个。"
-        " image_count 取 1-4 的整数。"
-        "\n输出格式: {\"task_type\":\"chat|image\",\"reason\":\"简短原因\",\"rewritten_prompt\":\"如果是image，给出适合绘图模型的优化提示词，否则可为空\",\"image_size\":\"可为空\",\"image_count\":1}"
     )
 
-    if has_files:
-        routing_messages = [{"role": "system", "content": system_prompt}]
-        routing_messages.append({
-            "role": "user",
-            "content": f"用户最新输入:\n{message}"
-        })
-    else:
-        context_messages = messages[-8:] if messages else []
-        routing_messages = [{"role": "system", "content": system_prompt}]
+    history_limit = 30
+    context_messages = (messages or [])[-history_limit:]
+    routing_messages = [{"role": "system", "content": system_prompt}]
+    if not has_files and context_messages:
         routing_messages.extend(context_messages)
-        routing_messages.append({
-            "role": "user",
-            "content": f"用户最新输入:\n{message}"
-        })
+    routing_messages.append({
+        "role": "user",
+        "content": f"【用户本轮消息】\n{message}\n\n请先在心里梳理以上完整对话历史，再判断本轮意图并输出 JSON。"
+    })
 
     request_data = {
         "model": classifier_config["model_name"],
         "messages": routing_messages,
         "temperature": 0.1,
         "stream": False,
-        "max_tokens": 400,
+        "max_tokens": 800,
         "response_format": {"type": "json_object"}
     }
 
@@ -359,8 +475,8 @@ async def classify_task(message: str, has_files: bool, file_names: list, message
             "task_type": "chat",
             "reason": f"分类器调用失败: {str(e)[:100]}",
             "rewritten_prompt": None,
-            "image_size": rule_result.get("image_size") or "1024x1024",
-            "image_count": rule_result.get("image_count") or 1,
+            "image_size": "1024x1024",
+            "image_count": 1,
         }
     parsed.setdefault("task_type", "chat")
     parsed.setdefault("reason", "默认聊天")
@@ -371,14 +487,35 @@ async def classify_task(message: str, has_files: bool, file_names: list, message
     if parsed.get("task_type") not in ("chat", "image"):
         parsed["task_type"] = "chat"
 
-    rule_result = parse_image_request_rules(message)
     if parsed.get("task_type") == "image":
-        if rule_result.get("image_size") in ALLOWED_IMAGE_SIZES:
-            parsed["image_size"] = rule_result["image_size"]
-        parsed["image_count"] = rule_result.get("image_count") or parsed.get("image_count") or 1
+        model_size = str(parsed.get("image_size") or "").strip()
+        w, h = 1024, 1024
+        if "x" in model_size:
+            try:
+                parts = model_size.split("x")
+                w, h = int(parts[0]), int(parts[1])
+            except (ValueError, IndexError):
+                pass
+        elif rule_result.get("image_width"):
+            w, h = rule_result["image_width"], rule_result["image_height"]
+        w, h = _clamp_image_size(w, h)
+        parsed["image_size"] = f"{w}x{h}"
+        parsed["image_count"] = int(parsed.get("image_count") or rule_result.get("image_count") or 1)
+        rewritten = str(parsed.get("rewritten_prompt") or "").strip()
+        if not rewritten:
+            parsed["rewritten_prompt"] = normalized_message or None
 
-    if parsed.get("image_size") not in ALLOWED_IMAGE_SIZES:
+    # 最终兜底
+    size_str = str(parsed.get("image_size") or "").strip()
+    if "x" not in size_str:
         parsed["image_size"] = "1024x1024"
+    else:
+        try:
+            fw, fh = [int(x) for x in size_str.split("x")]
+            fw, fh = _clamp_image_size(fw, fh)
+            parsed["image_size"] = f"{fw}x{fh}"
+        except (ValueError, IndexError):
+            parsed["image_size"] = "1024x1024"
     parsed["image_count"] = max(1, min(int(parsed.get("image_count") or 1), 4))
     return parsed
 

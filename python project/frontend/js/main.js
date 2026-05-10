@@ -150,6 +150,12 @@
   }
 
   window.activateTab = function activateTab(tabId, opts = {}) {
+    // 离开 image tab 前同步刷新画布保存（避免运行时频繁存档导致卡顿）
+    const currentActive = document.querySelector('.tab-content.active');
+    const currentId = currentActive ? currentActive.id : null;
+    if (currentId === 'image' && tabId !== 'image' && typeof window.flushImageCanvasSave === 'function') {
+      try { window.flushImageCanvasSave(); } catch (_) {}
+    }
     document.querySelectorAll(".tab-nav .tab-btn").forEach((b) => {
       const isActive = b.getAttribute("data-tab") === tabId;
       b.classList.toggle("active", isActive);

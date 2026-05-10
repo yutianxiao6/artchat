@@ -598,15 +598,16 @@ function renderMessageItem(m, index, totalCount) {
     <div class="oc-file-preview-list">
       ${userFiles.map((file, i) => {
         const previewSrc = resolveChatPreviewUrl(file);
+        const saveSrc = file.image_url || previewSrc || "";
         return String(file.content_type || "").startsWith("image/") && previewSrc
-          ? `<button type="button" class="oc-image-card oc-image-card-inline" data-chat-image-preview="${escapeHtml(previewSrc)}" data-chat-image-save="${escapeHtml(file.image_url || previewSrc || "")}"><img src="${escapeHtml(previewSrc)}" alt="user-file-${i + 1}" onerror="console.warn('[chat][image] preview load failed', this.src)"></button>`
+          ? `<button type="button" class="oc-image-card oc-image-card-inline" data-chat-image-preview="${escapeHtml(previewSrc)}" data-chat-image-save="${escapeHtml(saveSrc)}"><img src="${escapeHtml(previewSrc)}" alt="user-file-${i + 1}" onerror="console.warn('[chat][image] preview load failed', this.src)"><span class="oc-image-download" data-chat-image-download="${escapeHtml(saveSrc)}" title="下载图片"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></span></button>`
           : `<span class="oc-file-chip static"><span>${escapeHtml(file.filename || `附件${i + 1}`)}</span></span>`;
       }).join("")}
     </div>
   ` : "";
   const images = Array.isArray(m.images) && m.images.length ? `
     <div class="oc-image-grid">
-      ${m.images.map((img, i) => `<button type="button" class="oc-image-card" data-chat-image-preview="${escapeHtml(img.url)}" data-chat-image-save="${escapeHtml(img.url)}"><img src="${escapeHtml(img.url)}" alt="image-${i + 1}"></button>`).join("")}
+      ${m.images.map((img, i) => `<button type="button" class="oc-image-card" data-chat-image-preview="${escapeHtml(img.url)}" data-chat-image-save="${escapeHtml(img.url)}"><img src="${escapeHtml(img.url)}" alt="image-${i + 1}"><span class="oc-image-download" data-chat-image-download="${escapeHtml(img.url)}" title="下载图片"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></span></button>`).join("")}
     </div>
   ` : "";
   const selectedChatId = document.getElementById("chat-config-select")?.value || "";
@@ -734,18 +735,37 @@ function closeChatImagePreview() {
 
 async function saveChatImageToGallery(imageUrl) {
   try {
-    if (!imageUrl) return;
-    const match = String(imageUrl).match(/^data:(image\/[^;]+);base64,(.+)$/);
-    
-    const res = await fetch(imageUrl);
+    if (!imageUrl) return toast("无可下载图片");
+    const abs = /^https?:|^data:|^blob:/.test(imageUrl) ? imageUrl : new URL(imageUrl, window.location.href).href;
+    const res = await fetch(abs);
     const blob = await res.blob();
-    const reader = new FileReader();
-    reader.onload = () => {
-      const dataUrl = String(reader.result || "");
-      const m = dataUrl.match(/^data:(image\/[^;]+);base64,(.+)$/);
-      
-    };
-    reader.readAsDataURL(blob);
+    const mime = blob.type || "image/png";
+    const extMap = { "image/png": "png", "image/jpeg": "jpg", "image/webp": "webp", "image/gif": "gif", "image/bmp": "bmp" };
+    const ext = extMap[mime] || "png";
+    const filename = `chat_${Date.now()}.${ext}`;
+
+    if (window.LiuHuiGallery && typeof window.LiuHuiGallery.saveBase64ToAppFile === "function") {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const dataUrl = String(reader.result || "");
+        const match = dataUrl.match(/^data:(image\/[^;]+);base64,(.+)$/);
+        if (!match) return toast("保存失败");
+        const saved = String(window.LiuHuiGallery.saveBase64ToAppFile(match[2], match[1], "chat") || "");
+        toast(saved.startsWith("OK:") ? "已保存到相册" : "保存失败");
+      };
+      reader.readAsDataURL(blob);
+      return;
+    }
+
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+    toast("已开始下载");
   } catch (error) {
     console.warn("[chat][image] save failed", error);
     toast("保存失败");
@@ -1347,6 +1367,14 @@ function bindEvents() {
   }
   if (msgWrap && !msgWrap._bound) {
     msgWrap.addEventListener("click", (e) => {
+      const downloadBtn = e.target.closest("[data-chat-image-download]");
+      if (downloadBtn) {
+        e.preventDefault();
+        e.stopPropagation();
+        const url = downloadBtn.getAttribute("data-chat-image-download") || "";
+        saveChatImageToGallery(url);
+        return;
+      }
       const previewImage = e.target.closest("[data-chat-image-preview]");
       if (chatImageLongPressTriggered) {
         chatImageLongPressTriggered = false;
@@ -1552,6 +1580,11 @@ function injectStyles() {
     .oc-dim { opacity:.6; }
     .oc-image-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; margin-top:12px; }
     .oc-image-card { display:block; overflow:hidden; border-radius:14px; border:1px solid #e5e7eb; background:#fff; padding:0; appearance:none; -webkit-appearance:none; position:relative; }
+    .oc-image-download { position:absolute; top:8px; right:8px; width:28px; height:28px; display:inline-flex; align-items:center; justify-content:center; border-radius:999px; background:rgba(15,23,42,.72); color:#fff; opacity:0; transform:translateY(-2px); transition:opacity .18s, transform .18s, background .18s; pointer-events:none; backdrop-filter:blur(6px); box-shadow:0 6px 16px rgba(0,0,0,.28); z-index:3; }
+    .oc-image-card:hover .oc-image-download, .oc-image-card:focus-within .oc-image-download { opacity:1; transform:translateY(0); pointer-events:auto; }
+    .oc-image-download:hover { background:#2563eb; }
+    .oc-image-download:active { transform:scale(.92); }
+    .oc-image-download svg { display:block; }
     .oc-image-action-bar.hidden { display:none; }
     .oc-image-action-bar { position:fixed; z-index:100000; display:flex; gap:8px; padding:8px; border-radius:14px; background:rgba(15,23,42,.94); border:1px solid rgba(148,163,184,.2); box-shadow:0 18px 44px rgba(2,6,23,.34); backdrop-filter:blur(10px); }
     .oc-image-action-btn { border:none; border-radius:10px; background:linear-gradient(180deg,#2563eb,#1d4ed8); color:#fff; display:inline-flex; align-items:center; gap:6px; padding:10px 12px; font-size:12px; font-weight:700; }
