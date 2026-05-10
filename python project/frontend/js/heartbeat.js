@@ -6,16 +6,12 @@
 (function() {
   "use strict";
 
-  var HEARTBEAT_INTERVAL = 3000; // 3秒发送一次心跳
+  var HEARTBEAT_INTERVAL = 3000; // 页面可见时 3 秒
+  var HIDDEN_HEARTBEAT_INTERVAL = 30000; // 页面隐藏时 30 秒，避免浏览器节流让后端误判闲置
   var heartbeatTimer = null;
   var isPageVisible = true;
 
   function sendHeartbeat() {
-    // 只在页面可见时发送心跳
-    if (!isPageVisible) {
-      return;
-    }
-
     fetch("/api/heartbeat", {
       method: "GET",
       headers: {
@@ -34,8 +30,9 @@
     // 立即发送一次
     sendHeartbeat();
 
-    // 定期发送
-    heartbeatTimer = setInterval(sendHeartbeat, HEARTBEAT_INTERVAL);
+    // 定期发送（即使页面隐藏也要发，否则长时间生图过程中后端会因闲置自杀）
+    var interval = isPageVisible ? HEARTBEAT_INTERVAL : HIDDEN_HEARTBEAT_INTERVAL;
+    heartbeatTimer = setInterval(sendHeartbeat, interval);
   }
 
   function stopHeartbeat() {
@@ -45,17 +42,10 @@
     }
   }
 
-  // 监听页面可见性变化
+  // 监听页面可见性变化：切换可见性时重启心跳以应用新的间隔
   document.addEventListener("visibilitychange", function() {
     isPageVisible = !document.hidden;
-
-    if (isPageVisible) {
-      console.log("页面可见，启动心跳");
-      startHeartbeat();
-    } else {
-      console.log("页面隐藏，停止心跳");
-      stopHeartbeat();
-    }
+    startHeartbeat();
   });
 
   // 页面加载时启动心跳

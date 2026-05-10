@@ -133,7 +133,7 @@
       title: title || (template ? template.name : "新工作流"),
       templateId: template ? template.id : null,
       createdAt: new Date().toISOString(),
-      input: { plot: "", style: "", type: "", segmentCount: null },
+      input: { plot: "", style: "", type: "", segmentCount: null, episodeCount: null },
       mode: "single",
       multiCount: 1,
       history: [],
@@ -147,6 +147,16 @@
       }
     });
     wf.segments = [];
+    // 初始化 episode 模型
+    var ep0 = Object.assign({
+      id: "ep_" + Date.now().toString(36),
+      index: 0,
+      title: "第1集",
+      plot: "",
+      prevEpisodeId: null,
+    }, this._snapshotEpisode(wf, tplPipeline));
+    wf.episodes = [ep0];
+    wf.currentEpisodeId = ep0.id;
     this.workflows.unshift(wf);
     this.currentId = wf.id;
     this.syncPipeline();
@@ -168,10 +178,11 @@
 
   P.ensureShape = function (wf) {
     if (!wf) return;
-    if (!wf.input) wf.input = { plot: "", style: "", type: "", segmentCount: null };
+    if (!wf.input) wf.input = { plot: "", style: "", type: "", segmentCount: null, episodeCount: null };
     if (!wf.input.plot) wf.input.plot = "";
     if (!wf.input.style) wf.input.style = "";
     if (!wf.input.type) wf.input.type = "";
+    if (!("episodeCount" in wf.input)) wf.input.episodeCount = null;
     if (!wf.history) wf.history = [];
     if (!wf.mode) wf.mode = "single";
     if (!wf.multiCount) wf.multiCount = 1;
@@ -182,6 +193,9 @@
       var tpl = (window.WF_Templates || []).find(function (t) { return t.id === wf.templateId; });
       if (tpl && tpl.pipeline && tpl.pipeline.pipeline) wfPipeline = tpl.pipeline.pipeline;
     }
+
+    // 多剧集迁移：把旧版顶层字段包装为 episodes[0]
+    this._migrateToEpisodes(wf, wfPipeline);
 
     wfPipeline.forEach(function (step) {
       if (step.nodeType === "input" || step.nodeType === "fpInput" || step.nodeType === "output") return;
@@ -201,6 +215,169 @@
         if (!seg[arrayKey] || !seg[arrayKey].length) seg[arrayKey] = [NR.createNodeData()];
       });
     });
+  };
+
+  /* ── 多剧集模型 ── */
+  // 跨集共享的全局字段（不属于任何单集）
+  var SHARED_GLOBAL_NODES = { mainCharacters: true };
+
+  // 哪些顶层字段属于"剧集级"（每集独立）
+  P._getEpisodeFieldKeys = function (wfPipeline) {
+    var keys = ["segments"];
+    (wfPipeline || this.defaultPipeline).forEach(function (step) {
+      if (step.nodeType === "input" || step.nodeType === "fpInput" || step.nodeType === "output") return;
+      if (step.category !== "global") return;
+      if (SHARED_GLOBAL_NODES[step.nodeType]) return;
+      keys.push(step.nodeType + "s");
+      keys.push(step.nodeType + "Count");
+    });
+    return keys;
+  };
+
+  P._isSharedGlobalNode = function (nodeType) {
+    return !!SHARED_GLOBAL_NODES[nodeType];
+  };
+
+  P._snapshotEpisode = function (wf, wfPipeline) {
+    var snap = {};
+    var keys = this._getEpisodeFieldKeys(wfPipeline);
+    keys.forEach(function (k) { if (wf[k] !== undefined) snap[k] = wf[k]; });
+    return snap;
+  };
+
+  P._applyEpisode = function (wf, ep, wfPipeline) {
+    var keys = this._getEpisodeFieldKeys(wfPipeline);
+    keys.forEach(function (k) {
+      if (ep[k] !== undefined) wf[k] = ep[k];
+      else delete wf[k];
+    });
+  };
+
+  P._migrateToEpisodes = function (wf, wfPipeline) {
+    var self = this;
+    if (wf.episodes && wf.episodes.length) {
+      // 已是新结构：将共享字段（如 mainCharacters）从各 episode 提升到顶层
+      wf.episodes.forEach(function (ep) {
+        Object.keys(SHARED_GLOBAL_NODES).forEach(function (nt) {
+          var ak = nt + "s", ck = nt + "Count";
+          if (ep[ak] && (!wf[ak] || self._isEmptyNodeArray(wf[ak]))) {
+            wf[ak] = ep[ak];
+            wf[ck] = ep[ck] || 1;
+          }
+          delete ep[ak];
+          delete ep[ck];
+        });
+      });
+      var cur = wf.episodes.find(function (e) { return e.id === wf.currentEpisodeId; });
+      if (!cur) { cur = wf.episodes[0]; wf.currentEpisodeId = cur.id; }
+      this._applyEpisode(wf, cur, wfPipeline);
+      return;
+    }
+    // 旧版：把顶层 segments + global 节点数组打包为 episodes[0]
+    var snap = this._snapshotEpisode(wf, wfPipeline);
+    var ep0 = Object.assign({
+      id: "ep_" + Date.now().toString(36),
+      index: 0,
+      title: "第1集",
+      plot: (wf.input && wf.input.plot) || "",
+      prevEpisodeId: null,
+    }, snap);
+    wf.episodes = [ep0];
+    wf.currentEpisodeId = ep0.id;
+  };
+
+  P._isEmptyNodeArray = function (arr) {
+    if (!arr || !arr.length) return true;
+    for (var i = 0; i < arr.length; i++) {
+      var nd = arr[i];
+      if (nd && (nd.versions && nd.versions.length || nd.activeVersionId)) return false;
+    }
+    return true;
+  };
+
+  P.currentEpisode = function (wf) {
+    wf = wf || this.current();
+    if (!wf || !wf.episodes) return null;
+    return wf.episodes.find(function (e) { return e.id === wf.currentEpisodeId; }) || wf.episodes[0] || null;
+  };
+
+  P.switchEpisode = function (epId) {
+    var wf = this.current();
+    if (!wf || !wf.episodes) return;
+    var target = wf.episodes.find(function (e) { return e.id === epId; });
+    if (!target) return;
+    // 写回当前集的最新顶层字段（用户可能刚编辑过）
+    var pipeline = this.getPipeline();
+    var cur = this.currentEpisode(wf);
+    if (cur) {
+      var snap = this._snapshotEpisode(wf, pipeline);
+      Object.keys(snap).forEach(function (k) { cur[k] = snap[k]; });
+    }
+    wf.currentEpisodeId = target.id;
+    this._applyEpisode(wf, target, pipeline);
+    this.ensureShape(wf);
+    this.save();
+  };
+
+  P.addEpisode = function (title) {
+    var wf = this.current();
+    if (!wf) return null;
+    var pipeline = this.getPipeline();
+    // 写回当前集
+    var cur = this.currentEpisode(wf);
+    if (cur) {
+      var snap = this._snapshotEpisode(wf, pipeline);
+      Object.keys(snap).forEach(function (k) { cur[k] = snap[k]; });
+    }
+    var idx = wf.episodes.length;
+    var newEp = {
+      id: "ep_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 4),
+      index: idx,
+      title: title || ("第" + (idx + 1) + "集"),
+      plot: "",
+      prevEpisodeId: cur ? cur.id : null,
+      segments: [],
+    };
+    var self = this;
+    // 集独占的 global 节点空开（mainCharacters 等共享节点保留在 wf 顶层，不落入 episode）
+    pipeline.forEach(function (step) {
+      if (step.nodeType === "input" || step.nodeType === "fpInput" || step.nodeType === "output") return;
+      if (step.category !== "global") return;
+      if (self._isSharedGlobalNode(step.nodeType)) return;
+      var ak = step.nodeType + "s";
+      if (!newEp[ak]) {
+        newEp[ak] = [NR.createNodeData()];
+        newEp[step.nodeType + "Count"] = 1;
+      }
+    });
+    wf.episodes.push(newEp);
+    wf.currentEpisodeId = newEp.id;
+    this._applyEpisode(wf, newEp, pipeline);
+    this.ensureShape(wf);
+    this.save();
+    return newEp;
+  };
+
+  P.deleteEpisode = function (epId) {
+    var wf = this.current();
+    if (!wf || !wf.episodes || wf.episodes.length <= 1) return;
+    var pipeline = this.getPipeline();
+    var idx = wf.episodes.findIndex(function (e) { return e.id === epId; });
+    if (idx < 0) return;
+    var wasCurrent = wf.currentEpisodeId === epId;
+    wf.episodes.splice(idx, 1);
+    // 重建 index 和 prevEpisodeId 链
+    wf.episodes.forEach(function (e, i) {
+      e.index = i;
+      e.prevEpisodeId = i > 0 ? wf.episodes[i - 1].id : null;
+    });
+    if (wasCurrent) {
+      var fallback = wf.episodes[Math.max(0, idx - 1)] || wf.episodes[0];
+      wf.currentEpisodeId = fallback.id;
+      this._applyEpisode(wf, fallback, pipeline);
+      this.ensureShape(wf);
+    }
+    this.save();
   };
 
   /* ── Persistence ── */
@@ -229,6 +406,15 @@
   P.save = function () {
     var wf = this.current();
     if (!wf) return;
+    // 保存前把顶层 alias 字段写回当前集
+    if (wf.episodes && wf.episodes.length) {
+      var pipeline = this.getPipeline();
+      var cur = this.currentEpisode(wf);
+      if (cur) {
+        var snap = this._snapshotEpisode(wf, pipeline);
+        Object.keys(snap).forEach(function (k) { cur[k] = snap[k]; });
+      }
+    }
     this.saveWorkflow(wf);
   };
 
@@ -244,10 +430,8 @@
   /* ── Layout Engine ── */
   P.getBranchCount = function (wf) {
     if (!wf) return 1;
-    if (wf.mode === "multi") {
-      return wf.scriptCount || 1;
-    }
-    return wf.multiCount || 1;
+    // 多剧集模式下不再使用 multi 分支
+    return 1;
   };
 
   P.getGlobalSteps = function () {
@@ -297,7 +481,9 @@
         colX += LAYOUT.nodeW + LAYOUT.gapX;
       } else if (step.nodeType === "input" || step.nodeType === "fpInput") {
         var inputKey = step.nodeType;
-        nodes.push({ key: inputKey, type: step.nodeType, x: colX, y: baseY, status: wf.input.plot ? "done" : "idle" });
+        var _curEp = this.currentEpisode(wf);
+        var _hasPlot = (_curEp && _curEp.index > 0) ? !!_curEp.plot : !!wf.input.plot;
+        nodes.push({ key: inputKey, type: step.nodeType, x: colX, y: baseY, status: _hasPlot ? "done" : "idle" });
         colPositions.push({ x: colX, type: "input" });
         prevColKeys = [inputKey];
         colX += LAYOUT.nodeW + LAYOUT.gapX;
@@ -471,14 +657,22 @@
     }
     if (nodeType === "storyboard") return !!(v.images && v.images.length);
     if (nodeType === "firstFrame" || nodeType === "lastFrame") return !!v.imageUrl;
-    if (nodeType === "storyTemplate") return !!v.imageUrl;
+    if (nodeType === "storyTemplate") {
+      // 文本预设产出 markdown，没有 imageUrl
+      if (v.kind === "text") return !!v.markdown;
+      return !!v.imageUrl;
+    }
     return true;
   }
 
   P.isNodeComplete = function (nodeType, segIdx, wf) {
     if (!wf) return false;
     if (this.isNodeSkipped(nodeType, segIdx, wf)) return true;
-    if (nodeType === "input" || nodeType === "fpInput") return !!wf.input.plot;
+    if (nodeType === "input" || nodeType === "fpInput") {
+      var curEp_ = this.currentEpisode(wf);
+      if (curEp_ && curEp_.index > 0) return !!curEp_.plot;
+      return !!wf.input.plot;
+    }
     if (nodeType === "output") return true;
 
     var nd = null;
@@ -545,11 +739,23 @@
       case "storyTemplate":
         addDep("script", null);
         addDep("planCharactersScenes", null);
-        addDep("mainCharacters", null);
-        if (segIdx !== null && segIdx !== undefined) {
-          var segNodeTypes = ["minorCharacters", "scene", "planFrames", "firstFrame", "storyboard", "lastFrame"];
-          for (var i = 0; i < segNodeTypes.length; i++) {
-            addDep(segNodeTypes[i], segIdx);
+        // storyTemplate 的文本预设（shotListMd）不需要图片类依赖
+        var stTextMode = false;
+        if (nodeType === "storyTemplate" && segIdx !== null && segIdx !== undefined) {
+          var stSeg = wf.segments && wf.segments[segIdx];
+          var stNd = stSeg && (stSeg.storyTemplates || [])[0];
+          if (stNd && stNd.presetId) {
+            var stPreset = (window.WF_findPreset && window.WF_findPreset("storyTemplate", stNd.presetId));
+            if (stPreset && stPreset.kind === "text") stTextMode = true;
+          }
+        }
+        if (!stTextMode) {
+          addDep("mainCharacters", null);
+          if (segIdx !== null && segIdx !== undefined) {
+            var segNodeTypes = ["minorCharacters", "scene", "planFrames", "firstFrame", "storyboard", "lastFrame"];
+            for (var i = 0; i < segNodeTypes.length; i++) {
+              addDep(segNodeTypes[i], segIdx);
+            }
           }
         }
         break;
@@ -596,7 +802,9 @@
     var state = this._state(wf.id);
     if (state.running) return;
     if (this.isAnyRunning(wf.id)) { alert("当前工作流有节点正在生成中，请等待完成或停止后再执行"); return; }
-    if (!wf.input.plot) { alert("请先填写输入信息"); return; }
+    var curEp = this.currentEpisode(wf);
+    var plot = (curEp && curEp.index > 0) ? (curEp.plot || "") : (wf.input.plot || "");
+    if (!plot) { alert(curEp && curEp.index > 0 ? "请先填写本集情节" : "请先填写输入信息"); return; }
     state.running = true;
     state._stopFlag = false;
     state._autoExecMode = true;

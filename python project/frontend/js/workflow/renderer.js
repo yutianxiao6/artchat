@@ -9,10 +9,17 @@
   var esc = window.WF_escapeHtml;
 
   function _getReviewMaxRetries() {
-    try { return parseInt(localStorage.getItem("flowdraw:wfReviewMaxRetries")) || 2; } catch(e) { return 2; }
+    try {
+      var raw = localStorage.getItem("flowdraw:wfReviewMaxRetries");
+      if (raw === null || raw === "") return 2;
+      var n = parseInt(raw);
+      return isNaN(n) ? 2 : n;
+    } catch(e) { return 2; }
   }
   function _setReviewMaxRetries(n) {
-    localStorage.setItem("flowdraw:wfReviewMaxRetries", String(n));
+    var v = parseInt(n);
+    if (isNaN(v) || v < 0) v = 0;
+    localStorage.setItem("flowdraw:wfReviewMaxRetries", String(v));
   }
 
   /* ── Mini Pipeline (toolbar) ── */
@@ -67,16 +74,21 @@
     var tplOpts = templates.map(function (t) {
       return '<option value="' + t.id + '">' + esc(t.name) + '</option>';
     }).join("");
+    var episodes = (wf && wf.episodes) || [];
+    var curEpId = wf && wf.currentEpisodeId;
+    var epOpts = episodes.map(function (e) {
+      var sel = e.id === curEpId ? " selected" : "";
+      return '<option value="' + esc(e.id) + '"' + sel + '>' + esc(e.title || ("第" + (e.index + 1) + "集")) + '</option>';
+    }).join("");
+    var canDelEp = episodes.length > 1;
     return '<div class="wf-toolbar" id="wf-toolbar">'
       + '<select id="wf-template-select" class="wf-toolbar-select wf-template-select">' + tplOpts + '</select>'
       + '<button class="wf-tb-btn" id="wf-new-btn"><i class="fa fa-plus"></i> 新建</button>'
       + '<button class="wf-tb-btn danger" id="wf-del-btn"><i class="fa fa-trash-o"></i></button>'
       + '<div class="wf-toolbar-sep"></div>'
-      + '<div class="wf-mode-switch">'
-      + '<button class="wf-mode-btn' + (mode === "single" ? " active" : "") + '" data-mode="single">单剧本</button>'
-      + '<button class="wf-mode-btn' + (mode === "multi" ? " active" : "") + '" data-mode="multi">多剧本</button>'
-      + '</div>'
-      + (mode === "single" && wf ? '<div class="wf-multi-count"><span>输出数量:</span><button class="wf-count-btn" data-mc-delta="-1">-</button><span class="wf-count-value">' + (wf.multiCount || 1) + '</span><button class="wf-count-btn" data-mc-delta="1">+</button></div>' : '')
+      + (wf ? ('<select id="wf-episode-select" class="wf-toolbar-select" title="切换剧集">' + epOpts + '</select>'
+        + '<button class="wf-tb-btn" id="wf-add-episode-btn" title="新增下一集（基于当前集续写）"' + (isBusy ? " disabled" : "") + '><i class="fa fa-plus"></i> 新增剧集</button>'
+        + (canDelEp ? '<button class="wf-tb-btn danger" id="wf-del-episode-btn" title="删除当前剧集"' + (isBusy ? " disabled" : "") + '><i class="fa fa-trash-o"></i></button>' : '')) : '')
       + '<div class="wf-toolbar-sep"></div>'
       + '<div class="wf-review-setting"><span>审核重试:</span><select id="wf-review-retries">'
       + [0,1,2,3,5].map(function(n){ var sel = _getReviewMaxRetries() === n ? " selected" : ""; return '<option value="'+n+'"'+sel+'>'+(n===0?'关闭':n+'次')+'</option>'; }).join("")
@@ -130,15 +142,18 @@
     html += '<div class="wf-content-inner" id="wf-content-inner" style="transform:translate(' + engine.panX + 'px,' + engine.panY + 'px) scale(' + engine.zoom + ');transform-origin:0 0;">';
     html += '<div class="wf-content-grid"><div class="wf-global-cols">';
 
+    var curEpGO = engine.currentEpisode ? engine.currentEpisode(wf) : null;
+    var displayPlotGO = (curEpGO && curEpGO.index > 0) ? (curEpGO.plot || "") : (wf.input.plot || "");
+
     globalSteps.forEach(function (step) {
       var def = NR.get(step.nodeType);
       if (!def) return;
       var isInputLike = (step.nodeType === "input" || step.nodeType === "fpInput");
       if (isInputLike) {
         html += '<div class="wf-gcol" data-col="' + step.nodeType + '"><div class="wf-col-header">' + def.label + '</div><div class="wf-col-body">';
-        if (wf.input && wf.input.plot) {
+        if (displayPlotGO) {
           html += '<div class="wf-content-card" data-node-key="' + step.nodeType + '">';
-          html += '<div class="wf-card-text">' + esc(wf.input.plot) + '</div>';
+          html += '<div class="wf-card-text">' + esc(displayPlotGO) + '</div>';
           if (wf.input.style) html += '<div class="wf-card-tag">风格: ' + esc(wf.input.style) + '</div>';
           if (wf.input.duration) html += '<div class="wf-card-tag">时长: ' + wf.input.duration + '秒</div>';
           if (wf.input.firstFrameUrl) html += '<img class="wf-card-img wf-preview-img" src="' + esc(wf.input.firstFrameUrl) + '" style="max-height:120px;margin-top:6px;">';
@@ -180,11 +195,16 @@
     html += '<div class="wf-content-inner" id="wf-content-inner" style="transform:translate(' + engine.panX + 'px,' + engine.panY + 'px) scale(' + engine.zoom + ');transform-origin:0 0;">';
     html += '<div class="wf-content-grid">';
 
+    var curEpRC = engine.currentEpisode ? engine.currentEpisode(wf) : null;
+    var displayPlotRC = (curEpRC && curEpRC.index > 0) ? (curEpRC.plot || "") : (wf.input.plot || "");
+
     // -- Input column --
-    html += '<div class="wf-global-cols"><div class="wf-gcol" data-col="input"><div class="wf-col-header">输入</div><div class="wf-col-body">';
-    if (wf.input.plot) {
+    html += '<div class="wf-global-cols"><div class="wf-gcol" data-col="input"><div class="wf-col-header">输入'
+      + (curEpRC && curEpRC.index > 0 ? ' · 第' + (curEpRC.index + 1) + '集' : '')
+      + '</div><div class="wf-col-body">';
+    if (displayPlotRC) {
       html += '<div class="wf-content-card" data-node-key="input">'
-        + '<div class="wf-card-text">' + esc(wf.input.plot) + '</div>'
+        + '<div class="wf-card-text">' + esc(displayPlotRC) + '</div>'
         + (wf.input.style ? '<div class="wf-card-tag">风格: ' + esc(wf.input.style) + '</div>' : '')
         + '</div>';
     } else {
@@ -290,12 +310,41 @@
     var wf = engine.current();
     if (!wf) return [];
     var refs = [];
+
+    // 获取本段出场人物名单（用于过滤）
+    var appearingNames = null;
+    if (segIndex !== null && wf.segments && wf.segments[segIndex]) {
+      var seg_ = wf.segments[segIndex];
+      var pfNd_ = (seg_.planFramess || [])[0];
+      if (pfNd_) {
+        var pfV_ = NR.getActiveVersion(pfNd_);
+        if (pfV_ && Array.isArray(pfV_.appearingCharacters)) {
+          appearingNames = pfV_.appearingCharacters;
+        } else {
+          var hist_ = pfNd_.planningHistory || [];
+          for (var hi = hist_.length - 1; hi >= 0; hi--) {
+            if (Array.isArray((hist_[hi] || {}).appearing_characters)) {
+              appearingNames = hist_[hi].appearing_characters;
+              break;
+            }
+          }
+        }
+      }
+    }
+    var nameSet = null;
+    if (Array.isArray(appearingNames)) {
+      nameSet = {};
+      appearingNames.forEach(function (n) { if (typeof n === "string") nameSet[n.trim()] = true; });
+    }
+
     if (!wf.mainCharactersSkip) {
       var mcArr = wf.mainCharacterss || [];
       var mcV = NR.getActiveVersion(mcArr[branchIdx] || mcArr[0]);
       if (mcV && mcV.characters) {
         mcV.characters.forEach(function (c) {
-          if (c.imageUrl) refs.push({ label: "主要人物·" + c.name, url: c.imageUrl });
+          if (!c.imageUrl) return;
+          if (nameSet && !nameSet[(c.name || "").trim()]) return;
+          refs.push({ label: "主要人物·" + c.name, url: c.imageUrl });
         });
       }
     }
@@ -305,7 +354,9 @@
       var minorV = NR.getActiveVersion((seg.minorCharacterss || [])[branchIdx] || (seg.minorCharacterss || [])[0]);
       if (minorV && minorV.characters) {
         minorV.characters.forEach(function (c) {
-          if (c.imageUrl) refs.push({ label: "次要人物·" + c.name, url: c.imageUrl });
+          if (!c.imageUrl) return;
+          if (nameSet && !nameSet[(c.name || "").trim()]) return;
+          refs.push({ label: "次要人物·" + c.name, url: c.imageUrl });
         });
       }
     }
@@ -447,8 +498,15 @@
       }
       html += '<button class="wf-copy-btn" data-copy-vp="' + key + '"><i class="fa fa-copy"></i> 复制全部</button>';
     } else if (nodeType === "storyTemplate") {
-      if (v.imageUrl) html += '<img class="wf-card-img wf-preview-img" src="' + esc(v.imageUrl) + '" data-preview="' + esc(v.imageUrl) + '">';
-      else html += '<div class="wf-card-text">已生成</div>';
+      if (v.kind === "text" && v.markdown) {
+        var preview = String(v.markdown).split("\n").slice(0, 6).join("\n");
+        if (v.markdown.length > preview.length) preview += "\n…";
+        html += '<pre class="wf-card-text" style="font-family:monospace;font-size:11px;white-space:pre;overflow:hidden;max-height:140px;">' + esc(preview) + '</pre>';
+      } else if (v.imageUrl) {
+        html += '<img class="wf-card-img wf-preview-img" src="' + esc(v.imageUrl) + '" data-preview="' + esc(v.imageUrl) + '">';
+      } else {
+        html += '<div class="wf-card-text">已生成</div>';
+      }
       if (isRunning) html += '<div class="wf-card-loading"><i class="fa fa-spinner fa-spin"></i> 生成中...</div>';
     }
 
@@ -984,11 +1042,72 @@
         return;
       }
 
+      // 恢复预设默认模板
+      var presetReset = e.target.closest && e.target.closest("[data-preset-reset]");
+      if (presetReset) {
+        var rkind = presetReset.getAttribute("data-preset-reset");
+        var rkey = engine.selectedNodeKey;
+        if (!rkey) return;
+        var rnd = getNodeDataByKey(engine, rkey);
+        if (!rnd) return;
+        var rpreset = window.WF_findPreset && window.WF_findPreset(rkind, rnd.presetId);
+        if (rpreset) {
+          rnd.promptTemplate = rpreset.template || rpreset.system_prompt || "";
+          engine.save();
+          rerender();
+        }
+        return;
+      }
+
+      // 复制 Markdown 分镜表
+      var copyMd = e.target.closest && e.target.closest("[data-copy-markdown]");
+      if (copyMd) {
+        var ckey = engine.selectedNodeKey;
+        if (!ckey) return;
+        var cnd = getNodeDataByKey(engine, ckey);
+        var cv = cnd && NR.getActiveVersion(cnd);
+        if (cv && cv.markdown) {
+          try {
+            navigator.clipboard.writeText(cv.markdown);
+            copyMd.innerHTML = '<i class="fa fa-check"></i> 已复制';
+            setTimeout(function () { copyMd.innerHTML = '<i class="fa fa-copy"></i> 复制'; }, 1500);
+          } catch (err) {}
+        }
+        return;
+      }
+
       var modeBtn = e.target.closest && e.target.closest(".wf-mode-btn");
       if (modeBtn) {
         var wf = engine.current();
         if (wf) { wf.mode = modeBtn.getAttribute("data-mode"); engine.save(); }
         rerender();
+        return;
+      }
+
+      // 新增剧集（无弹窗：切换到新集并自动打开输入节点详情面板，让用户在面板里填本集情节）
+      if (e.target.closest && e.target.closest("#wf-add-episode-btn")) {
+        var ep = engine.addEpisode();
+        if (ep) {
+          engine.selectedNodeKey = "input";
+          engine.detailOpen = true;
+          engine.save();
+          rerender();
+          // 滚到输入框并聚焦
+          setTimeout(function () {
+            var ta = document.getElementById("wf-input-plot");
+            if (ta) { ta.focus(); ta.scrollIntoView({ block: "center" }); }
+          }, 30);
+        }
+        return;
+      }
+      // 删除当前剧集
+      if (e.target.closest && e.target.closest("#wf-del-episode-btn")) {
+        var wfd = engine.current();
+        if (!wfd || !wfd.currentEpisodeId) return;
+        if (confirm("删除当前剧集？此操作不可恢复")) {
+          engine.deleteEpisode(wfd.currentEpisodeId);
+          rerender();
+        }
         return;
       }
 
@@ -1055,7 +1174,52 @@
 
     document.addEventListener("change", function (e) {
       if (e.target.id === "wf-review-retries") {
-        _setReviewMaxRetries(parseInt(e.target.value) || 0);
+        _setReviewMaxRetries(e.target.value);
+      }
+      if (e.target.id === "wf-episode-select") {
+        engine.switchEpisode(e.target.value);
+        rerender();
+        return;
+      }
+      // Preset selector change
+      if (e.target.getAttribute && e.target.getAttribute("data-preset-select")) {
+        var presetKind = e.target.getAttribute("data-preset-select");
+        var key = engine.selectedNodeKey;
+        if (!key) return;
+        var nodeType = parseNodeType(key);
+        var segIdx = parseSegIndex(key);
+        var branchIdx = parseBranchIdx(key);
+        var newPresetId = e.target.value;
+        var preset = window.WF_findPreset && window.WF_findPreset(presetKind, newPresetId);
+        var newTemplate = preset ? (preset.template || preset.system_prompt || "") : "";
+
+        var wf = engine.current();
+        if (!wf) return;
+        var def = NR.get(nodeType);
+        var isPipelineNode = (key === nodeType);
+        // pipeline 顶部节点：批量应用到所有 segment（segment 类节点）或所有分支（global 类节点）
+        if (isPipelineNode && def && def.category === "segment") {
+          (wf.segments || []).forEach(function (seg) {
+            var arr = seg[nodeType + "s"] || [];
+            arr.forEach(function (n) {
+              if (n) { n.presetId = newPresetId; n.promptTemplate = newTemplate; }
+            });
+          });
+        } else if (isPipelineNode && def && def.category === "global") {
+          var arr = wf[nodeType + "s"] || [];
+          arr.forEach(function (n) {
+            if (n) { n.presetId = newPresetId; n.promptTemplate = newTemplate; }
+          });
+        } else {
+          // 单个具体节点（带 segIdx/branchIdx）
+          var nd = getNodeDataByKey(engine, key, true);
+          if (!nd) return;
+          nd.presetId = newPresetId;
+          nd.promptTemplate = newTemplate;
+        }
+        engine.save();
+        rerender();
+        return;
       }
       if (e.target.id === "wf-skip-check") {
         var key = e.target.getAttribute("data-skip-node");
@@ -1102,6 +1266,11 @@
       var nd = getNodeDataByKey(engine, key);
       if (field === "userHint") {
         if (nd) nd.userHint = e.target.value;
+        engine.save();
+        return;
+      }
+      if (field === "promptTemplate") {
+        if (nd) nd.promptTemplate = e.target.value;
         engine.save();
         return;
       }

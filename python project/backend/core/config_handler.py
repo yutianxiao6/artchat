@@ -14,6 +14,7 @@ def get_config_file_path():
     return os.path.join(base_path, "model_configs.json")
 
 CONFIG_FILE = get_config_file_path()
+FORMAT_CACHE_FILE = os.path.join(os.path.dirname(CONFIG_FILE), "api_format_cache.json")
 
 # 加载配置
 def load_configs() -> List[Dict]:
@@ -40,3 +41,47 @@ def save_configs(configs: List[Dict]):
     except Exception as e:
         print(f"配置文件保存失败: {str(e)}")
         raise Exception("配置保存失败")
+
+
+# API 格式缓存
+_format_cache: Dict = {}
+
+def load_format_cache() -> Dict:
+    global _format_cache
+    if not os.path.exists(FORMAT_CACHE_FILE):
+        _format_cache = {}
+        return _format_cache
+    try:
+        with open(FORMAT_CACHE_FILE, "r", encoding="utf-8") as f:
+            _format_cache = json.load(f)
+    except Exception:
+        _format_cache = {}
+    return _format_cache
+
+def save_format_cache():
+    try:
+        with open(FORMAT_CACHE_FILE, "w", encoding="utf-8") as f:
+            json.dump(_format_cache, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        print(f"[format_cache] 保存失败: {e}")
+
+def get_cached_strategy(config_id: str) -> str | None:
+    if not _format_cache:
+        load_format_cache()
+    entry = _format_cache.get(config_id)
+    if entry and isinstance(entry, dict):
+        return entry.get("strategy_id")
+    return None
+
+def set_cached_strategy(config_id: str, strategy_id: str):
+    from datetime import datetime
+    _format_cache[config_id] = {
+        "strategy_id": strategy_id,
+        "last_success": datetime.now().isoformat(),
+    }
+    save_format_cache()
+
+def clear_cached_strategy(config_id: str):
+    if config_id in _format_cache:
+        del _format_cache[config_id]
+        save_format_cache()

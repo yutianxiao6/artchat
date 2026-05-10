@@ -74,24 +74,23 @@ async def test_config_connection(req: ConfigTestRequest):
         # 2. 测试图片模型（如果是图片或通用，且聊天没成功）
         if req.config_type in ["image", "both"]:
             print("[测试连接] 正在测试图片接口...")
-            image_url = req.api_base.rstrip("/") + "/images/generations"
-            image_data = {
-                "model": req.model_name,
-                "prompt": "test",
-                "size": "1024x1024",
-                "n": 1
-            }
-
-            print(f"[测试连接] 请求URL: {image_url}")
-            response = await async_http_request("POST", image_url, headers, image_data, timeout=60.0)
-            print(f"[测试连接] 图片接口状态码: {response.status_code}")
-
-            raw_text = response.text
-            print(f"[测试连接] 图片接口响应: {raw_text[:200]}")
-
-            if response.status_code == 200:
-                print("[测试连接] ✅ 图片接口测试成功")
-                return {"code": 0, "message": "✅ 连接测试成功，配置可用"}
+            from backend.api.image_router import _get_applicable_strategies, _build_url, _build_request_data
+            strategies = _get_applicable_strategies(req.api_base)
+            for strategy in strategies:
+                image_url = _build_url(req.api_base, strategy)
+                image_data = _build_request_data(strategy, req.model_name, "test", 1024, 1024, 1, "", [])
+                print(f"[测试连接] 尝试策略 {strategy['id']}，URL: {image_url}")
+                try:
+                    response = await async_http_request("POST", image_url, headers, image_data, timeout=60.0)
+                    print(f"[测试连接] 状态码: {response.status_code}")
+                    if response.status_code == 200:
+                        print(f"[测试连接] ✅ 图片接口测试成功（策略: {strategy['id']}）")
+                        return {"code": 0, "message": f"✅ 连接测试成功，配置可用（格式: {strategy['id']}）"}
+                    else:
+                        print(f"[测试连接] 策略 {strategy['id']} 返回 {response.status_code}: {response.text[:200]}")
+                except Exception as e:
+                    print(f"[测试连接] 策略 {strategy['id']} 异常: {e}")
+                    continue
 
         # 如果都没成功
         print("[测试连接] ❌ 所有接口测试失败")

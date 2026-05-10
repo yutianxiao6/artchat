@@ -32,6 +32,10 @@
         if (nd.userHint !== el.value) { nd.userHint = el.value; changed = true; }
         return;
       }
+      if (field === "promptTemplate") {
+        if (nd.promptTemplate !== el.value) { nd.promptTemplate = el.value; changed = true; }
+        return;
+      }
       var v = NR.getActiveVersion(nd);
       if (!v) return;
       var parts = field.split(".");
@@ -97,11 +101,189 @@
     });
   }
 
+  // 取出本段 planFrames 规划得到的"出场人物名"集合；未规划过返回 null（表示退回全部）
+  function getAppearingCharNames(seg) {
+    var pfNd = (seg && seg.planFramess || [])[0];
+    if (!pfNd) return null;
+    var pfV = NR.getActiveVersion(pfNd);
+    if (pfV && Array.isArray(pfV.appearingCharacters)) return pfV.appearingCharacters;
+    var hist = pfNd.planningHistory || [];
+    for (var i = hist.length - 1; i >= 0; i--) {
+      var rec = hist[i] || {};
+      if (Array.isArray(rec.appearing_characters)) return rec.appearing_characters;
+    }
+    return null;
+  }
+
+  // 按出场人物名过滤角色列表；未规划返回原列表，明确空数组则返回空
+  function filterCharsByAppearing(allChars, appearingNames) {
+    if (!Array.isArray(allChars)) return [];
+    if (!Array.isArray(appearingNames)) return allChars;
+    if (appearingNames.length === 0) return [];
+    var nameSet = {};
+    appearingNames.forEach(function (n) { if (typeof n === "string") nameSet[n.trim()] = true; });
+    return allChars.filter(function (c) { return c && nameSet[(c.name || "").trim()]; });
+  }
+
   async function callApi(url, body) {
     var res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     var result = await res.json();
     if (result.code !== 0) throw new Error(result.message || result.detail || "生成失败");
     return result.data;
+  }
+
+  // ── 多剧集辅助 ─────────────────────────────
+  // 取出当前剧集之前的所有剧集摘要（剧本/主要人物/场景），供续写时参考
+  function getPrevEpisodesContext(wf) {
+    if (!wf || !wf.episodes || wf.episodes.length < 2) return null;
+    var curId = wf.currentEpisodeId;
+    var curIdx = wf.episodes.findIndex(function (e) { return e.id === curId; });
+    if (curIdx <= 0) return null;
+    var prev = wf.episodes.slice(0, curIdx);
+    // 主要人物已提升为跨集共享，从 wf 顶层读
+    var sharedMcV = NR.getActiveVersion((wf.mainCharacterss || [])[0]);
+    var sharedMain = sharedMcV && sharedMcV.characters ? sharedMcV.characters : [];
+    var summaries = prev.map(function (ep) {
+      var scriptV = NR.getActiveVersion((ep.scripts || [])[0]);
+      var lastSeg = (ep.segments || [])[(ep.segments || []).length - 1];
+      var lastLfV = lastSeg ? NR.getActiveVersion((lastSeg.lastFrames || [])[0]) : null;
+      return {
+        index: ep.index,
+        title: ep.title || ("第" + (ep.index + 1) + "集"),
+        plot: ep.plot || "",
+        full_text: scriptV ? (scriptV.fullText || "") : "",
+        segments: scriptV ? (scriptV.segments || []).map(function (s) { return { text: s.text || "" }; }) : [],
+        main_characters: sharedMain.map(function (c) {
+          return { name: c.name, description: c.description || "", visual_prompt: c.visual_prompt || "", imageUrl: c.imageUrl || "" };
+        }),
+        last_frame_desc: lastLfV ? (lastLfV.description || "") : "",
+      };
+    });
+    // 收集所有前集 + 各段的场景（按 name 去重，保留最早的图）
+    var prevScenes = [];
+    var seenScene = {};
+    prev.forEach(function (ep) {
+      (ep.segments || []).forEach(function (seg) {
+        var sV = NR.getActiveVersion((seg.scenes || [])[0]);
+        if (sV && sV.scenes) {
+          sV.scenes.forEach(function (sc) {
+            var nm = (sc.name || "").trim();
+            if (!nm || seenScene[nm]) return;
+            seenScene[nm] = true;
+            prevScenes.push({
+              name: nm,
+              description: sc.description || "",
+              visual_prompt: sc.visual_prompt || "",
+              imageUrl: sc.imageUrl || "",
+              imageUrls: sc.imageUrls || [],
+            });
+          });
+        }
+      });
+    });
+    return { episodes: summaries, prev_scenes: prevScenes, all_main_characters: sharedMain };
+  }
+
+  // ── 预设缓存（character / storyTemplate） ─────────────────────────────
+  // 兜底：即使后端 /api/workflow/presets 没启动或失败，前端也能用
+  var _PRESETS_FALLBACK = {
+    character: [
+      {
+        id: "default",
+        name: "四视图角色模型图",
+        width: 1152, height: 2048,
+        template: "{style}风格，2x2四视图网格，角色模型图，白色背景，直立姿势，正面/侧面/背面/四分之三角度，{description}",
+      },
+      {
+        id: "realPhoto",
+        name: "真人写实设定集",
+        width: 3840, height: 2160,
+        template: "基于参考图中的角色和背景，制作一份类似官方设定集的角色视觉参考表。\n核心要求：绝对真实的真人摄影级质感，极致的真人皮肤纹理与真实物理光影。\n具体内容需包含：\n1) 该真人角色的正面、侧面、背面的全身三面图；\n2) 不同面部表情特写（清晰的毛孔级写实特写）；\n3) 服装和装备的详细部件高分辨率真实材质拆解展示；\n4) 色彩搭配色板；\n5) 画面边缘加入简短的世界观文字排版说明。\n排版与参数：整体排版整洁有序，纯白背景，图解风排版格式。\n画面比例 16:9，8K超高分辨率，顶级商业摄影棚实拍画质。\n角色描述：{description}",
+      },
+    ],
+    storyTemplate: [
+      { id: "boardImage", name: "电影故事板（图文设计图）", kind: "image", template: "" },
+      {
+        id: "shotListMd",
+        name: "11栏分镜表（Markdown）",
+        kind: "text",
+        system_prompt: "Role: 资深分镜师 (Senior Storyboard Artist)\nProfile: 你是一名拥有 10 年经验的专业电影分镜师，擅长将文字剧本转化为视觉化的分镜表格。你精通镜头语言、构图美学、节奏把控以及音效设计。\n\nTask: 我将提供一段剧本内容，请你将其拆解并转化为标准的【分镜表】。\n核心目标：确保剧本中的每一段文字（包括动作描述、环境描写、对白）都有对应的镜头呈现，严禁遗漏任何剧情细节。\n\n输出格式必须为 Markdown 表格，必须包含以下 11 列，顺序不可变：[镜头号，时长，角色，场景，景别，拍摄角度，运镜，构图，画面描述，对白，音效]\n\n关键规则：\n- 角色栏填写画面中可见的所有角色（不仅仅是说话者）。\n- 一句话≈一个镜头，长台词必须拆分。\n- 动作/环境必须独立成镜头。\n- 拍摄角度独立成列，禁止连续 3 个镜头使用相同角度。\n- 对白格式：【角色名】(情绪)：台词内容；纯动作或环境镜头填\"——\"。\n- 优先使用过肩镜头建立空间关系，交替正反打。",
+        user_template: "[在此处粘贴你的剧本]",
+      },
+    ],
+  };
+  var _PRESETS_CACHE = _PRESETS_FALLBACK;   // 默认就用 fallback，加载后再覆盖
+  var _PRESETS_LOADING = null;
+  async function loadPresets() {
+    if (_PRESETS_CACHE) return _PRESETS_CACHE;
+    if (_PRESETS_LOADING) return _PRESETS_LOADING;
+    _PRESETS_LOADING = (async function () {
+      try {
+        var res = await fetch("/api/workflow/presets");
+        var json = await res.json();
+        if (json.code === 0) _PRESETS_CACHE = json.data || { character: [], storyTemplate: [] };
+      } catch (e) {}
+      if (!_PRESETS_CACHE) _PRESETS_CACHE = { character: [], storyTemplate: [] };
+      _PRESETS_LOADING = null;
+      // 加载完成后触发一次重渲染，确保已经打开的详情面板能看到所有预设
+      try {
+        if (window._wfEngine && window.WF_Renderer && window.WF_Renderer.render) {
+          window.WF_Renderer.render(window._wfEngine);
+        }
+      } catch (e) {}
+      return _PRESETS_CACHE;
+    })();
+    return _PRESETS_LOADING;
+  }
+  function presetsSync() { return _PRESETS_CACHE || { character: [], storyTemplate: [] }; }
+  function findPreset(kind, id) {
+    var list = (presetsSync()[kind]) || [];
+    return list.find(function (p) { return p.id === id; }) || list[0] || null;
+  }
+  // 启动时主动拉一次
+  loadPresets();
+  window.WF_loadPresets = loadPresets;
+  window.WF_findPreset = findPreset;
+  window.WF_presetsSync = presetsSync;
+
+  function renderPresetSelector(nd, kind, defaultId, onChangeAttr, ctx, nodeType) {
+    var presets = (presetsSync()[kind]) || [];
+    if (!presets.length) return "";
+    // pipeline 顶部节点 nd 是空对象，从第一个 segment 节点取真实状态
+    var probe = nd;
+    if (ctx && ctx.isPipelineNode && nodeType && ctx.engine) {
+      var wf = ctx.engine.current();
+      if (wf) {
+        var def = NR.get(nodeType);
+        if (def && def.category === "segment") {
+          var firstSeg = (wf.segments || [])[0];
+          var arr = firstSeg ? (firstSeg[nodeType + "s"] || []) : [];
+          if (arr[0]) probe = arr[0];
+        } else if (def && def.category === "global") {
+          var garr = wf[nodeType + "s"] || [];
+          if (garr[0]) probe = garr[0];
+        }
+      }
+    }
+    var curId = (probe && probe.presetId) || defaultId || presets[0].id;
+    var template = (probe && probe.promptTemplate) || "";
+    if (!template) {
+      var p = presets.find(function (x) { return x.id === curId; }) || presets[0];
+      template = (p && (p.template || p.system_prompt)) || "";
+    }
+    var opts = presets.map(function (p) {
+      var sel = p.id === curId ? " selected" : "";
+      return '<option value="' + esc(p.id) + '"' + sel + '>' + esc(p.name) + '</option>';
+    }).join("");
+    var html = '<div class="wf-detail-section"><div class="wf-detail-label">预设</div>'
+      + '<div style="display:flex;gap:6px;align-items:center;">'
+      + '<select class="wf-detail-input" data-preset-select="' + esc(kind) + '" data-preset-target="' + esc(onChangeAttr) + '" style="flex:1;">' + opts + '</select>'
+      + '<button class="wf-tb-btn" data-preset-reset="' + esc(kind) + '" title="恢复该预设默认模板"><i class="fa fa-undo"></i></button>'
+      + '</div></div>'
+      + '<div class="wf-detail-section"><div class="wf-detail-label">提示词模板（可编辑，{style}/{description} 为占位符）</div>'
+      + '<textarea class="wf-detail-textarea wf-editable" data-edit-field="promptTemplate" rows="6" placeholder="留空则使用预设默认模板">' + esc(template) + '</textarea>'
+      + '</div>';
+    return html;
   }
 
   function renderRefImagesSection(nd, nodeType) {
@@ -133,15 +315,27 @@
     category: "global", allowMultiple: false,
     getPreview: function (nd) { return nd && nd.plot ? nd.plot.slice(0, 60) : ""; },
     renderDetail: function (nd, wf, ctx) {
-      return '<div class="wf-detail-section"><div class="wf-detail-label">简要情节</div>'
-        + '<textarea class="wf-detail-textarea" id="wf-input-plot" rows="4" placeholder="描述你的视频故事情节...">' + esc(wf.input.plot) + '</textarea></div>'
-        + '<div class="wf-detail-section"><div class="wf-detail-label">视频风格</div>'
+      var eng = window._wfEngine;
+      var curEp = (eng && eng.currentEpisode) ? eng.currentEpisode(wf) : null;
+      var isSequel = curEp && curEp.index > 0;
+      var epPlot = (curEp && curEp.plot) || "";
+      var html = '<div class="wf-detail-section"><div class="wf-detail-label">' + (isSequel ? '本集情节简述（续写第' + (curEp.index + 1) + '集）' : '简要情节') + '</div>'
+        + '<textarea class="wf-detail-textarea" id="wf-input-plot" rows="4" placeholder="描述你的视频故事情节...">' + esc(isSequel ? epPlot : wf.input.plot) + '</textarea></div>';
+      if (isSequel) {
+        html += '<div class="wf-detail-text" style="font-size:11px;color:#64748b;margin-top:-8px;">提示：本集的风格、类型沿用下方全局设置，剧本会自动参考前集结局承接。</div>';
+      }
+      html += '<div class="wf-detail-section"><div class="wf-detail-label">视频风格（全集通用）</div>'
         + '<input class="wf-detail-input" id="wf-input-style" placeholder="如：水墨国风、赛博朋克..." value="' + esc(wf.input.style) + '"></div>'
-        + '<div class="wf-detail-section"><div class="wf-detail-label">视频类型</div>'
-        + '<input class="wf-detail-input" id="wf-input-type" placeholder="如：短剧、广告、MV..." value="' + esc(wf.input.type) + '"></div>'
-        + '<div class="wf-detail-section"><div class="wf-detail-label">段数（留空=AI自动）</div>'
+        + '<div class="wf-detail-section"><div class="wf-detail-label">视频类型（全集通用）</div>'
+        + '<input class="wf-detail-input" id="wf-input-type" placeholder="如：短剧、广告、MV..." value="' + esc(wf.input.type) + '"></div>';
+      if (!isSequel) {
+        html += '<div class="wf-detail-section"><div class="wf-detail-label">集数（首次生成时一次性拆分；之后可"新增剧集"续写）</div>'
+          + '<input class="wf-detail-input" id="wf-input-episodes" type="number" min="1" max="20" placeholder="留空=单集" value="' + (wf.input.episodeCount || "") + '"></div>';
+      }
+      html += '<div class="wf-detail-section"><div class="wf-detail-label">每集段数（留空=AI自动；多集时所有集段数相同）</div>'
         + '<input class="wf-detail-input" id="wf-input-segments" type="number" min="1" max="30" placeholder="AI自动决定" value="' + (wf.input.segmentCount || "") + '"></div>'
         + '<div class="wf-detail-actions"><button class="wf-tb-btn primary" id="wf-save-input">保存</button></div>';
+      return html;
     },
   });
 
@@ -155,13 +349,71 @@
     },
     generate: async function (ctx) {
       var wf = ctx.workflow;
+      var engine = window._wfEngine;
+      var curEp = (engine && engine.currentEpisode && engine.currentEpisode(wf)) || null;
+      var epCount = parseInt(wf.input.episodeCount) || 0;
+      var isFirstEpisodeAndMulti = epCount > 1 && (!curEp || curEp.index === 0) && (wf.episodes || []).length === 1;
+
+      if (isFirstEpisodeAndMulti) {
+        // 多剧集一次性拆分：让模型按 episode_count 分配剧情，并保证每集段数相同
+        var data = await callApi("/api/workflow/generate/script-multi", {
+          workflow_id: wf.id, chat_config_id: getConfigId("chat", "script"),
+          plot: (curEp && curEp.plot) || wf.input.plot,
+          style: wf.input.style, type: wf.input.type,
+          segments_per_episode: wf.input.segmentCount,
+          episode_count: epCount,
+        });
+        var episodes = (data.episodes || []).slice(0, epCount);
+        if (!episodes.length) throw new Error("模型未返回任何剧集");
+        var firstEp = wf.episodes[0];
+        // 把第1集应用到当前 episode + segments
+        var firstData = episodes[0];
+        if (firstData.segments) engine.createSegments(wf, firstData.segments);
+        // 生成后续 episode 的占位（scripts/segments 由 _bakeEpisode 填）
+        for (var ei = 1; ei < episodes.length; ei++) {
+          var ep = engine.addEpisode("第" + (ei + 1) + "集");
+          // addEpisode 会切换到新 ep。把 episodes[ei] 数据写入这个 ep
+          if (ep) {
+            ep.plot = (episodes[ei].plot || "");
+            engine.createSegments(wf, episodes[ei].segments || []);
+            // 写入 script 节点
+            var scrArr = wf.scripts || [];
+            if (!scrArr.length) { wf.scripts = [NR.createNodeData()]; scrArr = wf.scripts; }
+            NR.addVersion(scrArr[0], {
+              fullText: episodes[ei].full_text || "",
+              segments: episodes[ei].segments || [],
+              mainCharacters: data.main_characters || [],
+            });
+            // 把当前 wf 的状态快照回到这个 ep
+            var snapEp = engine._snapshotEpisode(wf, engine.getPipeline());
+            Object.keys(snapEp).forEach(function (k) { ep[k] = snapEp[k]; });
+          }
+        }
+        // 切回第1集
+        engine.switchEpisode(firstEp.id);
+        var fullText = firstData.full_text || "";
+        var tpl = (window.WF_Templates || []).find(function (t) { return t.id === wf.templateId; });
+        var defaultTitle = tpl ? tpl.name : "新工作流";
+        if (fullText && (wf.title === defaultTitle || wf.title === "新工作流")) {
+          wf.title = fullText.replace(/[\n\r]/g, " ").slice(0, 20);
+        }
+        return {
+          fullText: fullText,
+          segments: firstData.segments || [],
+          mainCharacters: data.main_characters || [],
+        };
+      }
+
+      var prevCtx = getPrevEpisodesContext(wf);
       var data = await callApi("/api/workflow/generate/script", {
         workflow_id: wf.id, chat_config_id: getConfigId("chat", "script"),
-        plot: wf.input.plot, style: wf.input.style, type: wf.input.type,
+        plot: (curEp && curEp.plot) || wf.input.plot,
+        style: wf.input.style, type: wf.input.type,
         segment_count: wf.input.segmentCount,
+        episode_index: curEp ? curEp.index : 0,
+        prev_episodes: prevCtx ? prevCtx.episodes : [],
       });
       if (data.segments && data.segments.length) {
-        var engine = window._wfEngine;
         if (engine) engine.createSegments(wf, data.segments);
       }
       var fullText = data.full_text || "";
@@ -190,6 +442,26 @@
           });
           html += '</div>';
         }
+        // 对话修改历史
+        var history = v.chatHistory || [];
+        if (history.length) {
+          html += '<div class="wf-detail-section"><div class="wf-detail-label">修改历史</div><div class="wf-chat-history" id="wf-script-chat-history">';
+          history.forEach(function (msg) {
+            if (msg.role === "user") {
+              html += '<div class="wf-chat-msg wf-chat-user"><span class="wf-chat-role">你:</span> ' + esc(msg.content) + '</div>';
+            } else if (msg.role === "assistant") {
+              var aiText = msg.content && msg.content !== "done" ? msg.content : "已根据要求修改剧本";
+              html += '<div class="wf-chat-msg wf-chat-ai"><span class="wf-chat-role">AI:</span> ' + esc(aiText) + '</div>';
+            }
+          });
+          html += '</div></div>';
+        }
+        // 对话输入
+        html += '<div class="wf-detail-section"><div class="wf-detail-label">对话修改剧本</div>'
+          + '<div class="wf-chat-input-wrap">'
+          + '<textarea class="wf-detail-textarea" id="wf-script-chat-input" rows="2" placeholder="描述你想修改的内容，如：把第2段改成下雨的场景，给主角加点犹豫..."></textarea>'
+          + '<button class="wf-tb-btn primary" id="wf-script-chat-send" style="margin-top:6px;"' + dis + '><i class="fa fa-paper-plane"></i> 发送修改</button>'
+          + '</div></div>';
       } else {
         html = '<div class="wf-detail-text" style="color:#64748b;">尚未生成</div>';
       }
@@ -214,17 +486,47 @@
       if (!scriptV || !scriptV.fullText) throw new Error("请先生成剧本");
       var planNd = ctx.nodeData;
       var planV = NR.getActiveVersion(planNd);
+      var prevCtx = getPrevEpisodesContext(wf);
+      var allMain = prevCtx ? (prevCtx.all_main_characters || []) : [];
+      var prevScenes = prevCtx ? (prevCtx.prev_scenes || []) : [];
       var data = await callApi("/api/workflow/generate/plan-characters-scenes", {
         workflow_id: wf.id, chat_config_id: getConfigId("chat", "planCharactersScenes"),
         full_text: scriptV.fullText,
         segments: (scriptV.segments || []).map(function (s) { return { text: s.text }; }),
         style: wf.input.style, type: wf.input.type,
         user_hint: (planV && planV.userHint) || (planNd && planNd.userHint) || "",
+        prev_main_characters: allMain,
+        prev_episode_scenes: prevScenes,
       });
-      var mainChars = data.main_characters || [];
+      var newMainChars = data.main_characters || [];
       var segPlans = data.segments || [];
-      var mcNd = (wf.mainCharacterss || [])[0];
-      if (mcNd) NR.addVersion(mcNd, { characters: mainChars });
+
+      // 主要人物：跨集共享（合并到 wf 顶层 mainCharacterss）
+      var mcArr = wf.mainCharacterss || [];
+      if (!mcArr.length) { mcArr = [NR.createNodeData()]; wf.mainCharacterss = mcArr; }
+      var mcNd = mcArr[0];
+      var mergedMain = allMain.slice();
+      var existingNames = {};
+      mergedMain.forEach(function (c) { existingNames[(c.name || "").trim()] = c; });
+      newMainChars.forEach(function (c) {
+        var nm = (c.name || "").trim();
+        if (!nm) return;
+        var hit = existingNames[nm];
+        if (hit) {
+          // 沿用已有图片/描述，不覆盖
+          if (!hit.description && c.description) hit.description = c.description;
+          if (!hit.visual_prompt && c.visual_prompt) hit.visual_prompt = c.visual_prompt;
+        } else {
+          mergedMain.push(c);
+          existingNames[nm] = c;
+        }
+      });
+      NR.addVersion(mcNd, { characters: mergedMain });
+
+      // 段级：场景复用——按名字匹配已有场景，直接引用
+      var prevSceneByName = {};
+      prevScenes.forEach(function (sc) { prevSceneByName[(sc.name || "").trim()] = sc; });
+
       (wf.segments || []).forEach(function (seg, i) {
         var sp = segPlans[i] || {};
         var minorNd = (seg.minorCharacterss || [])[0];
@@ -235,9 +537,27 @@
           seg.minorCharactersSkip = minors.length === 0;
         }
         var sceneNd = (seg.scenes || [])[0];
-        if (sceneNd) NR.addVersion(sceneNd, { scenes: sp.scenes || [], sceneCount: (sp.scenes || []).length });
+        if (sceneNd) {
+          var rawScenes = sp.scenes || [];
+          var resolvedScenes = rawScenes.map(function (sc) {
+            var nm = (sc.name || "").trim();
+            var hit = prevSceneByName[nm];
+            if (hit) {
+              return {
+                name: hit.name,
+                description: hit.description || sc.description || "",
+                visual_prompt: hit.visual_prompt || sc.visual_prompt || "",
+                imageUrl: hit.imageUrl || "",
+                imageUrls: hit.imageUrls || [],
+                _reused: true,
+              };
+            }
+            return sc;
+          });
+          NR.addVersion(sceneNd, { scenes: resolvedScenes, sceneCount: resolvedScenes.length });
+        }
       });
-      return { mainCharacters: mainChars, segments: segPlans };
+      return { mainCharacters: mergedMain, segments: segPlans };
     },
     renderDetail: function (nd, wf, ctx) {
       var v = NR.getActiveVersion(nd);
@@ -294,11 +614,23 @@
       var v = NR.getActiveVersion(nd);
       var chars = (v && v.characters) || [];
       if (!chars.length) throw new Error("请先运行规划或手动添加人物描述");
+      var gridMerge = nd._gridMerge; delete nd._gridMerge;
+      if (gridMerge) {
+        chars.forEach(function (c) {
+          if (c.imageUrl) c.prevImageUrl = c.imageUrl;
+          delete c.imageUrl; delete c.imageUrls; delete c.gridInfo;
+        });
+      }
+      var preset = findPreset("character", nd.presetId || "default");
       var data = await callApi("/api/workflow/generate/main-characters", {
         workflow_id: wf.id, image_config_id: getConfigId("image", "mainCharacters"),
         characters: chars, style: wf.input.style,
         ref_image_urls: nd.refImages || [],
         image_count: getImageCount("mainCharacters"),
+        preset_id: nd.presetId || "default",
+        prompt_template: nd.promptTemplate || "",
+        width: preset && preset.width,
+        height: preset && preset.height,
       });
       var resultChars = data.characters || [];
       var errs = data.errors || [];
@@ -319,13 +651,14 @@
     renderDetail: function (nd, wf, ctx) {
       var v = NR.getActiveVersion(nd);
       var dis = _getDisabledAttr(ctx, "mainCharacters");
-      var html = "";
+      var html = renderPresetSelector(nd, "character", "default", "mainCharacters", ctx, "mainCharacters");
       if (v && v.characters && v.characters.length) {
         v.characters.forEach(function (c, ci) {
           var charRunKey = "mainCharacters_0_char_" + ci;
           var charRunning = ctx.engine && ctx.engine.runningNodes[charRunKey];
           var charDis = charRunning ? " disabled" : dis;
-          html += '<div class="wf-detail-section"><div class="wf-detail-label">' + esc(c.name)
+          var gridTag = (c.gridInfo && c.gridInfo.isGrid) ? '<span style="font-size:10px;background:#e0e7ff;color:#4338ca;padding:1px 5px;border-radius:3px;margin-left:6px;">' + c.gridInfo.gridSize + '宫格·' + esc(c.gridInfo.positionLabel || '') + '</span>' : '';
+          html += '<div class="wf-detail-section"><div class="wf-detail-label">' + esc(c.name) + gridTag
             + ' <button class="wf-char-del-btn" data-del-char-item="' + ci + '" title="删除该人物" style="float:right;background:transparent;border:none;color:#ef4444;cursor:pointer;font-size:12px;"><i class="fa fa-trash-o"></i></button>'
             + '</div>'
             + '<textarea class="wf-detail-textarea wf-editable" data-edit-field="characters.' + ci + '.description" rows="3">' + esc(c.description) + '</textarea>'
@@ -344,7 +677,12 @@
           + '<div class="wf-upload-wrap"><label class="wf-upload-btn"><i class="fa fa-upload"></i> 上传人物图<input type="file" accept="image/*" class="wf-file-input" data-upload-add="mainCharacters" style="display:none"></label></div></div>';
       }
       html += renderRefImagesSection(nd, "mainCharacters");
-      html += '<div class="wf-detail-actions"><button class="wf-tb-btn primary" data-gen-global="mainCharacters"' + dis + '><i class="fa fa-refresh"></i> ' + (v && v.characters && v.characters.some(function(c){return c.imageUrl;}) ? "全部重新生成" : "全部生成图片") + '</button></div>';
+      var _hasImg = v && v.characters && v.characters.some(function(c){return c.imageUrl;});
+      html += '<div class="wf-detail-actions"><button class="wf-tb-btn primary" data-gen-global="mainCharacters"' + dis + '><i class="fa fa-refresh"></i> ' + (_hasImg ? "全部重新生成" : "全部生成图片") + '</button>';
+      if (v && v.characters && v.characters.length > 4) {
+        html += ' <button class="wf-tb-btn" data-grid-merge="mainCharacters"' + dis + ' style="margin-left:6px;"><i class="fa fa-th"></i> 合并为宫格</button>';
+      }
+      html += '</div>';
       return html;
     },
   });
@@ -363,11 +701,23 @@
       var v = NR.getActiveVersion(nd);
       var chars = (v && v.characters) || [];
       if (!chars.length) return { has_minor: false, characters: [] };
+      var gridMerge = nd._gridMerge; delete nd._gridMerge;
+      if (gridMerge) {
+        chars.forEach(function (c) {
+          if (c.imageUrl) c.prevImageUrl = c.imageUrl;
+          delete c.imageUrl; delete c.imageUrls; delete c.gridInfo;
+        });
+      }
+      var preset = findPreset("character", nd.presetId || "default");
       var data = await callApi("/api/workflow/generate/minor-characters", {
         workflow_id: wf.id, image_config_id: getConfigId("image", "minorCharacters"),
         characters: chars, style: wf.input.style,
         ref_image_urls: nd.refImages || [],
         image_count: getImageCount("minorCharacters"),
+        preset_id: nd.presetId || "default",
+        prompt_template: nd.promptTemplate || "",
+        width: preset && preset.width,
+        height: preset && preset.height,
       });
       var resultChars = data.characters || [];
       var errs = data.errors || [];
@@ -387,13 +737,14 @@
     },
     renderDetail: function (nd, wf, ctx) {
       var v = NR.getActiveVersion(nd);
-      var html = "";
+      var html = renderPresetSelector(nd, "character", "default", "minorCharacters", ctx, "minorCharacters");
       if (v && v.characters && v.characters.length) {
         v.characters.forEach(function (c, ci) {
           var charRunKey = "seg_" + ctx.segIndex + "_minorCharacters_0_char_" + ci;
           var charRunning = ctx.engine && ctx.engine.runningNodes[charRunKey];
           var charDis = charRunning ? " disabled" : _getDisabledAttr(ctx, "minorCharacters");
-          html += '<div class="wf-detail-section"><div class="wf-detail-label">' + esc(c.name)
+          var gridTag = (c.gridInfo && c.gridInfo.isGrid) ? '<span style="font-size:10px;background:#fff7ed;color:#c2410c;padding:1px 5px;border-radius:3px;margin-left:6px;">' + c.gridInfo.gridSize + '宫格·' + esc(c.gridInfo.positionLabel || '') + '</span>' : '';
+          html += '<div class="wf-detail-section"><div class="wf-detail-label">' + esc(c.name) + gridTag
             + ' <button class="wf-char-del-btn" data-del-char-item="' + ci + '" title="删除该人物" style="float:right;background:transparent;border:none;color:#ef4444;cursor:pointer;font-size:12px;"><i class="fa fa-trash-o"></i></button>'
             + '</div>'
             + '<textarea class="wf-detail-textarea wf-editable" data-edit-field="characters.' + ci + '.description" rows="3">' + esc(c.description) + '</textarea>'
@@ -412,7 +763,7 @@
           + '<div class="wf-upload-wrap"><label class="wf-upload-btn"><i class="fa fa-upload"></i> 上传人物图<input type="file" accept="image/*" class="wf-file-input" data-upload-add="minorCharacters" style="display:none"></label></div></div>';
       }
       html += renderRefImagesSection(nd, "minorCharacters");
-      if (!ctx.isPipelineNode) { var _dis = _getDisabledAttr(ctx, "minorCharacters"); html += '<div class="wf-detail-actions"><button class="wf-tb-btn primary" data-gen-seg="' + ctx.segIndex + '" data-gen-type="minorCharacters"' + _dis + '><i class="fa fa-refresh"></i> ' + (v && v.characters && v.characters.some(function(c){return c.imageUrl;}) ? "全部重新生成" : "全部生成图片") + '</button></div>'; }
+      if (!ctx.isPipelineNode) { var _dis = _getDisabledAttr(ctx, "minorCharacters"); var _hasMinorImg = v && v.characters && v.characters.some(function(c){return c.imageUrl;}); html += '<div class="wf-detail-actions"><button class="wf-tb-btn primary" data-gen-seg="' + ctx.segIndex + '" data-gen-type="minorCharacters"' + _dis + '><i class="fa fa-refresh"></i> ' + (_hasMinorImg ? "全部重新生成" : "全部生成图片") + '</button>'; if (v && v.characters && v.characters.length > 2) { html += ' <button class="wf-tb-btn" data-grid-merge="minorCharacters" data-grid-merge-seg="' + ctx.segIndex + '"' + _dis + ' style="margin-left:6px;"><i class="fa fa-th"></i> 合并为宫格</button>'; } html += '</div>'; }
       return html;
     },
   });
@@ -432,6 +783,13 @@
       var v = NR.getActiveVersion(nd);
       var scenes = (v && v.scenes) || [];
       if (!scenes.length) throw new Error("请先运行规划或手动添加场景描述");
+      var gridMerge = nd._gridMerge; delete nd._gridMerge;
+      if (gridMerge) {
+        scenes.forEach(function (s) {
+          if (s.imageUrl) s.prevImageUrl = s.imageUrl;
+          delete s.imageUrl; delete s.imageUrls; delete s.gridInfo;
+        });
+      }
       var prevScenes = [];
       if (ctx.segIndex > 0) {
         var prevSeg = wf.segments[ctx.segIndex - 1];
@@ -471,7 +829,8 @@
           var sceneRunKey = "seg_" + segIdx + "_scene_0_item_" + i;
           var sceneRunning = ctx.engine && ctx.engine.runningNodes[sceneRunKey];
           var sceneDis = sceneRunning ? " disabled" : _getDisabledAttr(ctx, "scene");
-          html += '<div class="wf-detail-section"><div class="wf-detail-label">场景' + (i + 1) + ': ' + esc(sc.name || "")
+          var gridTag = (sc.gridInfo && sc.gridInfo.isGrid) ? '<span style="font-size:10px;background:#d1fae5;color:#065f46;padding:1px 5px;border-radius:3px;margin-left:6px;">' + sc.gridInfo.gridSize + '宫格·' + esc(sc.gridInfo.positionLabel || '') + '</span>' : '';
+          html += '<div class="wf-detail-section"><div class="wf-detail-label">场景' + (i + 1) + ': ' + esc(sc.name || "") + gridTag
             + ' <button class="wf-scene-del-btn" data-del-scene-item="' + i + '" title="删除该场景" style="float:right;background:transparent;border:none;color:#ef4444;cursor:pointer;font-size:12px;"><i class="fa fa-trash-o"></i></button>'
             + '</div>'
             + '<textarea class="wf-detail-textarea wf-editable" data-edit-field="scenes.' + i + '.description" rows="3">' + esc(sc.description || "") + '</textarea>'
@@ -493,7 +852,7 @@
           + '<div class="wf-upload-wrap"><label class="wf-upload-btn"><i class="fa fa-upload"></i> 上传场景图<input type="file" accept="image/*" class="wf-file-input" data-upload-add="scene" style="display:none"></label></div></div>';
       }
       html += renderRefImagesSection(nd, "scene");
-      if (!ctx.isPipelineNode) { var _dis = _getDisabledAttr(ctx, "scene"); html += '<div class="wf-detail-actions"><button class="wf-tb-btn primary" data-gen-seg="' + ctx.segIndex + '" data-gen-type="scene"' + _dis + '><i class="fa fa-refresh"></i> ' + (v && v.scenes && v.scenes.some(function(s){return s.imageUrl;}) ? "全部重新生成" : "全部生成图片") + '</button></div>'; }
+      if (!ctx.isPipelineNode) { var _dis = _getDisabledAttr(ctx, "scene"); var _hasSceneImg = v && v.scenes && v.scenes.some(function(s){return s.imageUrl;}); html += '<div class="wf-detail-actions"><button class="wf-tb-btn primary" data-gen-seg="' + ctx.segIndex + '" data-gen-type="scene"' + _dis + '><i class="fa fa-refresh"></i> ' + (_hasSceneImg ? "全部重新生成" : "全部生成图片") + '</button>'; if (v && v.scenes && v.scenes.length > 4) { html += ' <button class="wf-tb-btn" data-grid-merge="scene" data-grid-merge-seg="' + ctx.segIndex + '"' + _dis + ' style="margin-left:6px;"><i class="fa fa-th"></i> 合并为宫格</button>'; } html += '</div>'; }
       return html;
     },
   });
@@ -521,6 +880,7 @@
       var prevLastDesc = "";
       var prevPlanningHistory = [];
       var prevStoryboardUrl = "";
+      var prevSegmentText = "";
       if (ctx.segIndex > 0) {
         var prevSeg = wf.segments[ctx.segIndex - 1];
         if (prevSeg) {
@@ -531,6 +891,27 @@
           var prevSbNd = (prevSeg.storyboards || [])[0];
           var prevSbV = NR.getActiveVersion(prevSbNd);
           if (prevSbV && prevSbV.imageUrl) prevStoryboardUrl = prevSbV.imageUrl;
+          // 同一集内不传 prev_segment_text，保持原行为
+        }
+      } else {
+        // 当前段是本集第1段：跨集参考——从上一集最后一段拿尾帧、分镜图、剧情文本
+        var _eng = window._wfEngine;
+        if (_eng && _eng.currentEpisode) {
+          var curEp = _eng.currentEpisode(wf);
+          if (curEp && curEp.index > 0 && wf.episodes && wf.episodes[curEp.index - 1]) {
+            var prevEp = wf.episodes[curEp.index - 1];
+            var prevEpSegs = prevEp.segments || [];
+            var prevEpLastSeg = prevEpSegs[prevEpSegs.length - 1];
+            if (prevEpLastSeg) {
+              var prevEpLfV = NR.getActiveVersion((prevEpLastSeg.lastFrames || [])[0]);
+              if (prevEpLfV) prevLastDesc = prevEpLfV.description || "";
+              var prevEpPlanNd = (prevEpLastSeg.planFramess || [])[0];
+              if (prevEpPlanNd) prevPlanningHistory = prevEpPlanNd.planningHistory || [];
+              var prevEpSbV = NR.getActiveVersion((prevEpLastSeg.storyboards || [])[0]);
+              if (prevEpSbV && prevEpSbV.imageUrl) prevStoryboardUrl = prevEpSbV.imageUrl;
+              prevSegmentText = prevEpLastSeg.scriptText || "";
+            }
+          }
         }
       }
       var planNd = ctx.nodeData;
@@ -546,6 +927,7 @@
         resolution: getStoryboardResolution(),
         is_last_segment: isLast,
         prev_last_frame_desc: prevLastDesc,
+        prev_segment_text: prevSegmentText,
         prev_planning_history: prevPlanningHistory,
         prev_storyboard_url: prevStoryboardUrl,
         user_hint: (planV && planV.userHint) || (planNd && planNd.userHint) || "",
@@ -556,6 +938,7 @@
       var ff = data.first_frame || {};
       var sb = data.storyboard || {};
       var lf = data.last_frame || {};
+      var appearing = Array.isArray(data.appearing_characters) ? data.appearing_characters : [];
 
       // 保存规划历史记录
       if (data.planning_record) {
@@ -575,7 +958,7 @@
         var lfNd = (seg.lastFrames || [])[0];
         if (lfNd) NR.addVersion(lfNd, { description: lf.description || "", visualPrompt: lf.visual_prompt || "" });
       }
-      return { firstFrame: ff, storyboard: sb, lastFrame: lf };
+      return { firstFrame: ff, storyboard: sb, lastFrame: lf, appearingCharacters: appearing };
     },
     renderDetail: function (nd, wf, ctx) {
       var v = NR.getActiveVersion(nd);
@@ -627,11 +1010,20 @@
         var ff = v.firstFrame || {};
         var sb = v.storyboard || {};
         var lf = v.lastFrame || {};
+        var appearing = Array.isArray(v.appearingCharacters) ? v.appearingCharacters : [];
         var parts = [];
         if (ff.description) parts.push('首帧');
         if (sb.grid_prompts && sb.grid_prompts.length) parts.push('分镜' + sb.grid_prompts.length + '格');
         if (lf.description) parts.push('尾帧');
         html += '<div class="wf-detail-text" style="font-size:11px;color:#94a3b8;">' + (parts.length ? parts.join(' + ') + ' 已规划' : '已规划') + '</div>';
+        if (appearing.length) {
+          html += '<div class="wf-detail-section"><div class="wf-detail-label">本段出场人物 (' + appearing.length + ')</div>'
+            + '<div style="display:flex;flex-wrap:wrap;gap:4px;">'
+            + appearing.map(function (n) { return '<span style="font-size:11px;background:#ede9fe;color:#6d28d9;padding:2px 6px;border-radius:4px;">' + esc(n) + '</span>'; }).join('')
+            + '</div></div>';
+        } else {
+          html += '<div class="wf-detail-text" style="font-size:11px;color:#94a3b8;">本段无出场人物</div>';
+        }
         html += '<div class="wf-detail-text" style="font-size:11px;color:#64748b;">完整描述请查看对应节点</div>';
       }
       if (!ctx.isPipelineNode) { html += '<div class="wf-detail-actions"><button class="wf-tb-btn primary" data-gen-seg="' + ctx.segIndex + '" data-gen-type="planFrames"' + dis + '><i class="fa fa-magic"></i> ' + (v ? "重新规划" : "开始规划") + '</button>'
@@ -661,11 +1053,14 @@
       var minorV = !wf.minorCharactersSkip ? NR.getActiveVersion((seg.minorCharacterss || [])[0]) : null;
       var sceneV = !wf.sceneSkip ? NR.getActiveVersion((seg.scenes || [])[0]) : null;
       var scenes = sceneV && sceneV.scenes ? sceneV.scenes : [];
+      var appearingNames = getAppearingCharNames(seg);
+      var mcChars = filterCharsByAppearing(mcV ? mcV.characters : [], appearingNames);
+      var minorChars = filterCharsByAppearing(minorV ? minorV.characters : [], appearingNames);
       var data = await callApi("/api/workflow/generate/first-frame", {
         workflow_id: wf.id, image_config_id: getConfigId("image", "firstFrame"),
         visual_prompt: vp, description: desc,
-        characters: mcV ? mcV.characters : [],
-        minor_characters: minorV ? minorV.characters : [],
+        characters: mcChars,
+        minor_characters: minorChars,
         scenes: scenes, style: wf.input.style,
         ref_image_urls: nd.refImages || [],
         image_count: getImageCount("firstFrame"),
@@ -727,9 +1122,14 @@
       var desc = (v && v.description) || "";
       if (!desc && !gridPrompts.length) throw new Error("请先运行帧画面规划或手动填写描述");
       var mcV = !wf.mainCharactersSkip ? NR.getActiveVersion((wf.mainCharacterss || [])[0]) : null;
+      var minorV = !wf.minorCharactersSkip ? NR.getActiveVersion((seg.minorCharacterss || [])[0]) : null;
       var sceneV = !wf.sceneSkip ? NR.getActiveVersion((seg.scenes || [])[0]) : null;
       var ffV = !wf.firstFrameSkip ? NR.getActiveVersion((seg.firstFrames || [])[0]) : null;
       var scenes = sceneV && sceneV.scenes ? sceneV.scenes : [];
+      var appearingNames = getAppearingCharNames(seg);
+      var mcChars = filterCharsByAppearing(mcV ? mcV.characters : [], appearingNames);
+      var minorChars = filterCharsByAppearing(minorV ? minorV.characters : [], appearingNames);
+      var sbCharacters = mcChars.concat(minorChars);
 
       // 获取前段分镜图URL作为参考
       var prevStoryboardUrl = "";
@@ -753,7 +1153,7 @@
       var data = await callApi("/api/workflow/generate/storyboard", {
         workflow_id: wf.id, image_config_id: getConfigId("image", "storyboard"),
         storyboard_prompt: sbPrompt,
-        characters: mcV ? mcV.characters : [],
+        characters: sbCharacters,
         scenes: scenes,
         first_frame_url: ffV ? (ffV.imageUrl || "") : "",
         prev_storyboard_url: prevStoryboardUrl,
@@ -846,11 +1246,14 @@
       var sceneV = !wf.sceneSkip ? NR.getActiveVersion((seg.scenes || [])[0]) : null;
       var sbV = !wf.storyboardSkip ? NR.getActiveVersion((seg.storyboards || [])[0]) : null;
       var scenes = sceneV && sceneV.scenes ? sceneV.scenes : [];
+      var appearingNames = getAppearingCharNames(seg);
+      var mcChars = filterCharsByAppearing(mcV ? mcV.characters : [], appearingNames);
+      var minorChars = filterCharsByAppearing(minorV ? minorV.characters : [], appearingNames);
       var data = await callApi("/api/workflow/generate/last-frame", {
         workflow_id: wf.id, image_config_id: getConfigId("image", "lastFrame"),
         visual_prompt: vp, description: desc,
-        characters: mcV ? mcV.characters : [],
-        minor_characters: minorV ? minorV.characters : [],
+        characters: mcChars,
+        minor_characters: minorChars,
         scenes: scenes, style: wf.input.style,
         storyboard_urls: sbV ? sbV.images : [],
         ref_image_urls: nd.refImages || [],
@@ -949,14 +1352,17 @@
 
       var scenes = sceneV && sceneV.scenes ? sceneV.scenes : (sceneV && sceneV.description ? [{ name: "场景", description: sceneV.description, imageUrl: sceneV.imageUrl }] : []);
       var gridPrompts = normalizeGridPrompts((sbV && sbV.gridPrompts) ? sbV.gridPrompts : []);
+      var appearingNames = getAppearingCharNames(seg);
+      var mcChars = filterCharsByAppearing(mcV ? mcV.characters : [], appearingNames);
+      var minorChars = filterCharsByAppearing(minorV ? minorV.characters : [], appearingNames);
       var data = await callApi("/api/workflow/generate/video-prompt", {
         workflow_id: wf.id, chat_config_id: getConfigId("chat", "videoPrompt"),
         segment_text: seg.scriptText, segment_index: ctx.segIndex,
         total_segments: wf.segments.length,
         duration: seg.duration || 15,
         scenes: scenes,
-        characters: mcV ? mcV.characters : [],
-        minor_characters: minorV ? minorV.characters : [],
+        characters: mcChars,
+        minor_characters: minorChars,
         storyboard_grid: !sbSkip ? getStoryboardGrid() : 0,
         storyboard_images: sbV ? sbV.images : [],
         grid_prompts: gridPrompts,
@@ -1013,21 +1419,42 @@
       var wf = ctx.workflow;
       var seg = ctx.segment;
       var nd = ctx.nodeData;
+      var preset = findPreset("storyTemplate", nd.presetId || "boardImage");
+      var presetKind = preset ? preset.kind : "image";
 
       var mcV = NR.getActiveVersion((wf.mainCharacterss || [])[0]);
+      var minorV = NR.getActiveVersion((seg.minorCharacterss || [])[0]);
       var sceneV = NR.getActiveVersion((seg.scenes || [])[0]);
       var sbV = NR.getActiveVersion((seg.storyboards || [])[0]);
       var grid = getStoryboardGrid();
       var sbGridPrompts = normalizeGridPrompts((sbV && sbV.gridPrompts) || []);
+      var appearingNames = getAppearingCharNames(seg);
+      var mcChars = filterCharsByAppearing(mcV ? mcV.characters : [], appearingNames);
+      var minorChars = filterCharsByAppearing(minorV ? minorV.characters : [], appearingNames);
 
-      var data = await callApi("/api/workflow/generate/story-template", {
+      var prevLastDesc = "";
+      var nextFirstDesc = "";
+      if (ctx.segIndex > 0) {
+        var prevSeg = wf.segments[ctx.segIndex - 1];
+        var prevLfV = prevSeg ? NR.getActiveVersion((prevSeg.lastFrames || [])[0]) : null;
+        if (prevLfV) prevLastDesc = prevLfV.description || "";
+      }
+      if (ctx.segIndex < wf.segments.length - 1) {
+        var nextSeg = wf.segments[ctx.segIndex + 1];
+        var nextFfV = nextSeg ? NR.getActiveVersion((nextSeg.firstFrames || [])[0]) : null;
+        if (nextFfV) nextFirstDesc = nextFfV.description || "";
+      }
+
+      var body = {
         workflow_id: wf.id,
         image_config_id: getConfigId("image", "storyTemplate"),
+        chat_config_id: getConfigId("chat", "storyTemplate"),
         segment_text: seg.scriptText,
         segment_index: ctx.segIndex,
         total_segments: wf.segments.length,
         duration: seg.duration || 15,
-        characters: mcV ? mcV.characters : [],
+        characters: mcChars,
+        minor_characters: minorChars,
         scenes: sceneV && sceneV.scenes ? sceneV.scenes : [],
         storyboard_images: sbV ? (sbV.images || []) : [],
         storyboard_grid: grid,
@@ -1036,26 +1463,48 @@
         style: wf.input.style,
         image_count: getImageCount("storyTemplate"),
         extra_hint: (nd && nd.reviewHint) || "",
-      });
-      return { imageUrl: data.imageUrl || "", imageUrls: data.imageUrls || [], prompt: data.prompt || "" };
+        preset_id: nd.presetId || "boardImage",
+        prompt_template: nd.promptTemplate || "",
+        prev_last_frame_desc: prevLastDesc,
+        next_first_frame_desc: nextFirstDesc,
+      };
+      // 图片类预设需要 characters 合并列表（兼容后端旧路径）
+      if (presetKind !== "text") {
+        body.characters = mcChars.concat(minorChars);
+      }
+
+      var data = await callApi("/api/workflow/generate/story-template", body);
+      if ((data.kind || "image") === "text") {
+        return { kind: "text", markdown: data.markdown || "", prompt: data.prompt || "", presetId: data.preset_id || body.preset_id };
+      }
+      return { kind: "image", imageUrl: data.imageUrl || "", imageUrls: data.imageUrls || [], prompt: data.prompt || "", presetId: body.preset_id };
     },
     renderDetail: function (nd, wf, ctx) {
       var v = NR.getActiveVersion(nd);
       var dis = _getDisabledAttr(ctx, "storyTemplate");
-      var html = "";
+      var html = renderPresetSelector(nd, "storyTemplate", "boardImage", "storyTemplate", ctx, "storyTemplate");
       if (v) {
         if (v.prompt) {
           html += '<div class="wf-detail-section"><div class="wf-detail-label">生成提示词</div>'
             + '<textarea class="wf-detail-textarea wf-editable" data-edit-field="prompt" rows="4" style="white-space:pre-wrap;">' + esc(v.prompt) + '</textarea></div>';
         }
-        if (v.imageUrl) {
+        if (v.kind === "text" && v.markdown) {
+          html += '<div class="wf-detail-section"><div class="wf-detail-label">分镜表（Markdown）</div>'
+            + '<textarea class="wf-detail-textarea wf-editable" data-edit-field="markdown" rows="14" style="font-family:monospace;white-space:pre;">' + esc(v.markdown) + '</textarea>'
+            + '<button class="wf-tb-btn" data-copy-markdown style="margin-top:6px;"><i class="fa fa-copy"></i> 复制</button>'
+            + '</div>';
+        } else if (v.imageUrl) {
           html += '<img class="wf-detail-img wf-preview-img" src="' + esc(v.imageUrl) + '">';
         }
       } else {
-        html = '<div class="wf-detail-text" style="color:#64748b;">尚未生成</div>';
+        html += '<div class="wf-detail-text" style="color:#64748b;">尚未生成</div>';
       }
       html += renderRefImagesSection(nd, "storyTemplate");
-      if (!ctx.isPipelineNode) { html += '<div class="wf-detail-actions"><button class="wf-tb-btn primary" data-gen-seg="' + ctx.segIndex + '" data-gen-type="storyTemplate"' + dis + '><i class="fa fa-refresh"></i> ' + (v && v.imageUrl ? "重新生成" : "生成故事模板") + '</button></div>'; }
+      if (!ctx.isPipelineNode) {
+        var isText = v && v.kind === "text";
+        var btnLabel = v ? (isText ? "重新生成分镜表" : (v.imageUrl ? "重新生成" : "生成故事模板")) : "生成故事模板";
+        html += '<div class="wf-detail-actions"><button class="wf-tb-btn primary" data-gen-seg="' + ctx.segIndex + '" data-gen-type="storyTemplate"' + dis + '><i class="fa fa-refresh"></i> ' + btnLabel + '</button></div>';
+      }
       return html;
     },
   });
@@ -1135,10 +1584,26 @@
       if (e.target.closest && e.target.closest("#wf-save-input")) {
         var wf = engine.current();
         if (!wf) return;
-        wf.input.plot = (document.getElementById("wf-input-plot") || {}).value || "";
+        var plotVal = (document.getElementById("wf-input-plot") || {}).value || "";
+        var curEp = engine.currentEpisode ? engine.currentEpisode(wf) : null;
+        if (curEp && curEp.index > 0) {
+          curEp.plot = plotVal;
+        } else {
+          wf.input.plot = plotVal;
+          if (curEp) curEp.plot = plotVal;
+        }
         wf.input.style = (document.getElementById("wf-input-style") || {}).value || "";
         wf.input.type = (document.getElementById("wf-input-type") || {}).value || "";
         wf.input.segmentCount = parseInt((document.getElementById("wf-input-segments") || {}).value) || null;
+        var epEl = document.getElementById("wf-input-episodes");
+        if (epEl) {
+          var newEpCount = parseInt(epEl.value) || null;
+          // 仅在首次（仅有一集且尚未生成剧本）允许调整 episodeCount，避免覆盖已有续写
+          var firstEp = wf.episodes && wf.episodes[0];
+          var firstScriptV = firstEp && NR.getActiveVersion((firstEp.scripts || (wf.scripts || []))[0] || (wf.scripts || [])[0]);
+          var canEditEpCount = (wf.episodes || []).length <= 1 && !firstScriptV;
+          if (canEditEpCount) wf.input.episodeCount = newEpCount;
+        }
         if (wf.input.plot) {
           var _tpl = (window.WF_Templates || []).find(function (t) { return t.id === wf.templateId; });
           var _defTitle = _tpl ? _tpl.name : "新工作流";
@@ -1156,6 +1621,20 @@
         var nodeType = genGlobal.getAttribute("data-gen-global");
         if (engine.isNodeRunning(nodeType, null)) return;
         runSingleGlobal(engine, nodeType, rerender);
+        return;
+      }
+
+      var gridMergeBtn = e.target.closest && e.target.closest("[data-grid-merge]");
+      if (gridMergeBtn) {
+        var mergeType = gridMergeBtn.getAttribute("data-grid-merge");
+        var mergeSeg = gridMergeBtn.getAttribute("data-grid-merge-seg");
+        var mergeSegIdx = (mergeSeg !== null && mergeSeg !== undefined && mergeSeg !== "") ? parseInt(mergeSeg) : null;
+        if (engine.isNodeRunning(mergeType, mergeSegIdx)) return;
+        if (mergeSegIdx !== null) {
+          runSingleSegment(engine, mergeType, mergeSegIdx, rerender, { gridMerge: true });
+        } else {
+          runSingleGlobal(engine, mergeType, rerender, { gridMerge: true });
+        }
         return;
       }
 
@@ -1193,6 +1672,11 @@
 
       if (e.target.closest && e.target.closest("#wf-sb-chat-send")) {
         iterateStoryboard(engine, rerender);
+        return;
+      }
+
+      if (e.target.closest && e.target.closest("#wf-script-chat-send")) {
+        iterateScript(engine, rerender);
         return;
       }
 
@@ -1327,7 +1811,70 @@
     }
   }
 
-  async function runSingleGlobal(engine, nodeType, rerender) {
+  async function iterateScript(engine, rerender) {
+    var input = document.getElementById("wf-script-chat-input");
+    if (!input) return;
+    var msg = input.value.trim();
+    if (!msg) return;
+    var key = engine.selectedNodeKey;
+    if (!key) return;
+    var nd = WF_Renderer.getNodeDataByKey(engine, key);
+    var v = NR.getActiveVersion(nd);
+    if (!v || (!v.fullText && !(v.segments && v.segments.length))) { alert("请先生成剧本"); return; }
+
+    var btn = document.getElementById("wf-script-chat-send");
+    if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fa fa-spinner fa-spin"></i> 修改中...'; }
+    input.disabled = true;
+
+    try {
+      var wf = engine.current();
+      var prevHistory = v.chatHistory || [];
+      var oldSegments = (v.segments || []).map(function (s) {
+        return { index: s.index, text: s.text || "", duration: s.duration || 15 };
+      });
+      var data = await callApi("/api/workflow/generate/script-iterate", {
+        chat_config_id: getConfigId("chat", "script"),
+        full_text: v.fullText || "",
+        segments: oldSegments,
+        chat_history: prevHistory,
+        user_message: msg,
+        style: wf.input.style,
+        type: wf.input.type,
+      });
+      var newFullText = data.full_text || v.fullText || "";
+      var newSegments = Array.isArray(data.segments) && data.segments.length
+        ? data.segments.map(function (s, i) {
+            return { index: i, text: s.text || "", duration: s.duration || (oldSegments[i] ? oldSegments[i].duration : 15) };
+          })
+        : oldSegments;
+      var newHistory = prevHistory.slice();
+      newHistory.push({ role: "user", content: msg });
+      newHistory.push({ role: "assistant", content: data.analysis || "done" });
+      NR.addVersion(nd, {
+        fullText: newFullText,
+        segments: newSegments,
+        mainCharacters: v.mainCharacters || [],
+        chatHistory: newHistory,
+      });
+      // 同步分段文本到 wf.segments，避免下游节点继续用旧文本
+      if (wf && wf.segments && wf.segments.length === newSegments.length) {
+        newSegments.forEach(function (s, i) {
+          wf.segments[i].scriptText = s.text || "";
+          if (s.duration) wf.segments[i].duration = s.duration;
+        });
+      }
+      engine.save();
+      rerender();
+      requestAnimationFrame(function () { var h = document.getElementById("wf-script-chat-history"); if (h) h.scrollTop = h.scrollHeight; });
+    } catch (err) {
+      alert("修改失败：" + err.message);
+    } finally {
+      if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fa fa-paper-plane"></i> 发送修改'; }
+      if (input) input.disabled = false;
+    }
+  }
+
+  async function runSingleGlobal(engine, nodeType, rerender, options) {
     var wf = engine.current();
     if (!wf) return;
     if (engine.isNodeRunning(nodeType, null)) return;
@@ -1336,6 +1883,11 @@
       return;
     }
     _syncEditableFields(engine);
+    // 标记宫格合并模式到 nodeData 上，generate 函数会读取并清除
+    if (options && options.gridMerge) {
+      var arr = wf[nodeType + "s"] || [];
+      if (arr[0]) arr[0]._gridMerge = true;
+    }
     var step = { nodeType: nodeType, category: "global" };
     try {
       await engine._runGlobalStep(wf, step, rerender, true);
@@ -1347,7 +1899,7 @@
     }
   }
 
-  async function runSingleSegment(engine, nodeType, segIdx, rerender) {
+  async function runSingleSegment(engine, nodeType, segIdx, rerender, options) {
     var wf = engine.current();
     if (!wf) return;
     if (engine.isNodeRunning(nodeType, segIdx)) return;
@@ -1356,6 +1908,13 @@
       return;
     }
     _syncEditableFields(engine);
+    if (options && options.gridMerge) {
+      var seg = wf.segments && wf.segments[segIdx];
+      if (seg) {
+        var ndArr = seg[nodeType + "s"] || [];
+        if (ndArr[0]) ndArr[0]._gridMerge = true;
+      }
+    }
     var step = { nodeType: nodeType, category: "segment" };
     try {
       await engine._runSegmentStep(wf, step, segIdx, rerender, true);
@@ -1398,6 +1957,7 @@
       var nodeRefs = nd.refImages || [];
       var itemRefs = singleChar.refImages || [];
       var refImageUrls = itemRefs.concat(nodeRefs.filter(function (u) { return itemRefs.indexOf(u) < 0; }));
+      var preset = findPreset("character", nd.presetId || "default");
       var data = await callApi("/api/workflow/generate/" + (charType === "mainCharacters" ? "main-characters" : "minor-characters"), {
         workflow_id: wf.id,
         image_config_id: getConfigId("image", charType),
@@ -1405,6 +1965,10 @@
         style: wf.input.style,
         ref_image_urls: refImageUrls,
         image_count: getImageCount(charType),
+        preset_id: nd.presetId || "default",
+        prompt_template: nd.promptTemplate || "",
+        width: preset && preset.width,
+        height: preset && preset.height,
       });
       var resultChars = data.characters || [];
       var errs = data.errors || [];
@@ -1413,6 +1977,19 @@
       } else if (resultChars[0] && resultChars[0].imageUrl) {
         if (resultChars[0].imageUrl) v.characters[charIndex].imageUrl = resultChars[0].imageUrl;
         if (resultChars[0].imageUrls) v.characters[charIndex].imageUrls = resultChars[0].imageUrls;
+        // 单独生成视为退出宫格：清除自身 gridInfo，并让原宫格内其他成员失去该 imageUrl 引用
+        var oldGridInfo = v.characters[charIndex].gridInfo;
+        delete v.characters[charIndex].gridInfo;
+        if (oldGridInfo && oldGridInfo.isGrid) {
+          var groupNames = oldGridInfo.groupItems || [];
+          v.characters.forEach(function (other, oi) {
+            if (oi === charIndex) return;
+            var ogi = other.gridInfo;
+            if (ogi && ogi.isGrid && groupNames.indexOf(other.name) >= 0) {
+              ogi.groupItems = (ogi.groupItems || []).filter(function (n) { return n !== v.characters[charIndex].name; });
+            }
+          });
+        }
         engine._addHistory(wf, charType, 0, segIdx, "done", null, charLabel);
       } else {
         engine._addHistory(wf, charType, 0, segIdx, "error", "未返回图片", charLabel);
@@ -1475,6 +2052,18 @@
       } else if (resultScenes[0] && resultScenes[0].imageUrl) {
         if (resultScenes[0].imageUrl) v.scenes[sceneIndex].imageUrl = resultScenes[0].imageUrl;
         if (resultScenes[0].imageUrls) v.scenes[sceneIndex].imageUrls = resultScenes[0].imageUrls;
+        var oldGridInfo = v.scenes[sceneIndex].gridInfo;
+        delete v.scenes[sceneIndex].gridInfo;
+        if (oldGridInfo && oldGridInfo.isGrid) {
+          var groupNames = oldGridInfo.groupItems || [];
+          v.scenes.forEach(function (other, oi) {
+            if (oi === sceneIndex) return;
+            var ogi = other.gridInfo;
+            if (ogi && ogi.isGrid && groupNames.indexOf(other.name) >= 0) {
+              ogi.groupItems = (ogi.groupItems || []).filter(function (n) { return n !== v.scenes[sceneIndex].name; });
+            }
+          });
+        }
         engine._addHistory(wf, "scene", 0, segIdx, "done", null, sceneLabel);
       } else {
         engine._addHistory(wf, "scene", 0, segIdx, "error", "未返回图片", sceneLabel);
@@ -1832,7 +2421,10 @@
     if (!stNd) return;
     if (maxRetries <= 0) { stNd.reviewStatus = "passed"; return; }
     var v = NR.getActiveVersion(stNd);
-    if (!v || !v.imageUrl) { stNd.reviewStatus = "passed"; return; }
+    if (!v) { stNd.reviewStatus = "passed"; return; }
+    // 文本预设（分镜表 Markdown）不走图片审核
+    if (v.kind === "text") { stNd.reviewStatus = "passed"; return; }
+    if (!v.imageUrl) { stNd.reviewStatus = "passed"; return; }
     var state = engine._state(wf.id);
 
     var didPass = false;

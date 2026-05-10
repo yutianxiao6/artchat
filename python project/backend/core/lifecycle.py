@@ -1,6 +1,6 @@
 """
 后台服务生命周期管理
-监控浏览器连接，无活动时自动关闭服务
+基于"最后活动时间"的心跳窗口：后台线程定期检查，超时自动关闭。
 """
 import time
 import threading
@@ -10,72 +10,66 @@ import signal
 
 logger = logging.getLogger(__name__)
 
+
 class LifecycleManager:
-    def __init__(self, idle_timeout: int = 300):
+    def __init__(self, idle_timeout: int = 60, grace_period: int = 20, check_interval: int = 5):
         """
         Args:
-            idle_timeout: 无活动连接后多少秒自动关闭（默认5分钟）
+            idle_timeout: 最后一次活动后多少秒判定为闲置并关闭
+            grace_period: 启动后的宽限期（秒），该段时间内即使没心跳也不关
+            check_interval: 后台检查线程的轮询间隔
         """
         self.idle_timeout = idle_timeout
+        self.grace_period = grace_period
+        self.check_interval = check_interval
+        self.started_at = time.time()
         self.last_activity = time.time()
-        self.active_connections = 0
-        self.shutdown_timer = None
         self.lock = threading.Lock()
         self.enabled = True
+        self._watcher_started = False
 
     def record_activity(self):
-        """记录用户活动"""
         with self.lock:
             self.last_activity = time.time()
 
-    def add_connection(self):
-        """增加活动连接计数"""
+    def start_watcher(self):
+        """启动后台监控线程（只启动一次）。"""
         with self.lock:
-            self.active_connections += 1
-            self.last_activity = time.time()
-            logger.info(f"新增连接，当前活动连接数: {self.active_connections}")
+            if self._watcher_started or not self.enabled:
+                return
+            self._watcher_started = True
+        t = threading.Thread(target=self._watch_loop, daemon=True)
+        t.start()
+        logger.info(
+            f"lifecycle watcher started: idle_timeout={self.idle_timeout}s "
+            f"grace={self.grace_period}s interval={self.check_interval}s"
+        )
 
-    def remove_connection(self):
-        """减少活动连接计数"""
-        with self.lock:
-            self.active_connections = max(0, self.active_connections - 1)
-            logger.info(f"连接断开，当前活动连接数: {self.active_connections}")
-            if self.active_connections == 0:
-                self._schedule_shutdown()
-
-    def _schedule_shutdown(self):
-        """调度关闭任务"""
-        if not self.enabled:
-            return
-
-        if self.shutdown_timer:
-            self.shutdown_timer.cancel()
-
-        def check_and_shutdown():
-            time.sleep(self.idle_timeout)
+    def _watch_loop(self):
+        while True:
+            time.sleep(self.check_interval)
             with self.lock:
-                if self.active_connections == 0:
-                    idle_time = time.time() - self.last_activity
-                    if idle_time >= self.idle_timeout:
-                        logger.info(f"无活动连接超过 {self.idle_timeout} 秒，自动关闭服务")
-                        self._shutdown_server()
-
-        self.shutdown_timer = threading.Thread(target=check_and_shutdown, daemon=True)
-        self.shutdown_timer.start()
+                if not self.enabled:
+                    return
+                now = time.time()
+                if now - self.started_at < self.grace_period:
+                    continue
+                idle = now - self.last_activity
+                if idle >= self.idle_timeout:
+                    logger.info(f"无活动 {idle:.0f}s 超过 {self.idle_timeout}s，关闭服务")
+                    self._shutdown_server()
+                    return
 
     def _shutdown_server(self):
-        """关闭服务器"""
         try:
-            # 发送 SIGTERM 信号给当前进程
             os.kill(os.getpid(), signal.SIGTERM)
         except Exception as e:
             logger.error(f"关闭服务失败: {e}")
 
     def disable(self):
-        """禁用自动关闭功能"""
-        self.enabled = False
-        if self.shutdown_timer:
-            self.shutdown_timer.cancel()
+        with self.lock:
+            self.enabled = False
 
-# 全局实例
-lifecycle_manager = LifecycleManager(idle_timeout=5)  # 5秒无活动自动关闭（允许1次心跳丢失）
+
+# 全局实例：心跳 30s 一次，允许丢 1 次
+lifecycle_manager = LifecycleManager(idle_timeout=75, grace_period=30, check_interval=10)

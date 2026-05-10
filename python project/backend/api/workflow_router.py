@@ -1,6 +1,7 @@
 import json
 import os
 import re
+import math
 import asyncio
 import base64 as b64mod
 from fastapi import APIRouter, HTTPException
@@ -15,6 +16,109 @@ from backend.models.schemas import ImageGenerateRequest
 from backend.core.request_client import async_http_request
 
 router = APIRouter(prefix="/api/workflow", tags=["工作流"])
+
+
+# ═══════════════════════════════════════════════════
+#  预设：人物 / 故事模板
+# ═══════════════════════════════════════════════════
+
+CHARACTER_PRESETS = [
+    {
+        "id": "default",
+        "name": "四视图角色模型图",
+        "width": 1152,
+        "height": 2048,
+        "template": "{style}风格，2x2四视图网格，角色模型图，白色背景，直立姿势，正面/侧面/背面/四分之三角度，{description}",
+    },
+    {
+        "id": "realPhoto",
+        "name": "真人写实设定集",
+        "width": 3840,
+        "height": 2160,
+        "template": (
+            "基于参考图中的角色和背景，制作一份类似官方设定集的角色视觉参考表。\n"
+            "核心要求：绝对真实的真人摄影级质感，极致的真人皮肤纹理与真实物理光影。\n"
+            "具体内容需包含：\n"
+            "1) 该真人角色的正面、侧面、背面的全身三面图；\n"
+            "2) 不同面部表情特写（清晰的毛孔级写实特写）；\n"
+            "3) 服装和装备的详细部件高分辨率真实材质拆解展示；\n"
+            "4) 色彩搭配色板；\n"
+            "5) 画面边缘加入简短的世界观文字排版说明。\n"
+            "排版与参数：整体排版整洁有序，纯白背景，图解风排版格式。\n"
+            "画面比例 16:9，8K超高分辨率，顶级商业摄影棚实拍画质。\n"
+            "角色描述：{description}"
+        ),
+    },
+]
+
+
+STORY_TEMPLATE_PRESETS = [
+    {
+        "id": "boardImage",
+        "name": "电影故事板（图文设计图）",
+        "kind": "image",
+        "orientations": ["horizontal", "vertical"],
+        "template": "",  # 走原有 gen_story_template 的拼装逻辑
+    },
+    {
+        "id": "shotListMd",
+        "name": "11栏分镜表（Markdown）",
+        "kind": "text",
+        "system_prompt": (
+            "Role: 资深分镜师 (Senior Storyboard Artist)\n"
+            "Profile: 你是一名拥有 10 年经验的专业电影分镜师，擅长将文字剧本转化为视觉化的分镜表格。"
+            "你精通镜头语言、构图美学、节奏把控以及音效设计。\n\n"
+            "Task: 我将提供一段剧本内容，请你将其拆解并转化为标准的【分镜表】。\n"
+            "核心目标：确保剧本中的每一段文字（包括动作描述、环境描写、对白）都有对应的镜头呈现，严禁遗漏任何剧情细节。\n\n"
+            "Critical Constraints (重要约束):\n"
+            "1) 输出格式必须为 Markdown 表格。\n"
+            "2) 必须包含以下 11 列，顺序不可变：[镜头号，时长，角色，场景，景别，拍摄角度，运镜，构图，画面描述，对白，音效]\n"
+            "3) 角色栏填写规则：必须填写画面中可见的所有角色，而不仅仅是对白说话者；多人同框/过肩/背景中的人都要列出（用逗号分隔）；单人特写仅列该角色；与画面描述视觉内容一致。\n"
+            "4) 内容拆分与覆盖：严禁遗漏任何段落；对白拆分原则——一句话≈一个镜头，长台词必须按句子或语义停顿拆为多个镜头并穿插反应镜头；动作/环境必须独立成镜头；生成前自查每个情节转折点和关键动作都有对应镜头号。\n"
+            "5) 对话镜头优先使用过肩镜头建立空间关系，交替正反打：说话者→倾听者反应→说话者；避免连续多个相同角度。\n"
+            "6) 拍摄角度独立成列，不可写入画面描述；可用：平视、仰拍、俯拍、侧拍、过肩、主观视角、荷兰角、背面视角、低角度、高角度；禁止连续3个镜头使用相同角度。\n"
+            "7) 画面描述要求：详细描述画面内容、动作、光影氛围、角色表情；不再含拍摄角度；多人物时描述相对位置和互动；必须涵盖剧本对应段落的所有视觉信息。\n"
+            "8) 对白栏格式：【角色名】(情绪)：台词内容；情绪如愤怒/兴奋/悲伤/冷静/犹豫/讽刺/温柔/紧张/恐惧/坚定等；纯动作或环境镜头填写\"(无)\"或\"——\"；对白栏只填说话的人，但角色栏要填画面里所有的人。\n"
+            "9) 景别与运镜需根据情绪变化动态调整，避免全程固定镜头；情绪激烈时可用特写+推镜头，情绪平缓时可用中景+固定镜头。\n\n"
+            "Workflow:\n"
+            "1) 全文通读，标记所有对白/动作/环境段落。\n"
+            "2) 一一映射，为每段文字至少分配一个镜头号。\n"
+            "3) 拆解长段落为单句或短语。\n"
+            "4) 设计多元化拍摄角度。\n"
+            "5) 检查角色栏列出所有可见角色。\n"
+            "6) 自查无遗漏，按 11 列要求生成完整 Markdown 表格。\n\n"
+            "Example Output (参考示例):\n"
+            "| 镜头号 | 时长 | 角色 | 场景 | 景别 | 拍摄角度 | 运镜 | 构图 | 画面描述 | 对白 | 音效 |\n"
+            "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n"
+            "| 1 | 3s | 张三,李四 | 办公室 | 中景 | 过肩 | 固定 | 过肩构图 | 从李四肩后看向张三，张三坐在办公桌后，双手紧握桌面，李四背影在前景虚化 | 【张三】(愤怒)：你为什么要这么做？ | 空调低频声 |\n"
+            "| 2 | 2s | 张三,李四 | 办公室 | 近景 | 侧拍 | 微推 | 中心构图 | 镜头切到李四侧面，张三肩膀在前景，李四眼神躲闪，喉结滚动 | 【李四】(犹豫)：我...我没有选择。 | 纸张摩擦声 |"
+        ),
+        "user_template": "[在此处粘贴你的剧本]",
+    },
+]
+
+
+def _get_preset(presets, preset_id, default_idx=0):
+    return next((p for p in presets if p["id"] == preset_id), presets[default_idx])
+
+
+def _apply_template(template: str, **kwargs) -> str:
+    """把 {style}/{description} 等占位符替换为实参，安全处理用户模板里其他 { } 字符。"""
+    out = template or ""
+    for k, v in kwargs.items():
+        out = out.replace("{" + k + "}", str(v or ""))
+    return out
+
+
+@router.get("/presets")
+async def list_presets():
+    def _strip(p):
+        # 不要把超长的 system_prompt 等原样塞 list 接口；前端单独按 id 取详情
+        return {k: v for k, v in p.items()}
+    return JSONResponse({"code": 0, "data": {
+        "character": [_strip(p) for p in CHARACTER_PRESETS],
+        "storyTemplate": [_strip(p) for p in STORY_TEMPLATE_PRESETS],
+    }})
 
 
 def load_ref_image_b64(image_url: str, max_size: int = 1500000) -> str:
@@ -46,16 +150,74 @@ def load_ref_image_b64(image_url: str, max_size: int = 1500000) -> str:
 
 def collect_ref_images(characters=None, scenes=None, extra_urls=None):
     refs = []
-    for c in (characters or []):
-        b = load_ref_image_b64(c.get("imageUrl", ""))
-        if b: refs.append(b)
-    for s in (scenes or []):
-        b = load_ref_image_b64(s.get("imageUrl", ""))
-        if b: refs.append(b)
-    for u in (extra_urls or []):
+    seen_urls = set()
+    def _add_url(u):
+        if not u or u in seen_urls:
+            return
+        seen_urls.add(u)
         b = load_ref_image_b64(u)
-        if b: refs.append(b)
+        if b:
+            refs.append(b)
+    for c in (characters or []):
+        _add_url(c.get("imageUrl", ""))
+    for s in (scenes or []):
+        _add_url(s.get("imageUrl", ""))
+    for u in (extra_urls or []):
+        _add_url(u)
     return refs
+
+
+def build_ref_index_prefix(characters=None, scenes=None, extra_labels=None):
+    """构建参考图索引前缀文本，说明每张参考图对应什么。
+    extra_labels: [(url, label), ...] 额外的参考图标签。
+    返回格式如：'【参考图说明】第1张：角色A，第2张：场景B。\n'
+    如果没有参考图则返回空字符串。"""
+    lines = []
+    img_idx = 1
+    seen = set()
+    for c in (characters or []):
+        url = c.get("imageUrl", "")
+        if not url or url in seen:
+            continue
+        seen.add(url)
+        gi = c.get("gridInfo")
+        if gi and gi.get("isGrid"):
+            names = [n for n in gi.get("groupItems", []) if n]
+            if names:
+                lines.append(f"第{img_idx}张参考图：{' / '.join(names)}")
+            else:
+                lines.append(f"第{img_idx}张参考图：角色参考")
+        else:
+            name = c.get("name", "")
+            lines.append(f"第{img_idx}张参考图：角色「{name}」" if name else f"第{img_idx}张参考图：角色参考")
+        img_idx += 1
+    for s in (scenes or []):
+        url = s.get("imageUrl", "")
+        if not url or url in seen:
+            continue
+        seen.add(url)
+        gi = s.get("gridInfo")
+        if gi and gi.get("isGrid"):
+            names = [n for n in gi.get("groupItems", []) if n]
+            if names:
+                lines.append(f"第{img_idx}张参考图：{' / '.join(names)}")
+            else:
+                lines.append(f"第{img_idx}张参考图：场景参考")
+        else:
+            name = s.get("name", "")
+            lines.append(f"第{img_idx}张参考图：场景「{name}」" if name else f"第{img_idx}张参考图：场景参考")
+        img_idx += 1
+    for url, label in (extra_labels or []):
+        if not url or url in seen:
+            continue
+        seen.add(url)
+        lines.append(f"第{img_idx}张参考图：{label or '参考图'}")
+        img_idx += 1
+    if not lines:
+        return ""
+    if img_idx == 2:
+        return "严格参考提供的参考图，不可自行改动。\n"
+    return "【参考图说明】" + "，".join(lines) + "。严格参考以上图片中的形象，不可自行改动。\n"
 
 
 def compute_grid_layout(grid: int, resolution: str = "") -> tuple:
@@ -77,6 +239,78 @@ def compute_grid_layout(grid: int, resolution: str = "") -> tuple:
         cols = rows
         grid_label = {4: "2x2", 9: "3x3", 16: "4x4"}[grid]
     return grid, rows, cols, grid_label
+
+
+GRID_POSITION_LABELS = {
+    2: ["左", "右"],
+    3: ["左", "中", "右"],
+    4: ["左上", "右上", "左下", "右下"],
+}
+
+
+def compute_grid_groups(items: list, threshold: int) -> list:
+    """将 items 按阈值分组。基于总数判断是否合并，对需要生成的 item 进行宫格分组。
+    最小配置法：优先2宫格，超出最大组数限制时从末尾开始把2宫格升级为3宫格。
+    已有 imageUrl 的 item 跳过不生成。"""
+    need_gen = [i for i, it in enumerate(items) if not it.get("imageUrl")]
+    if not need_gen:
+        return []
+    total = len(items)
+    if total <= threshold:
+        return [[i] for i in need_gen]
+    n = len(need_gen)
+    if n <= 1:
+        return [[i] for i in need_gen]
+    # 确定每组大小：优先2，超出限制时从后往前升级为3
+    max_groups = 5
+    # 计算需要多少组为3才能压到 max_groups 以内
+    # n 个元素，g2 组2个 + g3 组3个，g2 + g3 <= max_groups，2*g2 + 3*g3 >= n
+    # 尽量多用2：先全部用2，多出来的用3补
+    groups_of_2 = math.ceil(n / 2)
+    if groups_of_2 <= max_groups:
+        # 全部2宫格够用
+        groups = []
+        idx = 0
+        while idx < n:
+            groups.append(need_gen[idx:idx + 2])
+            idx += 2
+        return groups
+    # 需要一些3宫格：每升级一组从2→3，总组数减1，容纳多1个
+    # 需要减少的组数
+    overflow = groups_of_2 - max_groups
+    # overflow 组升级为3宫格
+    num_3 = overflow
+    num_2 = max_groups - num_3
+    groups = []
+    idx = 0
+    for _ in range(num_2):
+        groups.append(need_gen[idx:idx + 2])
+        idx += 2
+    for _ in range(num_3):
+        groups.append(need_gen[idx:idx + 3])
+        idx += 3
+    # 剩余的（如果有）追加到最后一组
+    if idx < n:
+        groups[-1] = groups[-1] + need_gen[idx:]
+    return groups
+
+
+def _build_grid_prompt(style: str, items: list, item_type: str, prompt_template: str = "") -> str:
+    """构建宫格图的 prompt。item_type: 'character' | 'scene'"""
+    n = len(items)
+    labels = GRID_POSITION_LABELS.get(n, GRID_POSITION_LABELS[4][:n])
+    names = [it.get("name", "") for it in items]
+    if item_type == "scene":
+        header = f"{style}风格，{n}宫格场景图，将以下{n}个场景组合在一张图中，清晰格线分隔，无人物无人影"
+        parts = [f"{labels[i]}：{names[i]}" for i in range(n)]
+    else:
+        header = (
+            f"{style}风格，{n}宫格人物图，将以下{n}个人物组合在一张图中，每格一个角色，清晰格线分隔。"
+            f"【严格要求】必须100%还原每张参考图中的人物形象，包括服装、武器、发型、配饰、颜色等所有细节，"
+            f"不允许任何改动或自由发挥。只是将{n}张独立的角色图按宫格排列在一起，每格对应一张参考图"
+        )
+        parts = [f"{labels[i]}：参考图{i+1}的角色「{names[i]}」" for i in range(n)]
+    return header + "，" + "，".join(parts)
 
 
 def _strip_style_prefix(text: str, style: str = "") -> str:
@@ -410,7 +644,35 @@ async def gen_script(body: dict):
     style = body.get("style", "")
     vtype = body.get("type", "")
     seg_count = body.get("segment_count")
+    episode_index = int(body.get("episode_index", 0) or 0)
+    prev_episodes = body.get("prev_episodes", []) or []
     seg_hint = f"请生成恰好 {seg_count} 段，每段15秒。" if seg_count else "根据情节自动决定段数，每段15秒。"
+
+    prev_block = ""
+    if episode_index > 0 and prev_episodes:
+        prev_block += "\n\n【前情提要 - 之前剧集的核心信息（用于续写时保持一致性）】\n"
+        for ep in prev_episodes:
+            idx = ep.get("index", 0)
+            ft = (ep.get("full_text") or "").strip()
+            if len(ft) > 1500:
+                ft = ft[:1500] + "…"
+            prev_block += f"\n--- 第{idx + 1}集 {ep.get('title','')} ---\n"
+            prev_block += f"剧情：{ft}\n"
+            mcs = ep.get("main_characters", []) or []
+            if mcs:
+                prev_block += "主要人物：\n"
+                for c in mcs:
+                    prev_block += f"  - {c.get('name','')}：{(c.get('description','') or '')[:120]}\n"
+            lf = (ep.get("last_frame_desc") or "").strip()
+            if lf:
+                prev_block += f"上集结尾画面：{lf[:200]}\n"
+        prev_block += (
+            "\n要求：\n"
+            "1) 这是续集，本集开场必须能从上集结尾自然衔接，不要重复上集已发生的事件。\n"
+            "2) 沿用上述主要人物（保持名字与人设一致），可在本集引入新人物作为次要角色。\n"
+            "3) 整体世界观、风格、人物关系延续上集，但本集要有独立的情节弧线（开端→发展→收束）。\n"
+        )
+
     system_prompt = f"""你是一位专业的影视编剧和导演。根据用户提供的简要情节、视频风格和类型，生成完整的视频剧本。
 
 要求：
@@ -422,7 +684,7 @@ async def gen_script(body: dict):
    - 次要人物：仅在某些段落出现的配角
    - 如果某段没有次要人物，标记为空数组
 5. 智能分析每段的场景：场景只描述环境/地点，不包含人物
-6. 标注每段出现了哪些主要人物和次要人物
+6. 标注每段出现了哪些主要人物和次要人物{prev_block}
 
 只输出JSON：
 {{
@@ -447,7 +709,189 @@ async def gen_script(body: dict):
     }}
   ]
 }}"""
-    result = await call_llm_json(config, system_prompt, f"情节：{plot}")
+    plot_label = ("本集情节简述" if episode_index > 0 else "情节")
+    result = await call_llm_json(config, system_prompt, f"{plot_label}：{plot}")
+    return JSONResponse({"code": 0, "data": result})
+
+
+@router.post("/generate/script-multi")
+async def gen_script_multi(body: dict):
+    """一次性把整个故事拆成 N 集，每集段数相同。返回 episodes 数组。"""
+    config = get_config_by_id(body.get("chat_config_id", "")) or get_first_config("chat")
+    if not config:
+        raise HTTPException(status_code=400, detail="未找到聊天配置")
+    plot = body.get("plot", "")
+    style = body.get("style", "")
+    vtype = body.get("type", "")
+    episode_count = max(1, min(int(body.get("episode_count") or 1), 20))
+    segments_per_episode = body.get("segments_per_episode")
+    spe_int = int(segments_per_episode) if segments_per_episode else 0
+
+    seg_hint = (
+        f"每集恰好 {spe_int} 段，每段15秒；总共 {episode_count} 集 × {spe_int} 段 = {episode_count * spe_int} 段。"
+        if spe_int else
+        f"先决定一个固定的每集段数（建议 4-8 段），然后让所有 {episode_count} 集都使用同一段数；每段15秒。"
+    )
+
+    system_prompt = f"""你是一位专业的影视编剧和导演。根据用户提供的简要情节、风格和类型，规划一部 {episode_count} 集的连续剧并完整输出每集剧本。
+
+总体要求：
+1. 整体故事弧线：把情节拆成 {episode_count} 集，每集都有独立的开端→发展→收束，但集与集之间因果衔接、悬念递进。
+2. 段数限制：{seg_hint} **关键约束：所有集的段数必须完全相同。**
+3. 风格：{style}，类型：{vtype}
+4. 主要人物：贯穿全集的核心角色一次性规划，所有集复用同一份 main_characters；如有新角色仅在对应集的 minor_characters 中出现。
+5. 场景与人物分析：每段标注出场的主要人物名、次要人物（如有）、场景（纯环境）。
+6. 集与集之间用上一集尾段画面/事件自然过渡到下一集首段，避免事件重复。
+
+只输出JSON：
+{{
+  "main_characters": [
+    {{"name": "角色名", "description": "外貌特征详细描述", "visual_prompt": "用于AI绘图的纯外貌描述，不含场景"}}
+  ],
+  "episodes": [
+    {{
+      "index": 0,
+      "title": "第1集标题",
+      "plot": "本集情节简述",
+      "full_text": "本集完整剧本文本",
+      "segments": [
+        {{
+          "index": 0,
+          "text": "该段剧本内容",
+          "duration": 15,
+          "main_character_names": ["出现的主要人物名"],
+          "minor_characters": [
+            {{"name": "次要角色名", "description": "外貌描述", "visual_prompt": "绘图用外貌描述"}}
+          ],
+          "scenes": [
+            {{"name": "场景名称", "description": "纯场景环境描述，不含人物", "visual_prompt": "用于AI生成纯场景图的提示词"}}
+          ]
+        }}
+      ]
+    }}
+  ]
+}}"""
+    user_text = f"整体情节：{plot}\n\n请输出 {episode_count} 集完整剧本。"
+    result = await call_llm_json(config, system_prompt, user_text, max_tokens=20000)
+
+    eps = result.get("episodes") or []
+    if not isinstance(eps, list) or not eps:
+        raise HTTPException(status_code=500, detail="模型未返回 episodes")
+    # 强制对齐段数：以第1集段数为准
+    target_seg_count = spe_int or len((eps[0] or {}).get("segments") or [])
+    if target_seg_count <= 0:
+        target_seg_count = 4
+    fixed_eps = []
+    for i, ep in enumerate(eps[:episode_count]):
+        if not isinstance(ep, dict):
+            ep = {}
+        segs = ep.get("segments") or []
+        if not isinstance(segs, list):
+            segs = []
+        if len(segs) > target_seg_count:
+            segs = segs[:target_seg_count]
+        elif len(segs) < target_seg_count:
+            for j in range(len(segs), target_seg_count):
+                segs.append({"index": j, "text": "", "duration": 15, "main_character_names": [], "minor_characters": [], "scenes": []})
+        for j, s in enumerate(segs):
+            if not isinstance(s, dict):
+                segs[j] = {"index": j, "text": str(s or ""), "duration": 15}
+                continue
+            s["index"] = j
+            s.setdefault("duration", 15)
+            s.setdefault("text", "")
+            s.setdefault("minor_characters", [])
+            s.setdefault("scenes", [])
+            s.setdefault("main_character_names", [])
+        ep["segments"] = segs
+        ep["index"] = i
+        ep.setdefault("title", f"第{i+1}集")
+        ep.setdefault("plot", "")
+        ep.setdefault("full_text", "")
+        fixed_eps.append(ep)
+    result["episodes"] = fixed_eps
+    return JSONResponse({"code": 0, "data": result})
+
+
+@router.post("/generate/script-iterate")
+async def gen_script_iterate(body: dict):
+    config = get_config_by_id(body.get("chat_config_id", "")) or get_first_config("chat")
+    if not config:
+        raise HTTPException(status_code=400, detail="未找到聊天配置")
+    full_text = body.get("full_text", "")
+    segments = body.get("segments", []) or []
+    chat_history = body.get("chat_history", []) or []
+    user_message = (body.get("user_message", "") or "").strip()
+    style = body.get("style", "")
+    vtype = body.get("type", "")
+    if not full_text and not segments:
+        raise HTTPException(status_code=400, detail="当前剧本为空")
+    if not user_message:
+        raise HTTPException(status_code=400, detail="修改指令为空")
+
+    seg_count = len(segments)
+    seg_count_hint = f"必须保持 {seg_count} 段不变，每段时长保持原样" if seg_count else "保持原有分段数量和时长"
+
+    seg_text = "\n\n".join(
+        f"【第{i+1}段】(时长{s.get('duration', 15)}s)\n{s.get('text','')}"
+        for i, s in enumerate(segments)
+    ) if segments else ""
+
+    system_prompt = f"""你是一位资深影视编剧。基于当前剧本和用户的修改指令，输出修改后的剧本。
+
+要求：
+1. 准确理解用户的修改意图，只改用户明确要求改的部分，其他部分保持原样
+2. {seg_count_hint}
+3. 风格：{style}，类型：{vtype}
+4. 修改后必须同时给出 full_text（整体合并文本）和 segments（每段独立文本+时长）
+5. 不要新增/删除主要人物，除非用户明确要求；如果剧情需要新增次要人物，可在分段里体现
+6. 修改后保持各段之间情节、场景的衔接连贯
+
+只输出JSON：
+{{
+  "analysis": "对用户指令的简要分析与改动说明",
+  "full_text": "修改后的完整剧本文本",
+  "segments": [
+    {{"index": 0, "text": "该段剧本内容", "duration": 15}}
+  ]
+}}"""
+
+    user_text = f"当前完整剧本：\n{full_text}\n\n当前分段：\n{seg_text}"
+    if chat_history:
+        user_text += "\n\n之前的修改记录：\n"
+        for msg in chat_history:
+            role = msg.get("role", "")
+            content = msg.get("content", "")
+            if role == "user" and content:
+                user_text += f"用户要求：{content}\n"
+            elif role == "assistant" and content and content != "done":
+                user_text += f"AI说明：{content}\n"
+    user_text += f"\n本次修改指令：{user_message}"
+
+    result = await call_llm_json(config, system_prompt, user_text, max_tokens=20000)
+
+    new_segments = result.get("segments") or []
+    if seg_count and isinstance(new_segments, list):
+        if len(new_segments) > seg_count:
+            new_segments = new_segments[:seg_count]
+        elif len(new_segments) < seg_count:
+            for i in range(len(new_segments), seg_count):
+                fallback = segments[i] if i < len(segments) else {}
+                new_segments.append({
+                    "index": i,
+                    "text": fallback.get("text", ""),
+                    "duration": fallback.get("duration", 15),
+                })
+        for i, s in enumerate(new_segments):
+            if not isinstance(s, dict):
+                new_segments[i] = {"index": i, "text": str(s or ""), "duration": (segments[i] or {}).get("duration", 15) if i < len(segments) else 15}
+                continue
+            s["index"] = i
+            if "duration" not in s and i < len(segments):
+                s["duration"] = segments[i].get("duration", 15)
+            s.setdefault("text", "")
+        result["segments"] = new_segments
+
     return JSONResponse({"code": 0, "data": result})
 
 
@@ -461,30 +905,54 @@ async def plan_characters_scenes(body: dict):
     style = body.get("style", "")
     vtype = body.get("type", "")
     user_hint = body.get("user_hint", "")
+    prev_main_characters = body.get("prev_main_characters", []) or []
+    prev_episode_scenes = body.get("prev_episode_scenes", []) or []
 
     seg_texts = "\n\n".join(f"【第{i+1}段】{s.get('text','')}" for i, s in enumerate(segments))
     hint_line = f"\n用户补充要求：{user_hint}" if user_hint else ""
 
+    prev_block = ""
+    has_prev = bool(prev_main_characters or prev_episode_scenes)
+    if has_prev:
+        prev_block = "\n\n【整个连续剧已有的人物与场景（跨集共享；本集必须全部沿用，不可改名/改设定）】\n"
+        if prev_main_characters:
+            prev_block += "已有主要人物（全集通用；名字与 description 必须一字不差地保持一致）：\n"
+            for c in prev_main_characters:
+                prev_block += f"  - {c.get('name','')}：{(c.get('description','') or '')[:160]}\n"
+        if prev_episode_scenes:
+            prev_block += "已有场景（任何集出现过的地点；如本集复用，name 必须完全一致）：\n"
+            for s in prev_episode_scenes:
+                prev_block += f"  - {s.get('name','')}：{(s.get('description','') or '')[:120]}\n"
+        prev_block += (
+            "\n**关键规则（违反会导致人物/场景重复生成图片）：**\n"
+            "1) **main_characters 只包含本集【新出场】的主要人物**。如果本集所有主要人物都在上面已列出，main_characters 输出空数组 []。绝不要把已有人物再写一遍。\n"
+            "2) 在判断某人物是否已存在时：按称谓/身份/剧情能识别为同一角色即视为同一人，必须沿用原名；**严禁以新名字描述同一个人**。\n"
+            "3) 每段 scenes 中，如地点与已有场景中任意一条相同或相近（例如同一村口/茶馆/书房），**必须使用上面列出的那个场景的 name 原文**。本接口会把 name 匹配到已有场景节点并直接复用其图片。\n"
+            "4) 本集新出现的场景才在 scenes 中给出完整 description/visual_prompt；复用的场景只需 name 即可（description 可留空，后端会用已有内容）。\n"
+            "5) 次要人物 minor_characters 只写本段真正新出现的配角，不可与任意已有主要人物重名。\n"
+        )
+
     system_prompt = f"""你是一位专业的影视美术总监。根据完整剧本，统一规划所有人物和场景的视觉设计，确保全片一致性。
-风格：{style}，类型：{vtype}{hint_line}
+风格：{style}，类型：{vtype}{hint_line}{prev_block}
 
 要求：
-1. 主要人物：贯穿多段的核心角色。description 必须以"【性别：男/女/其他】"开头（即使剧本未明说，也要根据名字、行为、称谓等合理推断并明确写出；不得留"未知"），随后写详细的穿着、服饰、发型、体型、年龄段等外貌特征，不写表情和动作。visual_prompt 用于AI生成2x2四视图角色模型图（正面/侧面/背面/四分之三角度），人物保持直立姿势，白色背景，且必须在开头体现性别（如"年轻男性角色"/"中年女性角色"）
-2. 每段的次要人物：仅在该段出现的配角，如果该段没有次要人物则返回空数组。次要人物不能和主要人物重复。description 同样以"【性别：男/女/其他】"开头，visual_prompt 同样在开头体现性别
-3. 每段的场景：纯环境描述，不含任何人物。visual_prompt 用于AI生成2x2四机位全景场景图（从四个不同角度拍摄同一场景），必须明确"无人物、无人影"
+1. 主要人物：贯穿多段的核心角色。description 必须以"【性别：男/女/其他】"开头（即使剧本未明说，也要根据名字、行为、称谓等合理推断并明确写出；不得留"未知"），随后写详细的穿着、服饰、发型、体型、年龄段等外貌特征，不写表情和动作。visual_prompt 用于AI生成角色模型图，人物保持直立姿势，白色背景，且必须在开头体现性别（如"年轻男性角色"/"中年女性角色"）
+2. 每段的次要人物：仅在该段出现的配角，如果该段没有次要人物则返回空数组。次要人物不能和主要人物重复。description 同样以"【性别：男/女/其他】"开头，visual_prompt 同样在开头体现性别。注意：同一段内可以有多个次要人物，必须全部列出，不要遗漏
+3. 每段的场景：该段剧情涉及的所有不同地点/环境，必须全部列出，不要遗漏或合并。纯环境描述，不含任何人物。visual_prompt 用于AI生成纯场景图，必须明确"无人物、无人影"。同一段内如果有多个不同场景（如室内→室外、白天→夜晚的不同地点），每个都要单独列出
 4. 同一角色在不同段落的描述必须一致，性别绝不可前后矛盾
 5. 场景描述要前后连贯，相同场景保持一致性
+6. 不要因为数量多就省略——即使某段有5个以上次要人物或场景，也必须全部列出
 
 只输出JSON：
 {{
   "main_characters": [
-    {{"name": "角色名", "description": "【性别：男】详细穿着、服饰、发型、体型、年龄段等外貌特征，不含表情和动作", "visual_prompt": "2x2四视图，年轻男性角色模型图，直立姿势，白色背景，正面/侧面/背面/四分之三角度，详细外貌描述..."}}
+    {{"name": "角色名", "description": "【性别：男】详细穿着、服饰、发型、体型、年龄段等外貌特征，不含表情和动作", "visual_prompt": "年轻男性角色模型图，直立姿势，白色背景，详细外貌描述..."}}
   ],
   "segments": [
     {{
       "index": 0,
-      "minor_characters": [{{"name": "角色名", "description": "【性别：女】详细穿着外貌特征", "visual_prompt": "2x2四视图，中年女性角色模型图，直立姿势，白色背景，详细外貌描述..."}}],
-      "scenes": [{{"name": "场景名称标签", "description": "场景环境详细描述", "visual_prompt": "2x2四机位全景图，无人物无人影，{style}风格，从四个不同角度拍摄，场景描述..."}}]
+      "minor_characters": [{{"name": "角色名", "description": "【性别：女】详细穿着外貌特征", "visual_prompt": "中年女性角色模型图，直立姿势，白色背景，详细外貌描述..."}}],
+      "scenes": [{{"name": "场景名称标签", "description": "场景环境详细描述", "visual_prompt": "纯场景环境，无人物无人影，{style}风格，场景描述..."}}]
     }}
   ]
 }}"""
@@ -506,6 +974,7 @@ async def plan_frames(body: dict):
     grid = body.get("grid", 4)
     is_last_segment = body.get("is_last_segment", False)
     prev_last_frame_desc = body.get("prev_last_frame_desc", "")
+    prev_segment_text = body.get("prev_segment_text", "")
     prev_planning_history = body.get("prev_planning_history", [])
     prev_storyboard_url = body.get("prev_storyboard_url", "")
     user_hint = body.get("user_hint", "")
@@ -525,6 +994,9 @@ async def plan_frames(body: dict):
             parts.append(f"外貌设定: {desc}")
         if vp and vp != desc:
             parts.append(f"视觉提示: {vp}")
+        gi = c.get("gridInfo") or {}
+        if gi.get("isGrid"):
+            parts.append(f"图片位置: 宫格图{gi.get('positionLabel','')}格（{gi.get('gridSize')}宫格，同图还有 {('、'.join([n for n in gi.get('groupItems', []) if n != name]) or '其他角色')}）")
         body_text = " | ".join(parts) if parts else "（无设定）"
         return f"- {name}: {body_text}"
 
@@ -537,11 +1009,17 @@ async def plan_frames(body: dict):
             parts.append(f"环境设定: {desc}")
         if vp and vp != desc:
             parts.append(f"视觉提示: {vp}")
+        gi = s.get("gridInfo") or {}
+        if gi.get("isGrid"):
+            parts.append(f"图片位置: 宫格图{gi.get('positionLabel','')}格（{gi.get('gridSize')}宫格，同图还有 {('、'.join([n for n in gi.get('groupItems', []) if n != name]) or '其他场景')}）")
         body_text = " | ".join(parts) if parts else "（无设定）"
         return f"- {name}: {body_text}"
 
     char_desc = "\n".join(_fmt_char(c) for c in characters + minor_characters) if (characters or minor_characters) else "无特定角色"
     scene_desc = "\n".join(_fmt_scene(s) for s in scenes) if scenes else "无特定场景"
+
+    all_char_names = [c.get("name", "").strip() for c in (characters + minor_characters) if c.get("name", "").strip()]
+    char_name_list_text = "、".join(all_char_names) if all_char_names else "（无）"
 
     # 构建前段规划历史上下文
     prev_context = ""
@@ -559,7 +1037,11 @@ async def plan_frames(body: dict):
                 prev_context += f"前段尾帧：{latest_plan['last_frame'].get('description', '')}\n"
             prev_context += "本段规划需要与前段自然衔接，保持视觉连贯性。\n"
 
-    prev_hint = f"\n前一段的尾帧画面：{prev_last_frame_desc}\n本段首帧必须能从前段尾帧自然过渡。" if prev_last_frame_desc else ""
+    prev_hint = ""
+    if prev_last_frame_desc:
+        prev_hint = f"\n前一段的尾帧画面：{prev_last_frame_desc}\n本段首帧必须能从前段尾帧自然过渡。"
+        if prev_segment_text:
+            prev_hint += f"\n前一段剧情概要（如本段是新一集的开头，这里是上集最后一段）：\n{prev_segment_text[:600]}"
     ending_hint = "这是整个视频的最后一段，尾帧需要有结束感和余韵。" if is_last_segment else "这段之后还有下一段，尾帧需要为下一段做铺垫和过渡。"
     hint_line = f"\n用户补充要求：{user_hint}" if user_hint else ""
 
@@ -576,8 +1058,10 @@ async def plan_frames(body: dict):
         plan_parts.append("尾帧画面")
         json_fields.append('"last_frame": {"description": "尾帧画面详细描述", "visual_prompt": "用于AI生图的完整提示词"}')
 
+    json_fields.append('"appearing_characters": ["本段出场的人物名（必须严格从下面给出的人物名单中挑选，逐字一致）", ...]')
+
     if not plan_parts:
-        return JSONResponse({"code": 0, "data": {"first_frame": {}, "storyboard": {}, "last_frame": {}}})
+        return JSONResponse({"code": 0, "data": {"first_frame": {}, "storyboard": {}, "last_frame": {}, "appearing_characters": []}})
 
     plan_target = "、".join(plan_parts)
     json_structure = ",\n  ".join(json_fields)
@@ -598,38 +1082,53 @@ async def plan_frames(body: dict):
 分镜图严格要求（{grid}格，{grid_label}布局，格位：{grid_pos_text}）：
 - grid_prompts 数组中每个元素只用"第X排第Y格"标识格位，不要写"第N格"
 - 每格必须是视频中的关键节点：情节转折、动作高潮、情绪变化、场景切换等重要时刻
-- 每格描述必须包含：
-  a) 出场人物及其在画面中的具体站位（左/中/右/前景/背景）
-  b) 人物的具体动作和表情
-  c) 背景环境的详细描述（光线、天气、物体摆放）
-  d) 镜头景别（特写/近景/中景/全景/远景）和角度（俯拍/仰拍/平拍/斜角）
-  e) 画面中的关键物体和道具
+- **每格只描述"这一帧能看见什么"**，按以下顺序写：
+  a) 镜头：景别（特写/近景/中景/全景/远景）+ 角度（俯拍/仰拍/平拍/过肩/斜角）+ 运镜（如推/拉/摇/跟，可选）
+  b) 人物动作与情绪：谁在做什么、表情、肢体语言、视线方向；用人物名直接指代（**禁止重复描述他/她的发型、服饰、年龄、性别、外貌**——这些已在角色设定里，沿用即可）
+  c) 站位与构图：左/中/右/前景/背景、画面占比、人物之间的相对位置
+  d) 场景环境的氛围：光线方向、明暗对比、关键物件/道具、空间感（用最少的字交代清楚就行，**不要堆砌环境形容词**）
+- **服饰只在以下情况描述**：①剧情转折点出现服饰变化（脱掉外套、换装、拔剑、戴上面具等关键道具/服饰动作）；②画面焦点正好是某件服饰/物件（特写镜头）。其他情况一律不写服饰，模型会按角色设定自动还原。
+- **强调分镜感**：每格像一个真正的电影镜头，要能"切"——突出动作瞬间、情绪转折、镜头语言；避免写成静态人物介绍卡或剧本对白复述。
 - **长度预算（硬限制）**：每格描述不超过 {per_cell_budget} 个中文字；grid_prompts 所有元素加起来不超过 2000 字。宫格越密（3x3/4x4）越要精简，只写画面关键信息，省略形容词堆砌和重复铺陈。
 - 每格描述中不要重复写风格，风格会统一附加在生图提示词末尾
-- 相邻格之间必须有逻辑连贯性，动作和情节能自然衔接
+- 相邻格之间必须有逻辑连贯性，动作和情节能自然衔接（同一动作的不同瞬间、机位切换、反应镜头等）
 - 不要描述无意义的过渡画面，每格都必须有明确的叙事功能"""
 
-    system_prompt = f"""你是一位专业的电影美术指导和分镜师。根据剧本片段，统一规划该段的{plan_target}，确保各部分之间的过渡连贯。
+    system_prompt = f"""你是一位资深电影分镜师与镜头语言导演。根据剧本片段，规划该段的{plan_target}。
+**核心理念：分镜不是人物图鉴，而是镜头语言。**——重镜头、重动作、重情绪、重构图，不重穿着外貌。
 风格：{style}
 {ending_hint}{prev_hint}{hint_line}{prev_context}
 
-出场人物（必须严格遵循以下设定，不得擅自改写性别、外貌、穿着）：
+可用人物名单（共{len(all_char_names)}人）：{char_name_list_text}
+角色设定（仅供参考，已在角色生图阶段固定下来；分镜里只需用人物名指代，不要重复描述外貌穿着）：
 {char_desc}
 
-场景环境（必须严格遵循以下设定）：
+场景设定（仅供参考；分镜里写氛围/光线/关键物即可，不要全文复述）：
 {scene_desc}
 {storyboard_rules}
 
 严格要求：
-{"- 首帧是视频开场第一帧，要抓住注意力，构图必须有冲击力" if not skip_first_frame else ""}
+{"- 首帧是开场镜头，要有视觉冲击力——通过景别、角度、构图、光线营造氛围，不是人物站姿照" if not skip_first_frame else ""}
 {"- 首帧画面必须能自然过渡到分镜图第1排第1格" if not skip_first_frame and not skip_storyboard else ""}
 {f"- 分镜图第{rows}排第{cols}格必须能自然过渡到尾帧画面" if not skip_storyboard and not skip_last_frame else ""}
-{"- 尾帧是该段最后一帧" if not skip_last_frame else ""}
-- 所有 visual_prompt 用于AI生图，必须包含：人物外貌和站位、场景环境、构图方式、光线方向
-- **人物出现时必须按"出场人物"中的设定描述**：沿用其性别（如"年轻男性"/"中年女性"）、发型、服饰、体型等关键特征；严禁出现与设定冲突的描述（例如设定为男性却写成"女子"、设定为古装却写成"西装"）
-- **场景出现时必须按"场景环境"中的设定描述**，不得更改场景核心要素
-- visual_prompt 中不要写风格描述，风格"{style}"会在生图时统一附加到提示词末尾
-- 所有描述必须具体到可以直接画出来的程度，不要使用模糊的形容词
+{"- 尾帧是该段最后一帧，要留余韵或抛悬念" if not skip_last_frame else ""}
+
+【描述写法 - 必须遵守】
+- **用人物名直接指代角色**（如"林霜"、"老周"），不要重复"年轻女子，黑长发，白衬衫…"这种角色卡式描述。模型会按角色设定自动还原外貌。
+- **以镜头语言开头**：每段描述先点明景别+角度（"近景仰拍"、"过肩中景"、"俯瞰全景"），再写动作。
+- **重点写动作和情绪**：谁在做什么、表情、视线、肢体张力、动作的速度感（推、扑、转身、回头等动词要鲜活）。
+- **服饰/外貌细节只在以下情况写**：
+  ①叙事关键道具/服饰登场或变化（拔剑、解纽扣、戴上面具、卸甲、脱下外套等）；
+  ②镜头焦点正好是该服饰/物件（特写）；
+  ③前后两格之间通过服饰变化表现时间或状态变迁。
+  其余一律不写服饰外貌。
+- **环境写氛围而非清单**：光线方向、明暗、关键物（如"案上的茶盏"），而不是"竹林、石阶、青苔、流水…"逐一列出。
+- visual_prompt 中不要写风格描述，风格"{style}"会在生图时统一附加。
+
+【输出 appearing_characters】
+- 列出本段实际出镜的人物名（必须严格从"可用人物名单"中挑选，逐字一致；禁止用代称）。
+- 没出场的人物不能列；只在画面外被提及的也不算出场。
+- 没人物出场则输出 []。
 
 只输出JSON：
 {{
@@ -639,27 +1138,29 @@ async def plan_frames(body: dict):
 
     # 审校步骤：让模型检查并改进分镜描述
     if not skip_storyboard and result.get("storyboard", {}).get("grid_prompts"):
-        review_prompt = f"""你是一位资深电影分镜审校师。请审查以下帧画面规划，检查并修正问题，输出改进后的完整版本。
+        review_prompt = f"""你是一位资深电影分镜审校师。请审查以下帧画面规划，**重点检查是否有"分镜感"**，输出改进后的完整版本。
 
 审查要点：
-1. 每格分镜是否都是视频中的关键节点（不是无意义的过渡画面）
-2. 人物在画面中的站位是否明确（左/中/右/前景/背景）
-3. **人物描述必须严格遵循"出场人物"中的设定**：性别、发型、服饰、体型不得偏离；若出现与设定冲突（例如设定男性却写成"女子"、设定古装却写成"西装"）必须改回
-4. 背景环境描述是否具体（不能只说"某个场景"，要描述光线、物体、氛围），且不得偏离"场景环境"中的设定
-5. 相邻格之间的动作和情节是否连贯合理
-6. 事件的因果关系是否合理（人物的动作要有动机和结果）
-7. visual_prompt 是否足够详细，能让AI直接生成准确的图片
-8. **长度预算**：grid_prompts 每一格不超过 {per_cell_budget if not skip_storyboard else 200} 个中文字，全部格子加起来不超过 2000 字。超长必须精简。
-9. 每格描述中不要含有风格词（如"{style}风格""水墨""赛博朋克风格"等），风格统一在生图时附加。发现保留了风格词的要删掉。
+1. 每格分镜是否都是关键叙事节点（情节转折、动作高潮、情绪变化、场景切换），不是无意义的过渡画面
+2. **是否以镜头语言主导**：景别+角度+动作是否清晰；不要写成"某某穿着XX站在XX"式的人物图鉴
+3. **是否过度描写人物外貌穿着**：除关键道具/服饰动作或服饰特写外，分镜里不应重复角色的发型、服饰、年龄、性别等已经在角色卡里固定过的细节。**发现重复角色描述要全部精简掉，只用人物名指代。**
+4. 站位是否明确（左/中/右/前景/背景），构图是否有想法
+5. 动作和情绪是否鲜活：动词要有力度，情绪要可视化（视线、表情、肢体）
+6. 环境是否突出氛围/光线/关键物，而不是堆砌环境清单
+7. 相邻格之间动作和情节是否连贯（同一动作的不同瞬间、机位切换、反应镜头）
+8. **长度预算**：grid_prompts 每一格不超过 {per_cell_budget if not skip_storyboard else 200} 个中文字，全部加起来不超过 2000 字。超长必须精简——优先砍掉重复的角色穿着外貌描述。
+9. 每格描述中不要含有风格词（如"{style}风格""水墨""赛博朋克风格"等），风格统一在生图时附加；发现保留风格词的要删掉。
 
 风格：{style}
-出场人物：{char_desc}
-场景环境：{scene_desc}
+角色设定（仅作背景知识，分镜里不要复述外貌穿着）：
+{char_desc}
+场景设定（分镜里只写氛围/光线/关键物）：
+{scene_desc}
 
 原始规划：
 {json.dumps(result, ensure_ascii=False, indent=2)}
 
-请输出修改后的完整JSON（格式与原始规划完全一致），如果某些部分已经很好则保持不变，只改进不足之处。"""
+请输出修改后的完整JSON（格式与原始规划完全一致）。**改进重点：去掉每一格中重复的人物外貌/穿着描述，强化镜头、动作、构图、情绪。**"""
         try:
             reviewed = await call_llm_json(config, "你是分镜审校师，只输出改进后的JSON。", review_prompt)
             if not skip_first_frame and reviewed.get("first_frame"):
@@ -668,8 +1169,28 @@ async def plan_frames(body: dict):
                 result["storyboard"] = reviewed["storyboard"]
             if not skip_last_frame and reviewed.get("last_frame"):
                 result["last_frame"] = reviewed["last_frame"]
+            if isinstance(reviewed.get("appearing_characters"), list):
+                result["appearing_characters"] = reviewed["appearing_characters"]
         except Exception as e:
             print(f"[workflow] 分镜审校失败，使用原始版本: {e}")
+
+    # 校正 appearing_characters：只保留在已知人物名单中的项，按原顺序去重
+    raw_appearing = result.get("appearing_characters") or []
+    if not isinstance(raw_appearing, list):
+        raw_appearing = []
+    name_set = {n: n for n in all_char_names}
+    appearing = []
+    seen = set()
+    for item in raw_appearing:
+        if not isinstance(item, str):
+            continue
+        nm = item.strip()
+        if not nm or nm in seen:
+            continue
+        if nm in name_set:
+            appearing.append(nm)
+            seen.add(nm)
+    result["appearing_characters"] = appearing
 
     if skip_first_frame:
         result["first_frame"] = {}
@@ -708,6 +1229,7 @@ async def plan_frames(body: dict):
         "first_frame": result.get("first_frame", {}),
         "storyboard": result.get("storyboard", {}),
         "last_frame": result.get("last_frame", {}),
+        "appearing_characters": result.get("appearing_characters", []),
         "grid": grid,
         "grid_label": grid_label
     }
@@ -725,15 +1247,28 @@ async def gen_main_characters(body: dict):
     wf_id = body.get("workflow_id", "")
     ref_image_urls = body.get("ref_image_urls", [])
     image_count = max(1, min(int(body.get("image_count", 1)), 4))
+    preset = _get_preset(CHARACTER_PRESETS, body.get("preset_id", "default"))
+    prompt_template = body.get("prompt_template") or preset["template"]
+    width = int(body.get("width") or preset["width"])
+    height = int(body.get("height") or preset["height"])
     node_refs = collect_ref_images(extra_urls=ref_image_urls)
     errors = []
-    async def gen_char_img(idx, char):
+
+    groups = compute_grid_groups(characters, threshold=4)
+
+    async def gen_single(idx, char):
         try:
+            if char.get("imageUrl"):
+                return
             desc = char.get("description") or char.get("visual_prompt") or ""
             item_refs = collect_ref_images(extra_urls=char.get("refImages", []))
             all_refs = item_refs + [r for r in node_refs if r not in item_refs]
-            prompt = f"{style}风格，2x2四视图网格，角色模型图，白色背景，直立姿势，正面/侧面/背面/四分之三角度，{desc}"
-            img_res = await generate_image(ImageGenerateRequest(config_id=img_config["id"], prompt=prompt, width=1152, height=2048, n=image_count, image_base64_list=all_refs))
+            ref_prefix = ""
+            if all_refs:
+                ref_labels = [(u, f"角色「{char.get('name', '')}」参考") for u in (char.get("refImages", []) + ref_image_urls) if u]
+                ref_prefix = build_ref_index_prefix(extra_labels=ref_labels)
+            prompt = f"{ref_prefix}{_apply_template(prompt_template, style=style, description=desc)}"
+            img_res = await generate_image(ImageGenerateRequest(config_id=img_config["id"], prompt=prompt, width=width, height=height, n=image_count, image_base64_list=all_refs))
             img_data = img_res.get("data", [])
             urls = []
             for item in img_data:
@@ -749,7 +1284,61 @@ async def gen_main_characters(body: dict):
         except Exception as e:
             print(f"[workflow] 人物图生成失败: {e}")
             errors.append({"index": idx, "name": char.get("name", ""), "message": str(e)})
-    await asyncio.gather(*[gen_char_img(i, c) for i, c in enumerate(characters)])
+
+    async def gen_grid_group(group_indices):
+        group_items = [characters[i] for i in group_indices]
+        try:
+            prompt = _build_grid_prompt(style, group_items, "character", prompt_template)
+            grid_size = len(group_indices)
+            g_width = max(width, 1024) if grid_size <= 2 else max(width, 1536)
+            g_height = max(height, 1024) if grid_size <= 2 else max(height, 1536)
+            group_prev_refs = collect_ref_images(extra_urls=[characters[i].get("prevImageUrl", "") for i in group_indices])
+            all_refs = group_prev_refs + [r for r in node_refs if r not in group_prev_refs]
+            print(f"\n{'='*60}")
+            print(f"[主角色宫格图生成请求]")
+            print(f"  prompt: {prompt}")
+            print(f"  grid_size: {grid_size}")
+            print(f"  尺寸: {g_width}x{g_height}")
+            print(f"  人物: {[characters[i].get('name','') for i in group_indices]}")
+            print(f"  组内参考图数量: {len(group_prev_refs)}, 总参考图: {len(all_refs)}")
+            print(f"  image_count: {image_count}")
+            print(f"{'='*60}\n")
+            img_res = await generate_image(ImageGenerateRequest(config_id=img_config["id"], prompt=prompt, width=g_width, height=g_height, n=image_count, image_base64_list=all_refs))
+            img_data = img_res.get("data", [])
+            urls = []
+            for item in img_data:
+                b64 = item.get("b64_json", "")
+                if b64:
+                    url = save_workflow_image(wf_id, b64 if b64.startswith("data:") else f"data:image/png;base64,{b64}", f"mc_grid_{grid_size}")
+                    urls.append(url)
+            if urls:
+                labels = GRID_POSITION_LABELS.get(grid_size, GRID_POSITION_LABELS[4][:grid_size])
+                group_names = [characters[i].get("name", "") for i in group_indices]
+                for pos, gi in enumerate(group_indices):
+                    characters[gi]["imageUrl"] = urls[0]
+                    characters[gi]["imageUrls"] = urls
+                    characters[gi]["gridInfo"] = {
+                        "isGrid": True,
+                        "gridSize": grid_size,
+                        "position": pos + 1,
+                        "positionLabel": labels[pos],
+                        "groupItems": group_names,
+                    }
+            else:
+                for gi in group_indices:
+                    errors.append({"index": gi, "name": characters[gi].get("name", ""), "message": "未返回图片"})
+        except Exception as e:
+            print(f"[workflow] 人物宫格图生成失败: {e}")
+            for gi in group_indices:
+                errors.append({"index": gi, "name": characters[gi].get("name", ""), "message": str(e)})
+
+    tasks = []
+    for group in groups:
+        if len(group) == 1:
+            tasks.append(gen_single(group[0], characters[group[0]]))
+        else:
+            tasks.append(gen_grid_group(group))
+    await asyncio.gather(*tasks)
     return JSONResponse({"code": 0, "data": {"characters": characters, "errors": errors}})
 
 
@@ -763,16 +1352,26 @@ async def gen_minor_characters(body: dict):
     wf_id = body.get("workflow_id", "")
     ref_image_urls = body.get("ref_image_urls", [])
     image_count = max(1, min(int(body.get("image_count", 1)), 4))
+    preset = _get_preset(CHARACTER_PRESETS, body.get("preset_id", "default"))
+    prompt_template = body.get("prompt_template") or preset["template"]
+    width = int(body.get("width") or preset["width"])
+    height = int(body.get("height") or preset["height"])
     node_refs = collect_ref_images(extra_urls=ref_image_urls)
     errors = []
     if characters:
-        async def gen_minor_img(idx, char):
+        groups = compute_grid_groups(characters, threshold=2)
+
+        async def gen_single(idx, char):
             try:
                 desc = char.get("description") or char.get("visual_prompt") or ""
                 item_refs = collect_ref_images(extra_urls=char.get("refImages", []))
                 all_refs = item_refs + [r for r in node_refs if r not in item_refs]
-                prompt = f"{style}风格，2x2四视图网格，角色模型图，白色背景，直立姿势，正面/侧面/背面/四分之三角度，{desc}"
-                img_res = await generate_image(ImageGenerateRequest(config_id=img_config["id"], prompt=prompt, width=1152, height=2048, n=image_count, image_base64_list=all_refs))
+                ref_prefix = ""
+                if all_refs:
+                    ref_labels = [(u, f"角色「{char.get('name', '')}」参考") for u in (char.get("refImages", []) + ref_image_urls) if u]
+                    ref_prefix = build_ref_index_prefix(extra_labels=ref_labels)
+                prompt = f"{ref_prefix}{_apply_template(prompt_template, style=style, description=desc)}"
+                img_res = await generate_image(ImageGenerateRequest(config_id=img_config["id"], prompt=prompt, width=width, height=height, n=image_count, image_base64_list=all_refs))
                 img_data = img_res.get("data", [])
                 urls = []
                 for item in img_data:
@@ -788,7 +1387,52 @@ async def gen_minor_characters(body: dict):
             except Exception as e:
                 print(f"[workflow] 次要人物图生成失败: {e}")
                 errors.append({"index": idx, "name": char.get("name", ""), "message": str(e)})
-        await asyncio.gather(*[gen_minor_img(i, c) for i, c in enumerate(characters)])
+
+        async def gen_grid_group(group_indices):
+            group_items = [characters[i] for i in group_indices]
+            try:
+                prompt = _build_grid_prompt(style, group_items, "character", prompt_template)
+                grid_size = len(group_indices)
+                g_width = max(width, 1024) if grid_size <= 2 else max(width, 1536)
+                g_height = max(height, 1024) if grid_size <= 2 else max(height, 1536)
+                group_prev_refs = collect_ref_images(extra_urls=[characters[i].get("prevImageUrl", "") for i in group_indices])
+                all_refs = group_prev_refs + [r for r in node_refs if r not in group_prev_refs]
+                img_res = await generate_image(ImageGenerateRequest(config_id=img_config["id"], prompt=prompt, width=g_width, height=g_height, n=image_count, image_base64_list=all_refs))
+                img_data = img_res.get("data", [])
+                urls = []
+                for item in img_data:
+                    b64 = item.get("b64_json", "")
+                    if b64:
+                        url = save_workflow_image(wf_id, b64 if b64.startswith("data:") else f"data:image/png;base64,{b64}", f"minor_grid_{grid_size}")
+                        urls.append(url)
+                if urls:
+                    labels = GRID_POSITION_LABELS.get(grid_size, GRID_POSITION_LABELS[4][:grid_size])
+                    group_names = [characters[i].get("name", "") for i in group_indices]
+                    for pos, gi in enumerate(group_indices):
+                        characters[gi]["imageUrl"] = urls[0]
+                        characters[gi]["imageUrls"] = urls
+                        characters[gi]["gridInfo"] = {
+                            "isGrid": True,
+                            "gridSize": grid_size,
+                            "position": pos + 1,
+                            "positionLabel": labels[pos],
+                            "groupItems": group_names,
+                        }
+                else:
+                    for gi in group_indices:
+                        errors.append({"index": gi, "name": characters[gi].get("name", ""), "message": "未返回图片"})
+            except Exception as e:
+                print(f"[workflow] 次要人物宫格图生成失败: {e}")
+                for gi in group_indices:
+                    errors.append({"index": gi, "name": characters[gi].get("name", ""), "message": str(e)})
+
+        tasks = []
+        for group in groups:
+            if len(group) == 1:
+                tasks.append(gen_single(group[0], characters[group[0]]))
+            else:
+                tasks.append(gen_grid_group(group))
+        await asyncio.gather(*tasks)
     return JSONResponse({"code": 0, "data": {"has_minor": len(characters) > 0, "characters": characters, "errors": errors}})
 
 
@@ -806,12 +1450,23 @@ async def gen_scene(body: dict):
     prev_ref_imgs = collect_ref_images(scenes=prev_scenes[:1])
     node_refs = collect_ref_images(extra_urls=ref_image_urls)
     errors = []
-    async def gen_scene_img(idx, sc):
+
+    groups = compute_grid_groups(scenes, threshold=4)
+
+    async def gen_single(idx, sc):
         try:
+            if sc.get("imageUrl"):
+                return
             desc = sc.get("description") or sc.get("visual_prompt") or ""
             item_refs = collect_ref_images(extra_urls=sc.get("refImages", []))
             all_refs = item_refs + [r for r in node_refs if r not in item_refs] + [r for r in prev_ref_imgs if r not in item_refs and r not in node_refs]
-            prompt = f"{style}风格，2x2四机位全景图网格，纯场景环境，无人物无人影，从四个不同角度拍摄同一场景，{desc}"
+            ref_prefix = ""
+            if all_refs:
+                ref_labels = [(u, f"场景「{sc.get('name', '')}」参考") for u in (sc.get("refImages", []) + ref_image_urls) if u]
+                if prev_scenes[:1]:
+                    ref_labels += [(prev_scenes[0].get("imageUrl", ""), "前段场景参考")]
+                ref_prefix = build_ref_index_prefix(extra_labels=ref_labels)
+            prompt = f"{ref_prefix}{style}风格，2x2四机位全景图网格，纯场景环境，无人物无人影，从四个不同角度拍摄同一场景，{desc}"
             img_res = await generate_image(ImageGenerateRequest(config_id=img_config["id"], prompt=prompt, width=2048, height=1536, n=image_count, image_base64_list=all_refs))
             img_data = img_res.get("data", [])
             urls = []
@@ -828,7 +1483,50 @@ async def gen_scene(body: dict):
         except Exception as e:
             print(f"[workflow] 场景图生成失败: {e}")
             errors.append({"index": idx, "name": sc.get("name", ""), "message": str(e)})
-    await asyncio.gather(*[gen_scene_img(i, s) for i, s in enumerate(scenes)])
+
+    async def gen_grid_group(group_indices):
+        group_items = [scenes[i] for i in group_indices]
+        try:
+            prompt = _build_grid_prompt(style, group_items, "scene")
+            grid_size = len(group_indices)
+            group_prev_refs = collect_ref_images(extra_urls=[scenes[i].get("prevImageUrl", "") for i in group_indices])
+            all_refs = group_prev_refs + [r for r in (node_refs + prev_ref_imgs) if r not in group_prev_refs]
+            img_res = await generate_image(ImageGenerateRequest(config_id=img_config["id"], prompt=prompt, width=2048, height=1536, n=image_count, image_base64_list=all_refs))
+            img_data = img_res.get("data", [])
+            urls = []
+            for item in img_data:
+                b64 = item.get("b64_json", "")
+                if b64:
+                    url = save_workflow_image(wf_id, b64 if b64.startswith("data:") else f"data:image/png;base64,{b64}", f"scene_grid_{grid_size}")
+                    urls.append(url)
+            if urls:
+                labels = GRID_POSITION_LABELS.get(grid_size, GRID_POSITION_LABELS[4][:grid_size])
+                group_names = [scenes[i].get("name", "") for i in group_indices]
+                for pos, gi in enumerate(group_indices):
+                    scenes[gi]["imageUrl"] = urls[0]
+                    scenes[gi]["imageUrls"] = urls
+                    scenes[gi]["gridInfo"] = {
+                        "isGrid": True,
+                        "gridSize": grid_size,
+                        "position": pos + 1,
+                        "positionLabel": labels[pos],
+                        "groupItems": group_names,
+                    }
+            else:
+                for gi in group_indices:
+                    errors.append({"index": gi, "name": scenes[gi].get("name", ""), "message": "未返回图片"})
+        except Exception as e:
+            print(f"[workflow] 场景宫格图生成失败: {e}")
+            for gi in group_indices:
+                errors.append({"index": gi, "name": scenes[gi].get("name", ""), "message": str(e)})
+
+    tasks = []
+    for group in groups:
+        if len(group) == 1:
+            tasks.append(gen_single(group[0], scenes[group[0]]))
+        else:
+            tasks.append(gen_grid_group(group))
+    await asyncio.gather(*tasks)
     return JSONResponse({"code": 0, "data": {"scene_count": len(scenes), "scenes": scenes, "errors": errors}})
 
 
@@ -851,7 +1549,15 @@ async def gen_storyboard(body: dict):
     # 清洗 storyboard_prompt 里可能残留的风格前缀，避免"{style}风格...第X格：{style}风格..."重复
     # 注意：分镜图端要保留"第N格"编号（前端就是按这种格式拼的）
     cleaned_sb_prompt = _strip_style_prefix(storyboard_prompt or "", style) if storyboard_prompt else ""
-    prompt = f"{grid_label}宫格分镜图，电影分镜，每格一个镜头，{cleaned_sb_prompt}，清晰的格线分隔，每格内容不同，保持人物和场景一致性"
+
+    extra_labels = []
+    if first_frame_url:
+        extra_labels.append((first_frame_url, "首帧画面"))
+    ref_block = build_ref_index_prefix(characters=characters, scenes=scenes, extra_labels=extra_labels)
+    if ref_block:
+        ref_block = "\n" + ref_block.rstrip("\n")
+
+    prompt = f"{grid_label}宫格分镜图，电影分镜，每格一个镜头，{cleaned_sb_prompt}，清晰的格线分隔，每格内容不同{ref_block}"
     if style and style.strip():
         prompt += f"\n整体画面风格：{style.strip()}"
     ref_imgs = collect_ref_images(characters=characters, scenes=scenes, extra_urls=([first_frame_url] if first_frame_url else []) + ref_image_urls)
@@ -875,6 +1581,20 @@ async def gen_storyboard(body: dict):
             pass
     if not resolutions:
         resolutions = [(2160, 3840), (1080, 1920)]
+
+    print(f"\n{'='*60}")
+    print(f"[分镜图生成请求]")
+    print(f"  prompt: {prompt[:500]}...")
+    print(f"  ref_imgs 数量: {len(ref_imgs)}")
+    for i, ri in enumerate(ref_imgs):
+        print(f"    参考图{i+1}: {ri[:80]}... (长度={len(ri)})")
+    print(f"  grid: {grid} ({grid_label})")
+    print(f"  resolutions: {resolutions}")
+    print(f"  image_count: {image_count}")
+    print(f"  first_frame_url: {first_frame_url}")
+    print(f"  characters 数量: {len(characters)}, names: {[c.get('name','') for c in characters]}")
+    print(f"  scenes 数量: {len(scenes)}, names: {[s.get('name','') for s in scenes]}")
+    print(f"{'='*60}\n")
 
     images = []
     for w, h in resolutions:
@@ -910,7 +1630,8 @@ async def gen_first_frame(body: dict):
     image_urls = []
     try:
         ref_imgs = collect_ref_images(characters=characters + minor_characters, scenes=scenes, extra_urls=ref_image_urls)
-        prompt = f"{style}风格，电影首帧画面，{visual_prompt or description}"
+        ref_prefix = build_ref_index_prefix(characters=characters + minor_characters, scenes=scenes)
+        prompt = f"{ref_prefix}{style}风格，电影首帧画面，{visual_prompt or description}"
         img_res = await generate_image(ImageGenerateRequest(config_id=img_config["id"], prompt=prompt, width=2048, height=1152, n=image_count, image_base64_list=ref_imgs))
         img_data = img_res.get("data", [])
         for item in img_data:
@@ -944,7 +1665,8 @@ async def gen_last_frame(body: dict):
     image_urls = []
     try:
         ref_imgs = collect_ref_images(characters=characters + minor_characters, scenes=scenes, extra_urls=storyboard_urls + ref_image_urls)
-        prompt = f"{style}风格，电影尾帧画面，{visual_prompt or description}"
+        ref_prefix = build_ref_index_prefix(characters=characters + minor_characters, scenes=scenes, extra_labels=[(u, "分镜图") for u in storyboard_urls])
+        prompt = f"{ref_prefix}{style}风格，电影尾帧画面，{visual_prompt or description}"
         img_res = await generate_image(ImageGenerateRequest(config_id=img_config["id"], prompt=prompt, width=2048, height=1152, n=image_count, image_base64_list=ref_imgs))
         img_data = img_res.get("data", [])
         for item in img_data:
@@ -1016,24 +1738,62 @@ async def gen_video_prompt(body: dict):
 
         context_summary += f"\n\n当前正在生成第{seg_idx+1}段的视频提示词。请确保本段的开场能自然衔接前段的结尾，整体保持视觉连贯性。\n"
 
-    # 构建 @图片引用列表
+    # 构建 @图片引用列表（宫格图只引用一次，标注包含的内容）
     img_ref_lines = []
     img_idx = 1
     char_ref_map = {}
+    seen_grid_urls = {}  # imageUrl -> img_idx，避免宫格图重复引用
     for c in chars:
         if c.get("imageUrl"):
-            char_ref_map[c.get("name", "")] = f"@图片{img_idx}"
-            img_ref_lines.append(f"@图片{img_idx} 是主要人物·{c.get('name', '')}")
-            img_idx += 1
+            grid_info = c.get("gridInfo")
+            if grid_info and grid_info.get("isGrid"):
+                url = c["imageUrl"]
+                if url not in seen_grid_urls:
+                    seen_grid_urls[url] = img_idx
+                    names = grid_info.get("groupItems", [])
+                    pos_labels = GRID_POSITION_LABELS.get(grid_info.get("gridSize", 4), GRID_POSITION_LABELS[4])
+                    labels_desc = "、".join(f"{pos_labels[i] if i < len(pos_labels) else ''}={n}" for i, n in enumerate(names))
+                    img_ref_lines.append(f"@图片{img_idx} 是主要人物宫格图（{grid_info.get('gridSize', 4)}宫格：{labels_desc}）")
+                    img_idx += 1
+                for n in grid_info.get("groupItems", []):
+                    char_ref_map[n] = f"@图片{seen_grid_urls[url]}"
+            else:
+                char_ref_map[c.get("name", "")] = f"@图片{img_idx}"
+                img_ref_lines.append(f"@图片{img_idx} 是主要人物·{c.get('name', '')}")
+                img_idx += 1
     for c in minor_chars:
         if c.get("imageUrl"):
-            char_ref_map[c.get("name", "")] = f"@图片{img_idx}"
-            img_ref_lines.append(f"@图片{img_idx} 是次要人物·{c.get('name', '')}")
-            img_idx += 1
+            grid_info = c.get("gridInfo")
+            if grid_info and grid_info.get("isGrid"):
+                url = c["imageUrl"]
+                if url not in seen_grid_urls:
+                    seen_grid_urls[url] = img_idx
+                    names = grid_info.get("groupItems", [])
+                    pos_labels = GRID_POSITION_LABELS.get(grid_info.get("gridSize", 4), GRID_POSITION_LABELS[4])
+                    labels_desc = "、".join(f"{pos_labels[i] if i < len(pos_labels) else ''}={n}" for i, n in enumerate(names))
+                    img_ref_lines.append(f"@图片{img_idx} 是次要人物宫格图（{grid_info.get('gridSize', 4)}宫格：{labels_desc}）")
+                    img_idx += 1
+                for n in grid_info.get("groupItems", []):
+                    char_ref_map[n] = f"@图片{seen_grid_urls[url]}"
+            else:
+                char_ref_map[c.get("name", "")] = f"@图片{img_idx}"
+                img_ref_lines.append(f"@图片{img_idx} 是次要人物·{c.get('name', '')}")
+                img_idx += 1
     for sc in scenes:
         if sc.get("imageUrl"):
-            img_ref_lines.append(f"@图片{img_idx} 是场景·{sc.get('name', '')}")
-            img_idx += 1
+            grid_info = sc.get("gridInfo")
+            if grid_info and grid_info.get("isGrid"):
+                url = sc["imageUrl"]
+                if url not in seen_grid_urls:
+                    seen_grid_urls[url] = img_idx
+                    names = grid_info.get("groupItems", [])
+                    pos_labels = GRID_POSITION_LABELS.get(grid_info.get("gridSize", 4), GRID_POSITION_LABELS[4])
+                    labels_desc = "、".join(f"{pos_labels[i] if i < len(pos_labels) else ''}={n}" for i, n in enumerate(names))
+                    img_ref_lines.append(f"@图片{img_idx} 是场景宫格图（{grid_info.get('gridSize', 4)}宫格：{labels_desc}）")
+                    img_idx += 1
+            else:
+                img_ref_lines.append(f"@图片{img_idx} 是场景·{sc.get('name', '')}")
+                img_idx += 1
     first_frame_ref = ""
     if has_first:
         first_frame_ref = f"@图片{img_idx}"
@@ -1135,20 +1895,57 @@ async def gen_video_prompt(body: dict):
 
     user_prompt = f"段落剧本：{segment_text}"
 
-    # 收集所有参考图发给多模态LLM
+    # 收集所有参考图发给多模态LLM（宫格图去重）
     vision_images = []
+    seen_urls = set()
     if has_first:
         b = load_ref_image_b64(first_frame.get("imageUrl", ""))
         if b: vision_images.append({"b64": b, "label": "首帧画面"})
     for c in chars:
-        b = load_ref_image_b64(c.get("imageUrl", ""))
-        if b: vision_images.append({"b64": b, "label": f"主要人物·{c.get('name','')}"})
+        url = c.get("imageUrl", "")
+        if not url or url in seen_urls:
+            continue
+        seen_urls.add(url)
+        b = load_ref_image_b64(url)
+        if not b:
+            continue
+        grid_info = c.get("gridInfo")
+        if grid_info and grid_info.get("isGrid"):
+            names = grid_info.get("groupItems", [])
+            label = f"主要人物宫格图（{grid_info['gridSize']}宫格：{'、'.join(names)}）"
+        else:
+            label = f"主要人物·{c.get('name','')}"
+        vision_images.append({"b64": b, "label": label})
     for c in minor_chars:
-        b = load_ref_image_b64(c.get("imageUrl", ""))
-        if b: vision_images.append({"b64": b, "label": f"次要人物·{c.get('name','')}"})
+        url = c.get("imageUrl", "")
+        if not url or url in seen_urls:
+            continue
+        seen_urls.add(url)
+        b = load_ref_image_b64(url)
+        if not b:
+            continue
+        grid_info = c.get("gridInfo")
+        if grid_info and grid_info.get("isGrid"):
+            names = grid_info.get("groupItems", [])
+            label = f"次要人物宫格图（{grid_info['gridSize']}宫格：{'、'.join(names)}）"
+        else:
+            label = f"次要人物·{c.get('name','')}"
+        vision_images.append({"b64": b, "label": label})
     for sc in scenes:
-        b = load_ref_image_b64(sc.get("imageUrl", ""))
-        if b: vision_images.append({"b64": b, "label": f"场景·{sc.get('name','')}"})
+        url = sc.get("imageUrl", "")
+        if not url or url in seen_urls:
+            continue
+        seen_urls.add(url)
+        b = load_ref_image_b64(url)
+        if not b:
+            continue
+        grid_info = sc.get("gridInfo")
+        if grid_info and grid_info.get("isGrid"):
+            names = grid_info.get("groupItems", [])
+            label = f"场景宫格图（{grid_info['gridSize']}宫格：{'、'.join(names)}）"
+        else:
+            label = f"场景·{sc.get('name','')}"
+        vision_images.append({"b64": b, "label": label})
     for sb_url in storyboard_images:
         b = load_ref_image_b64(sb_url)
         if b: vision_images.append({"b64": b, "label": "分镜图"})
@@ -1301,8 +2098,107 @@ async def gen_storyboard_iterate(body: dict):
     return JSONResponse({"code": 0, "data": result})
 
 
+async def _gen_story_template_text(body: dict, preset: dict) -> JSONResponse:
+    """故事模板的文本预设：直接调聊天模型输出 Markdown 分镜表，不生图、不传参考图。"""
+    chat_config = get_config_by_id(body.get("chat_config_id", "")) or get_first_config("chat")
+    if not chat_config:
+        raise HTTPException(status_code=400, detail="未找到聊天配置")
+
+    segment_text = body.get("segment_text", "")
+    seg_idx = body.get("segment_index", 0)
+    total = body.get("total_segments", 1)
+    duration = body.get("duration", 15)
+    characters = body.get("characters", []) or []
+    minor_characters = body.get("minor_characters", []) or []
+    scenes = body.get("scenes", []) or []
+    style = body.get("style", "")
+    prev_last_frame_desc = (body.get("prev_last_frame_desc", "") or "").strip()
+    next_first_frame_desc = (body.get("next_first_frame_desc", "") or "").strip()
+    extra_hint = (body.get("extra_hint", "") or "").strip()
+
+    system_prompt = body.get("prompt_template") or preset.get("system_prompt", "")
+
+    char_lines = []
+    for c in characters + minor_characters:
+        nm = (c.get("name") or "").strip()
+        if not nm:
+            continue
+        desc = (c.get("description") or c.get("visual_prompt") or "").strip()
+        if len(desc) > 120:
+            desc = desc[:120] + "…"
+        char_lines.append(f"- {nm}：{desc}" if desc else f"- {nm}")
+    char_block = "\n".join(char_lines) if char_lines else "（无指定角色）"
+
+    scene_lines = []
+    for s in scenes:
+        nm = (s.get("name") or "").strip()
+        if not nm:
+            continue
+        desc = (s.get("description") or "").strip()
+        if len(desc) > 120:
+            desc = desc[:120] + "…"
+        scene_lines.append(f"- {nm}：{desc}" if desc else f"- {nm}")
+    scene_block = "\n".join(scene_lines) if scene_lines else "（无指定场景）"
+
+    parts = [
+        f"【本段剧本 - 第{seg_idx + 1}段 / 共{total}段，时长{duration}秒】",
+        segment_text or "（剧本为空）",
+        "",
+        "【本段出场角色】",
+        char_block,
+        "",
+        "【本段场景】",
+        scene_block,
+    ]
+    if style:
+        parts.append("")
+        parts.append(f"【风格】{style}")
+    if prev_last_frame_desc or next_first_frame_desc:
+        parts.append("")
+        parts.append("【上下文（仅供理解，不要为前后段写镜头）】")
+        if prev_last_frame_desc:
+            parts.append(f"前段结尾：{prev_last_frame_desc[:120]}")
+        if next_first_frame_desc:
+            parts.append(f"后段开头：{next_first_frame_desc[:120]}")
+    if extra_hint:
+        parts.append("")
+        parts.append(f"【用户补充要求】{extra_hint}")
+    script_block = "\n".join(parts)
+
+    full_system = (
+        system_prompt
+        + "\n\n严格约束：只为\"本段剧本\"生成分镜表，不要为上下文/前段/后段生成镜头。"
+        + "\n只输出JSON：{\"markdown\": \"<完整Markdown分镜表，含表头与数据行>\"}"
+    )
+
+    user_text = system_prompt_user_replacement(preset.get("user_template", ""), script_block)
+
+    result = await call_llm_json(chat_config, full_system, user_text, max_tokens=20000)
+    md = (result.get("markdown") or result.get("full_text") or "").strip()
+    if not md:
+        raise HTTPException(status_code=500, detail="模型未返回 markdown 内容")
+
+    return JSONResponse({"code": 0, "data": {
+        "kind": "text",
+        "markdown": md,
+        "prompt": system_prompt,
+        "preset_id": preset["id"],
+    }})
+
+
+def system_prompt_user_replacement(user_template: str, script_block: str) -> str:
+    tpl = user_template or "[在此处粘贴你的剧本]"
+    if "[在此处粘贴你的剧本]" in tpl:
+        return tpl.replace("[在此处粘贴你的剧本]", script_block)
+    return tpl + "\n\n" + script_block
+
+
 @router.post("/generate/story-template")
 async def gen_story_template(body: dict):
+    preset = _get_preset(STORY_TEMPLATE_PRESETS, body.get("preset_id", "boardImage"))
+    if preset.get("kind") == "text":
+        return await _gen_story_template_text(body, preset)
+
     img_config = get_config_by_id(body.get("image_config_id", "")) or get_first_config("image")
     if not img_config:
         raise HTTPException(status_code=400, detail="未找到图片配置")
@@ -1392,7 +2288,10 @@ async def gen_story_template(body: dict):
     if extra_hint:
         prompt = prompt + f"\n【审核反馈（需在本次生成中解决）】：{extra_hint}"
 
-    ref_imgs = collect_ref_images(characters=characters, scenes=scenes, extra_urls=storyboard_images)
+    ref_imgs = collect_ref_images(characters=characters, scenes=scenes)
+    ref_prefix = build_ref_index_prefix(characters=characters, scenes=scenes)
+    if ref_prefix:
+        prompt = ref_prefix + prompt
 
     for w, h in resolutions:
         try:
@@ -1413,7 +2312,7 @@ async def gen_story_template(body: dict):
                     )
                     image_urls.append(url)
             if image_urls:
-                return JSONResponse({"code": 0, "data": {"imageUrl": image_urls[0], "imageUrls": image_urls, "prompt": prompt}})
+                return JSONResponse({"code": 0, "data": {"kind": "image", "imageUrl": image_urls[0], "imageUrls": image_urls, "prompt": prompt}})
         except Exception as e:
             print(f"[workflow] 故事模板 {w}x{h} 生成失败，尝试降级: {e}")
 
@@ -1542,11 +2441,22 @@ async def review_scene_image(body: dict):
 
     vision_images = []
     scene_descs = []
+    seen_urls = set()
     for i, sc in enumerate(scenes):
         scene_descs.append(f"场景{i+1} {sc.get('name','')}: {sc.get('description','')}")
-        b = load_ref_image_b64(sc.get("imageUrl", ""))
+        url = sc.get("imageUrl", "")
+        if not url or url in seen_urls:
+            continue
+        seen_urls.add(url)
+        b = load_ref_image_b64(url)
         if b:
-            vision_images.append({"b64": b, "label": f"场景{i+1}·{sc.get('name','')}"})
+            gi = sc.get("gridInfo") or {}
+            if gi.get("isGrid"):
+                names = gi.get("groupItems", [])
+                label = f"场景宫格图（{gi.get('gridSize')}宫格：{'、'.join(names)}）"
+            else:
+                label = f"场景{i+1}·{sc.get('name','')}"
+            vision_images.append({"b64": b, "label": label})
 
     system_prompt = f"""你是一位资深影视美术指导。请审核以下场景图片是否与剧情和描述匹配。
 风格：{style}

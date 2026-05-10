@@ -1,5 +1,6 @@
 import os
 import sys
+import logging
 from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -11,6 +12,19 @@ from backend.api.canvas_router import router as canvas_router, canvas_assets_app
 from backend.api.workflow_router import router as workflow_router
 from backend.core.workflow_storage import WORKFLOW_ROOT
 from backend.core.lifecycle import lifecycle_manager
+
+
+# 过滤 uvicorn access 日志中的心跳请求，避免刷屏
+class _HeartbeatAccessFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        try:
+            msg = record.getMessage()
+        except Exception:
+            return True
+        return "/api/heartbeat" not in msg
+
+
+logging.getLogger("uvicorn.access").addFilter(_HeartbeatAccessFilter())
 
 # 服务配置
 SERVER_HOST = "0.0.0.0"
@@ -44,6 +58,12 @@ async def lifecycle_middleware(request: Request, call_next):
     response = await call_next(request)
     return response
 
+
+@app.on_event("startup")
+async def _start_lifecycle_watcher():
+    lifecycle_manager.start_watcher()
+
+
 app.include_router(config_router)
 app.include_router(chat_router)
 app.include_router(image_router)
@@ -65,3 +85,12 @@ async def heartbeat():
     import time
     lifecycle_manager.record_activity()
     return {"status": "ok", "timestamp": int(time.time() * 1000)}
+
+
+@app.post("/api/heartbeat/bye")
+async def heartbeat_bye():
+    """前端关闭时主动通知，立刻把最后活动时间往前推，触发 idle 超时。"""
+    import time
+    # 把 last_activity 推到过去，让 watcher 下一轮就判定闲置
+    lifecycle_manager.last_activity = time.time() - lifecycle_manager.idle_timeout - 1
+    return {"status": "ok"}

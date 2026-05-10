@@ -20,6 +20,7 @@ dist/
 # Runtime/generated data
 canvas_data/
 model_configs.json
+api_format_cache.json
 
 # OS files
 .DS_Store
