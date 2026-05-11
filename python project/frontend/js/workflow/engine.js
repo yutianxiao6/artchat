@@ -140,7 +140,7 @@
     };
     var self = this;
     tplPipeline.forEach(function (step) {
-      if (step.nodeType === "input" || step.nodeType === "fpInput") return;
+      if (step.nodeType === "input" || step.nodeType === "fpInput" || step.nodeType === "rcInput") return;
       if (step.category === "global") {
         wf[step.nodeType + "Count"] = 1;
         wf[step.nodeType + "s"] = [NR.createNodeData()];

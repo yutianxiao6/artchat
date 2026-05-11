@@ -10,6 +10,7 @@ from backend.api.chat_router import router as chat_router, CHAT_IMAGES_DIR
 from backend.api.image_router import router as image_router
 from backend.api.canvas_router import router as canvas_router, canvas_assets_app
 from backend.api.workflow_router import router as workflow_router
+from backend.api.recreate_router import router as recreate_router
 from backend.core.workflow_storage import WORKFLOW_ROOT
 from backend.core.lifecycle import lifecycle_manager
 
@@ -69,6 +70,7 @@ app.include_router(chat_router)
 app.include_router(image_router)
 app.include_router(canvas_router)
 app.include_router(workflow_router)
+app.include_router(recreate_router)
 
 app.mount("/static", StaticFiles(directory=FRONTEND_DIR), name="static")
 app.mount("/canvas-assets", canvas_assets_app, name="canvas-assets")

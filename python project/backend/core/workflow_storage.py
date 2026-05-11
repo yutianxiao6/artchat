@@ -96,7 +96,15 @@ def save_workflow_image(workflow_id: str, image_data: str, prefix: str = "img") 
         raw = parts[1] if len(parts) > 1 else ""
     else:
         raw = image_data
-    img_bytes = base64.b64decode(raw)
+    # 容错：去除空白字符并补齐 padding（防止 JSON 传输导致的字符丢失）
+    raw = "".join(raw.split())
+    missing = len(raw) % 4
+    if missing:
+        raw += "=" * (4 - missing)
+    # 防御：图片接口不应接收超大数据（>20MB 的 base64 通常是视频等误发）
+    if len(raw) > 20 * 1024 * 1024:
+        raise ValueError(f"图片数据过大（{len(raw)} 字符），不应通过图片接口上传。视频请使用 /api/recreate/upload-video 接口。")
+    img_bytes = base64.b64decode(raw, validate=False)
     content_hash = hashlib.md5(img_bytes).hexdigest()[:12]
     for existing in os.listdir(img_dir):
         existing_path = os.path.join(img_dir, existing)

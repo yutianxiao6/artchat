@@ -26,7 +26,8 @@
   function renderMiniPipeline(engine) {
     var wf = engine.current();
     var steps = engine.pipeline.filter(function (s) {
-      return s.nodeType !== "input" && s.nodeType !== "fpInput" && s.nodeType !== "output";
+      return s.nodeType !== "input" && s.nodeType !== "fpInput" && s.nodeType !== "output"
+        && s.nodeType !== "rcInput" && s.nodeType !== "rcOutput";
     });
     var segments = wf ? (wf.segments || []) : [];
     var hasSegs = segments.length > 0;
@@ -175,11 +176,97 @@
     return html;
   }
 
+  /* ── Generic Pipeline Content (for non-video templates) ──
+   * 完全按 engine.pipeline 动态生成列，不依赖硬编码字段名。
+   * 每个 global 节点一个列，segments 区域每个 segment 节点一列。
+   */
+  function renderGenericPipelineContent(engine, wf) {
+    var globalSteps = engine.pipeline.filter(function (s) { return s.category === "global"; });
+    var segSteps = engine.pipeline.filter(function (s) { return s.category === "segment"; });
+    var segments = wf.segments || [];
+    var html = '<div class="wf-content-area">';
+    html += '<div class="wf-content-inner" id="wf-content-inner" style="transform:translate(' + engine.panX + 'px,' + engine.panY + 'px) scale(' + engine.zoom + ');transform-origin:0 0;">';
+    html += '<div class="wf-content-grid">';
+
+    // 全局节点列
+    html += '<div class="wf-global-cols">';
+    globalSteps.forEach(function (step) {
+      var def = NR.get(step.nodeType);
+      if (!def) return;
+      if (wf[step.nodeType + "Skip"]) return;
+      var isInputLike = (step.nodeType === "input" || step.nodeType === "fpInput" || step.nodeType === "rcInput");
+      html += '<div class="wf-gcol" data-col="' + step.nodeType + '">'
+        + '<div class="wf-col-header">' + def.label + '</div>'
+        + '<div class="wf-col-body">';
+      if (isInputLike) {
+        // 输入节点：直接读 wf.input，不走 node 版本机制
+        var inp = wf.input || {};
+        var hasContent = inp.plot || inp.videoUrl;
+        if (hasContent) {
+          html += '<div class="wf-content-card" data-node-key="' + step.nodeType + '_0">';
+          if (inp.plot) html += '<div class="wf-card-text">' + esc(inp.plot).slice(0, 200) + '</div>';
+          if (inp.style) html += '<div class="wf-card-tag">风格: ' + esc(inp.style) + '</div>';
+          if (inp.direction) html += '<div class="wf-card-tag">二创: ' + esc(inp.direction).slice(0, 30) + '</div>';
+          if (inp.videoFilename) html += '<div class="wf-card-tag">视频: ' + esc(inp.videoFilename) + '</div>';
+          html += '</div>';
+        } else {
+          html += '<div class="wf-content-empty">点击上方节点填写</div>';
+        }
+      } else {
+        var arr = wf[step.nodeType + "s"] || [];
+        html += renderContentCard(engine, step.nodeType, arr[0], 0, null);
+      }
+      html += '</div></div>';
+    });
+    html += '</div>';
+
+    // 段落节点矩阵
+    if (segments.length && segSteps.length) {
+      var visibleSegSteps = segSteps.filter(function (s) { return !wf[s.nodeType + "Skip"]; });
+      html += '<div class="wf-seg-area">';
+      // Header row
+      html += '<div class="wf-seg-header-row">';
+      html += '<div class="wf-seg-label-col-header">段落</div>';
+      visibleSegSteps.forEach(function (col) {
+        var def = NR.get(col.nodeType);
+        html += '<div class="wf-seg-col-header">' + (def ? def.label : col.nodeType) + '</div>';
+      });
+      html += '</div>';
+      // Segment rows
+      segments.forEach(function (seg, segIdx) {
+        var segRunning = engine.isSegmentRunning(segIdx);
+        var segRunBtn = segRunning
+          ? '<button class="wf-seg-run-btn stop" data-seg-stop="' + segIdx + '" title="停止"><i class="fa fa-stop"></i></button>'
+          : '<button class="wf-seg-run-btn play" data-seg-run="' + segIdx + '" title="执行本段"><i class="fa fa-play"></i></button>';
+        html += '<div class="wf-seg-row">';
+        html += '<div class="wf-seg-label-cell"><div class="wf-seg-num">第' + (segIdx + 1) + '段</div>'
+          + segRunBtn
+          + '<div class="wf-seg-script-preview">' + esc((seg.text || seg.scriptText || "").slice(0, 40)) + '</div></div>';
+        visibleSegSteps.forEach(function (col) {
+          html += '<div class="wf-seg-cell">';
+          var sArr = seg[col.nodeType + "s"] || [];
+          html += renderContentCard(engine, col.nodeType, sArr[0], 0, segIdx);
+          html += '</div>';
+        });
+        html += '</div>';
+      });
+      html += '</div>';
+    }
+
+    html += '</div></div></div>';
+    return html;
+  }
+
   /* ── Content Area ── */
   function renderContentArea(engine) {
     var wf = engine.current();
     if (!wf) return '<div class="wf-content-area"></div>';
     var segSteps = engine.getSegmentSteps();
+
+    // 非 video 模板走通用 pipeline 渲染
+    if (wf.templateId && wf.templateId !== "video-short-drama") {
+      return renderGenericPipelineContent(engine, wf);
+    }
 
     if (!segSteps.length) {
       return renderGlobalOnlyContent(engine, wf);
@@ -508,6 +595,30 @@
         html += '<div class="wf-card-text">已生成</div>';
       }
       if (isRunning) html += '<div class="wf-card-loading"><i class="fa fa-spinner fa-spin"></i> 生成中...</div>';
+    } else if (nodeType.indexOf("rc") === 0) {
+      // 二创工作流节点：用节点定义的 getPreview + 通用图片预览
+      var def = NR.get(nodeType);
+      var preview = def && def.getPreview ? def.getPreview(nd) : "";
+      if (preview) html += '<div class="wf-card-text">' + esc(preview).slice(0, 200) + '</div>';
+      if (v.imageUrl) html += '<img class="wf-card-img wf-preview-img" src="' + esc(v.imageUrl) + '" data-preview="' + esc(v.imageUrl) + '">';
+      // 多张缩略图（如关键帧列表、人物/场景列表）
+      if (v.frames && v.frames.length) {
+        html += '<div class="wf-ref-images" style="flex-wrap:wrap;gap:3px;">';
+        v.frames.slice(0, 8).forEach(function (f) {
+          if (f.url) html += '<img src="' + esc(f.url) + '" style="width:40px;height:28px;object-fit:cover;border-radius:3px;" data-preview="' + esc(f.url) + '">';
+        });
+        if (v.frames.length > 8) html += '<span style="font-size:10px;color:#94a3b8;align-self:center;">+' + (v.frames.length - 8) + '</span>';
+        html += '</div>';
+      }
+      var itemList = v.characters || v.scenes;
+      if (itemList && itemList.length) {
+        html += '<div class="wf-ref-images" style="flex-wrap:wrap;gap:3px;">';
+        itemList.slice(0, 6).forEach(function (it) {
+          if (it.imageUrl) html += '<img src="' + esc(it.imageUrl) + '" style="width:40px;height:40px;object-fit:cover;border-radius:3px;" data-preview="' + esc(it.imageUrl) + '">';
+        });
+        html += '</div>';
+      }
+      if (isRunning) html += '<div class="wf-card-loading"><i class="fa fa-spinner fa-spin"></i> 生成中...</div>';
     }
 
     if (nd && nd.status === "error") {
@@ -541,7 +652,7 @@
       + (branchIdx > 0 ? ' #' + (branchIdx + 1) : '')
       + '</div>';
 
-    if (isPipelineNode && nodeType !== "input" && nodeType !== "fpInput") {
+    if (isPipelineNode && nodeType !== "input" && nodeType !== "fpInput" && nodeType !== "rcInput" && nodeType !== "rcOutput" && nodeType !== "rcKeyframes") {
       html += renderModelSelect(engine, nodeType);
       if (nodeType !== "planCharactersScenes" && nodeType !== "planFrames") {
         html += renderSkipToggle(engine, key);
@@ -607,10 +718,29 @@
     var gc = window._getGlobalNodeConfigs ? window._getGlobalNodeConfigs() : {};
     var cfg = gc[nodeType] || {};
     var list = (window.GLOBAL && window.GLOBAL.configList) || [];
-    var needsChat = ["script", "planCharactersScenes", "planFrames", "videoPrompt", "framePrompt"].indexOf(nodeType) >= 0;
-    var needsImage = ["mainCharacters", "minorCharacters", "scene", "firstFrame", "storyboard", "lastFrame", "storyTemplate"].indexOf(nodeType) >= 0;
+    // video 模板节点 + 二创纯文本节点 都用聊天模型
+    var needsChat = [
+      "script", "planCharactersScenes", "planFrames", "videoPrompt", "framePrompt",
+      "rcPlotAlign", "rcPlotRewrite", "rcStoryboard"
+    ].indexOf(nodeType) >= 0;
+    var needsImage = [
+      "mainCharacters", "minorCharacters", "scene", "firstFrame", "storyboard", "lastFrame", "storyTemplate",
+      "rcCharacters", "rcScenes", "rcImageGen"
+    ].indexOf(nodeType) >= 0;
+    // 视觉模型（帧分析、分镜提示词——后者可选加参考帧）
+    var needsVision = ["rcFrameAnalysis"].indexOf(nodeType) >= 0;
     var dirty = false;
     var html = '';
+    if (needsVision) {
+      var visionConfigs = list.filter(function (c) { return c.config_type === "chat" || c.config_type === "both"; });
+      if (!cfg.visionConfigId && visionConfigs.length) { cfg.visionConfigId = visionConfigs[0].id; dirty = true; }
+      html += '<div class="wf-detail-section"><div class="wf-detail-label">视觉模型（需支持图片输入：GPT-4o / Claude-3.5+ / Gemini-Vision 等）</div>'
+        + '<select class="wf-detail-input" data-node-config="' + nodeType + '" data-config-key="visionConfigId">';
+      visionConfigs.forEach(function (c) {
+        html += '<option value="' + c.id + '"' + (cfg.visionConfigId === c.id ? " selected" : "") + '>' + esc(c.name) + '</option>';
+      });
+      html += '</select></div>';
+    }
     if (needsChat) {
       var chatConfigs = list.filter(function (c) { return c.config_type === "chat" || c.config_type === "both"; });
       if (!cfg.chatConfigId && chatConfigs.length) { cfg.chatConfigId = chatConfigs[0].id; dirty = true; }
@@ -1283,6 +1413,8 @@
     // File upload
     document.addEventListener("change", function (e) {
       if (!e.target.classList || !e.target.classList.contains("wf-file-input")) return;
+      // 跳过二创工作流的视频上传，由 recreate-workflow.js 专用监听器处理
+      if (e.target.getAttribute("data-rc-upload")) return;
       if (!e.target.files || !e.target.files[0]) return;
       var file = e.target.files[0];
       var field = e.target.getAttribute("data-upload-field");
