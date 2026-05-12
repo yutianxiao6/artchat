@@ -1572,6 +1572,12 @@
       WF_Renderer.bindEvents(_engine, _rerender);
       bindVideoEvents(_engine, _rerender);
       await _engine.load();
+      // 先渲染一次（summary 态），让列表立刻出现；当前工作流详情异步加载完再刷新一次
+      _rerender();
+      if (_engine.currentId) {
+        _engine.ensureDetail(_engine.currentId).then(function () { _rerender(); }).catch(function () {});
+      }
+      return;
     }
     _rerender();
   }

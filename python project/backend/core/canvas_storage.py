@@ -83,34 +83,155 @@ def ensure_asset_dirs_from_history(asset_library: List[Dict[str, Any]]):
         normalize_asset_record(asset)
 
 
+_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
+
+
+def rebuild_asset_library_from_disk() -> List[Dict[str, Any]]:
+    """扫描 assets/<category>/*.<img> 重建素材记录。用于 canvas_history.json 丢失或 assetLibrary 为空时的自愈。"""
+    assets_root = PATHS["assets"]
+    rebuilt: List[Dict[str, Any]] = []
+    if not os.path.isdir(assets_root):
+        return rebuilt
+    for category_name in sorted(os.listdir(assets_root)):
+        cat_dir = os.path.join(assets_root, category_name)
+        if not os.path.isdir(cat_dir):
+            continue
+        category = slugify_category(category_name)
+        for filename in sorted(os.listdir(cat_dir)):
+            full = os.path.join(cat_dir, filename)
+            if not os.path.isfile(full):
+                continue
+            ext = os.path.splitext(filename)[1].lower()
+            if ext not in _IMAGE_EXTS:
+                continue
+            asset_id = os.path.splitext(filename)[0]
+            rebuilt.append({
+                "id": asset_id,
+                "title": asset_id,
+                "source": "rebuilt",
+                "category": category,
+                "mime_type": f"image/{ext.lstrip('.')}",
+                "file_name": filename,
+                "file_path": rel_asset_path(category, filename),
+                "imageUrl": asset_url(category, filename),
+                "imageBase64": "",
+            })
+    return rebuilt
+
+
 def load_history() -> Dict[str, Any]:
-    if not os.path.exists(PATHS["history"]):
-        return {"sessions": [], "assetLibrary": [], "categories": [DEFAULT_CATEGORY]}
-    try:
-        with open(PATHS["history"], "r", encoding="utf-8") as f:
-            data = json.load(f)
-            asset_library = data.get("assetLibrary", [])
+    path = PATHS["history"]
+    candidates = [path] + [f"{path}.bak{i}" for i in range(1, 4)]
+    last_err = None
+    for p in candidates:
+        if not os.path.exists(p):
+            continue
+        try:
+            with open(p, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            asset_library = data.get("assetLibrary", []) or []
+            # 素材库空 → 从 assets 目录重建（不影响 sessions）
+            if not asset_library:
+                rebuilt = rebuild_asset_library_from_disk()
+                if rebuilt:
+                    print(f"素材库为空，已从 assets 目录重建 {len(rebuilt)} 条")
+                    asset_library = rebuilt
             ensure_asset_dirs_from_history(asset_library)
-            categories = sorted({DEFAULT_CATEGORY, *(slugify_category(asset.get("category")) for asset in asset_library), *(slugify_category(name) for name in data.get("categories", []))})
+            # categories 合并：json + 素材记录 + assets 目录实际子文件夹
+            fs_categories = []
+            if os.path.isdir(PATHS["assets"]):
+                for name in os.listdir(PATHS["assets"]):
+                    if os.path.isdir(os.path.join(PATHS["assets"], name)):
+                        fs_categories.append(slugify_category(name))
+            categories = sorted({
+                DEFAULT_CATEGORY,
+                *(slugify_category(asset.get("category")) for asset in asset_library),
+                *(slugify_category(name) for name in data.get("categories", [])),
+                *fs_categories,
+            })
+            if p != path:
+                print(f"画布历史主文件损坏，已从备份恢复: {os.path.basename(p)}")
             return {
                 "sessions": data.get("sessions", []),
                 "assetLibrary": asset_library,
                 "categories": categories,
             }
+        except Exception as e:
+            last_err = e
+            print(f"画布历史加载失败 ({os.path.basename(p)}): {str(e)}")
+            continue
+    if last_err:
+        print(f"画布历史所有备份均无法读取: {str(last_err)}")
+    # 所有备份失败 → 至少把素材库从磁盘重建出来
+    rebuilt = rebuild_asset_library_from_disk()
+    fs_categories = []
+    if os.path.isdir(PATHS["assets"]):
+        for name in os.listdir(PATHS["assets"]):
+            if os.path.isdir(os.path.join(PATHS["assets"], name)):
+                fs_categories.append(slugify_category(name))
+    categories = sorted({DEFAULT_CATEGORY, *(slugify_category(a.get("category")) for a in rebuilt), *fs_categories})
+    return {"sessions": [], "assetLibrary": rebuilt, "categories": categories}
+
+
+def _count_session_nodes(sessions: List[Dict[str, Any]]) -> int:
+    total = 0
+    for s in sessions or []:
+        snap = (s or {}).get("snapshot") or {}
+        total += len((snap.get("nodes") or []))
+    return total
+
+
+def _rotate_backups(path: str, keep: int = 3):
+    # 滚动：bak{keep-1} 丢弃，bakN 向 bak{N+1} 移动，当前文件 -> bak1
+    if not os.path.exists(path):
+        return
+    try:
+        oldest = f"{path}.bak{keep}"
+        if os.path.exists(oldest):
+            os.remove(oldest)
+        for i in range(keep - 1, 0, -1):
+            src = f"{path}.bak{i}"
+            dst = f"{path}.bak{i+1}"
+            if os.path.exists(src):
+                os.replace(src, dst)
+        # 当前文件快照到 bak1（用 copy 而非 move，避免丢掉"当前有效数据"）
+        shutil.copy2(path, f"{path}.bak1")
     except Exception as e:
-        print(f"画布历史加载失败: {str(e)}")
-        return {"sessions": [], "assetLibrary": [], "categories": [DEFAULT_CATEGORY]}
+        print(f"画布历史备份失败: {str(e)}")
 
 
 def save_history(data: Dict[str, Any]):
     asset_library = [normalize_asset_record(dict(asset)) for asset in data.get("assetLibrary", [])]
     categories = sorted({DEFAULT_CATEGORY, *(slugify_category(asset.get("category")) for asset in asset_library), *(slugify_category(name) for name in data.get("categories", []))})
-    with open(PATHS["history"], "w", encoding="utf-8") as f:
+    new_sessions = data.get("sessions", []) or []
+    path = PATHS["history"]
+
+    # 空覆盖防护：只守护 sessions（节点不可重建）；assetLibrary 可由 assets 目录重建，不做此校验
+    if os.path.exists(path):
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                existing = json.load(f)
+            existing_nodes = _count_session_nodes(existing.get("sessions", []))
+            new_nodes = _count_session_nodes(new_sessions)
+            if existing_nodes > 0 and new_nodes == 0:
+                print(f"画布历史写入已拒绝（疑似空覆盖）: 磁盘 nodes={existing_nodes}，提交 nodes={new_nodes}")
+                return {"skipped": True, "reason": "refuse_empty_overwrite"}
+        except Exception as e:
+            print(f"画布历史预检失败，继续写入: {str(e)}")
+
+    # 滚动备份
+    _rotate_backups(path, keep=3)
+
+    # 原子写：tmp + replace
+    tmp = f"{path}.tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
         json.dump({
-            "sessions": data.get("sessions", []),
+            "sessions": new_sessions,
             "assetLibrary": asset_library,
             "categories": categories,
         }, f, ensure_ascii=False, indent=2)
+    os.replace(tmp, path)
+    return {"skipped": False}
 
 
 def save_base64_asset(base64_data: str, category: str = DEFAULT_CATEGORY, ext: str = ".png") -> Dict[str, str]:

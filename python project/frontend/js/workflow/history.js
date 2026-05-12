@@ -23,7 +23,9 @@
       var active = w.id === curId ? "active" : "";
       var time = formatTime(w.createdAt);
       var title = w.title || "未命名工作流";
-      var content = (w.input && w.input.plot) ? esc(w.input.plot).slice(0, 40) : "暂无内容";
+      // 优先用详情里的 plot；没加载时用 summary 自带的 inputPreview
+      var plot = (w.input && w.input.plot) || w.inputPreview || "";
+      var content = plot ? esc(plot).slice(0, 40) : "暂无内容";
       var tpl = null;
       if (w.templateId && window.WF_Templates) {
         tpl = window.WF_Templates.find(function (t) { return t.id === w.templateId; });
@@ -74,7 +76,8 @@
       }
       var item = e.target.closest && e.target.closest(".wf-history-item[data-wf-id]");
       if (item) {
-        engine.currentId = item.getAttribute("data-wf-id");
+        var newId = item.getAttribute("data-wf-id");
+        engine.currentId = newId;
         engine.syncPipeline();
         var execSteps = engine.pipeline.filter(function (s) { return s.nodeType !== "input" && s.nodeType !== "output"; });
         if (execSteps.length) {
@@ -83,6 +86,12 @@
         engine.selectedNodeKey = null;
         engine.detailOpen = false;
         rerender();
+        // 若详情尚未加载，异步拉完再刷新一次
+        if (engine.ensureDetail) {
+          engine.ensureDetail(newId).then(function () {
+            if (engine.currentId === newId) rerender();
+          }).catch(function () {});
+        }
         return;
       }
     });

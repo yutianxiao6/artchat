@@ -10,7 +10,7 @@ from backend.core.workflow_storage import (
     list_workflows, load_workflow, save_workflow, delete_workflow as delete_wf,
     save_workflow_image, WORKFLOW_ROOT
 )
-from backend.api.config_router import config_list
+from backend.api.config_router import get_config_list
 from backend.api.image_router import generate_image
 from backend.models.schemas import ImageGenerateRequest
 from backend.core.request_client import async_http_request
@@ -339,12 +339,12 @@ def _strip_grid_position_and_style(text: str, style: str = "") -> str:
 
 
 def get_config_by_id(config_id: str):
-    return next((c for c in config_list if c["id"] == config_id), None)
+    return next((c for c in get_config_list() if c["id"] == config_id), None)
 
 
 def get_first_config(config_type: str):
     allowed = {config_type, "both"}
-    return next((c for c in config_list if c.get("config_type") in allowed), None)
+    return next((c for c in get_config_list() if c.get("config_type") in allowed), None)
 
 
 async def call_llm_json(config: dict, system_prompt: str, user_prompt: str, max_tokens: int = 20000) -> dict:

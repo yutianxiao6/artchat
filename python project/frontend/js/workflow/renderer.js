@@ -185,6 +185,14 @@
     var segSteps = engine.pipeline.filter(function (s) { return s.category === "segment"; });
     var segments = wf.segments || [];
     var html = '<div class="wf-content-area">';
+    // 模板级 topbar（如果模板定义了 topbarHtml）
+    try {
+      var tpl = (window.WF_Templates || []).find(function (t) { return t.id === wf.templateId; });
+      var topFn = tpl && tpl.pipeline && tpl.pipeline.topbarHtml;
+      if (typeof topFn === "function") {
+        html += topFn(engine, wf);
+      }
+    } catch (e) { /* ignore topbar failure */ }
     html += '<div class="wf-content-inner" id="wf-content-inner" style="transform:translate(' + engine.panX + 'px,' + engine.panY + 'px) scale(' + engine.zoom + ');transform-origin:0 0;">';
     html += '<div class="wf-content-grid">';
 
@@ -605,7 +613,7 @@
       if (v.frames && v.frames.length) {
         html += '<div class="wf-ref-images" style="flex-wrap:wrap;gap:3px;">';
         v.frames.slice(0, 8).forEach(function (f) {
-          if (f.url) html += '<img src="' + esc(f.url) + '" style="width:40px;height:28px;object-fit:cover;border-radius:3px;" data-preview="' + esc(f.url) + '">';
+          if (f && f.url) html += '<img src="' + esc(f.url) + '" style="width:40px;height:28px;object-fit:cover;border-radius:3px;" data-preview="' + esc(f.url) + '">';
         });
         if (v.frames.length > 8) html += '<span style="font-size:10px;color:#94a3b8;align-self:center;">+' + (v.frames.length - 8) + '</span>';
         html += '</div>';
@@ -614,7 +622,7 @@
       if (itemList && itemList.length) {
         html += '<div class="wf-ref-images" style="flex-wrap:wrap;gap:3px;">';
         itemList.slice(0, 6).forEach(function (it) {
-          if (it.imageUrl) html += '<img src="' + esc(it.imageUrl) + '" style="width:40px;height:40px;object-fit:cover;border-radius:3px;" data-preview="' + esc(it.imageUrl) + '">';
+          if (it && it.imageUrl) html += '<img src="' + esc(it.imageUrl) + '" style="width:40px;height:40px;object-fit:cover;border-radius:3px;" data-preview="' + esc(it.imageUrl) + '">';
         });
         html += '</div>';
       }
@@ -727,8 +735,8 @@
       "mainCharacters", "minorCharacters", "scene", "firstFrame", "storyboard", "lastFrame", "storyTemplate",
       "rcCharacters", "rcScenes", "rcImageGen"
     ].indexOf(nodeType) >= 0;
-    // 视觉模型（帧分析、分镜提示词——后者可选加参考帧）
-    var needsVision = ["rcFrameAnalysis"].indexOf(nodeType) >= 0;
+    // 视觉模型（帧标注、段内选帧——使用视觉 LLM）
+    var needsVision = ["rcFrameLabel", "rcRepFrames"].indexOf(nodeType) >= 0;
     var dirty = false;
     var html = '';
     if (needsVision) {

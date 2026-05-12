@@ -38,6 +38,13 @@ def build():
         "--noconfirm",
         f"--icon={ICON_FILE}",
         "--add-data", f"{FRONTEND_DIR}{os.pathsep}frontend",
+        # 二创工作流依赖
+        "--collect-all", "cv2",
+        "--hidden-import", "imagehash",
+        "--hidden-import", "PIL.Image",
+        # 系统托盘
+        "--collect-all", "pystray",
+        "--hidden-import", "pystray._win32",
     ]
 
     PyInstaller.__main__.run(args)

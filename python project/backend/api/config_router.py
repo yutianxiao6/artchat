@@ -1,12 +1,17 @@
 from fastapi import APIRouter, HTTPException
 from backend.models.schemas import ModelConfig, ConfigTestRequest
-from backend.core.config_handler import load_configs, save_configs
-from backend.core.request_client import async_http_request
+from backend.core.config_handler import load_configs, save_configs, set_cached_strategy, clear_cached_strategy
+from backend.core.request_client import async_http_request, build_endpoint_url
 
 router = APIRouter(prefix="/api/configs", tags=["配置管理"])
 
-# 全局配置缓存
+# 全局配置缓存（列表对象一旦创建，永远就地修改，不重新赋值，避免其他模块拿到的引用失效）
 config_list = load_configs()
+
+
+def get_config_list():
+    """其他模块统一通过此函数获取当前最新配置列表；函数每次返回当前绑定，避免 from...import 冻结引用。"""
+    return config_list
 
 
 # 获取所有配置
@@ -18,10 +23,14 @@ async def get_all_configs():
 # 新增/更新配置
 @router.post("")
 async def add_or_update_config(config: ModelConfig):
-    global config_list
     exist_index = next((i for i, c in enumerate(config_list) if c["id"] == config.id), -1)
     config_dict = config.model_dump()
     if exist_index >= 0:
+        # 若 api_base 改变，旧的 strategy 缓存失效，清掉
+        old_base = (config_list[exist_index].get("api_base") or "").rstrip("/")
+        new_base = (config_dict.get("api_base") or "").rstrip("/")
+        if old_base != new_base:
+            clear_cached_strategy(config.id)
         config_list[exist_index] = config_dict
     else:
         config_list.append(config_dict)
@@ -32,13 +41,14 @@ async def add_or_update_config(config: ModelConfig):
 # 删除配置
 @router.delete("/{config_id}")
 async def delete_config(config_id: str):
-    global config_list
-    config_list = [c for c in config_list if c["id"] != config_id]
+    # 就地删除，不重新赋值 config_list（保证其他模块早已 import 的引用依然有效）
+    config_list[:] = [c for c in config_list if c["id"] != config_id]
     save_configs(config_list)
+    clear_cached_strategy(config_id)
     return {"code": 0, "message": "配置删除成功"}
 
 
-# 🔧 测试配置连通性（超详细日志版）
+# 🔧 测试配置连通性
 @router.post("/test")
 async def test_config_connection(req: ConfigTestRequest):
     print("\n" + "=" * 50)
@@ -56,7 +66,7 @@ async def test_config_connection(req: ConfigTestRequest):
         # 1. 先测试聊天模型（如果是聊天或通用）
         if req.config_type in ["chat", "both"]:
             print("[测试连接] 正在测试聊天接口...")
-            chat_url = req.api_base.rstrip("/") + "/chat/completions"
+            chat_url = build_endpoint_url(req.api_base, "/chat/completions")
             chat_data = {
                 "model": req.model_name,
                 "messages": [{"role": "user", "content": "hi"}],
@@ -85,6 +95,10 @@ async def test_config_connection(req: ConfigTestRequest):
                     print(f"[测试连接] 状态码: {response.status_code}")
                     if response.status_code == 200:
                         print(f"[测试连接] ✅ 图片接口测试成功（策略: {strategy['id']}）")
+                        # 若客户端带了 id 且已保存过，把探测出来的策略缓存起来，避免生图时再重新探测
+                        if req.id and any(c.get("id") == req.id for c in config_list):
+                            set_cached_strategy(req.id, strategy["id"])
+                            print(f"[测试连接] 已缓存策略 {strategy['id']} 到 config_id={req.id}")
                         return {"code": 0, "message": f"✅ 连接测试成功，配置可用（格式: {strategy['id']}）"}
                     else:
                         print(f"[测试连接] 策略 {strategy['id']} 返回 {response.status_code}: {response.text[:200]}")

@@ -137,6 +137,7 @@
       mode: "single",
       multiCount: 1,
       history: [],
+      _loaded: true,
     };
     var self = this;
     tplPipeline.forEach(function (step) {
@@ -388,19 +389,46 @@
       if (result.code === 0) this.workflows = result.data || [];
     } catch (e) { this.workflows = []; }
     var self = this;
-    for (var i = 0; i < this.workflows.length; i++) {
-      var summary = this.workflows[i];
-      if (!summary.input) {
-        try {
-          var r = await fetch("/api/workflow/" + summary.id);
-          var d = await r.json();
-          if (d.code === 0 && d.data) this.workflows[i] = d.data;
-        } catch (e) {}
-      }
-    }
+    // 惰性加载：这里不再预取每个工作流的详情（原先串行拉全部，几 MB 数据让启动慢到几秒）。
+    // 每条 summary（id/title/createdAt）先走 ensureShape 补默认字段，保证 renderer 不崩；
+    // 真正的详情数据在 ensureDetail(id) 被调用时（首屏 currentId 或用户切换时）才 fetch。
     this.workflows.forEach(function (w) { self.ensureShape(w); self._resetStuckNodes(w); });
     if (!this.workflows.length) this.create();
     else this.currentId = this.workflows[0].id;
+  };
+
+  // 惰性加载指定工作流的完整详情。对 in-flight 请求去重，避免并发切换时多次拉取。
+  P._detailPromises = null;
+  P.ensureDetail = async function (id) {
+    if (!id) return null;
+    var idx = this.workflows.findIndex(function (w) { return w.id === id; });
+    if (idx < 0) return null;
+    var current = this.workflows[idx];
+    // 有 _loaded 标记说明已经是完整详情
+    if (current && current._loaded) return current;
+    if (!this._detailPromises) this._detailPromises = {};
+    if (this._detailPromises[id]) return this._detailPromises[id];
+    var self = this;
+    var p = (async function () {
+      try {
+        var r = await fetch("/api/workflow/" + encodeURIComponent(id));
+        var d = await r.json();
+        if (d.code === 0 && d.data) {
+          var j = self.workflows.findIndex(function (w) { return w.id === id; });
+          if (j >= 0) {
+            d.data._loaded = true;
+            self.workflows[j] = d.data;
+            self.ensureShape(self.workflows[j]);
+            self._resetStuckNodes(self.workflows[j]);
+          }
+          return self.workflows[j];
+        }
+      } catch (e) { /* ignore */ }
+      return current;
+    })();
+    this._detailPromises[id] = p;
+    p.finally(function () { try { delete self._detailPromises[id]; } catch (_) {} });
+    return p;
   };
 
   P.save = function () {
@@ -673,7 +701,11 @@
       if (curEp_ && curEp_.index > 0) return !!curEp_.plot;
       return !!wf.input.plot;
     }
-    if (nodeType === "output") return true;
+    if (nodeType === "rcInput") {
+      // 二创输入：需要视频 + 剧情都就位
+      return !!(wf.input && wf.input.videoUrl && wf.input.plot);
+    }
+    if (nodeType === "output" || nodeType === "rcOutput") return true;
 
     var nd = null;
     var typeDef = NR.get(nodeType);
@@ -708,7 +740,7 @@
     }
 
     switch (nodeType) {
-      case "input": case "fpInput": break;
+      case "input": case "fpInput": case "rcInput": break;
       case "script": addDep("input", null); break;
       case "planCharactersScenes": addDep("script", null); break;
       case "mainCharacters": addDep("planCharactersScenes", null); break;
@@ -758,6 +790,52 @@
             }
           }
         }
+        break;
+      // ── 二创工作流 ──
+      case "rcKeyframes":
+        addDep("rcInput", null);
+        break;
+      case "rcFrameLabel":
+        addDep("rcKeyframes", null);
+        break;
+      case "rcScript":
+        addDep("rcFrameLabel", null);
+        break;
+      case "rcPlotRewrite":
+        addDep("rcInput", null);
+        addDep("rcScript", null);
+        break;
+      case "rcSmartSegment":
+        addDep("rcScript", null);
+        addDep("rcPlotRewrite", null);
+        break;
+      case "rcRepFrames":
+        addDep("rcSmartSegment", null);
+        addDep("rcFrameLabel", null);
+        break;
+      case "rcPlanCharScenes":
+        addDep("rcRepFrames", null);
+        addDep("rcSmartSegment", null);
+        break;
+      case "rcCharacters":
+        addDep("rcPlanCharScenes", null);
+        break;
+      case "rcScenes":
+        addDep("rcPlanCharScenes", null);
+        break;
+      case "rcStoryboard":
+        addDep("rcPlotRewrite", null);
+        addDep("rcCharacters", null);
+        addDep("rcScenes", segIdx);
+        addDep("rcRepFrames", null);
+        addDep("rcFrameLabel", null);
+        addDep("rcKeyframes", null);
+        break;
+      case "rcVideoPrompt":
+        addDep("rcStoryboard", segIdx);
+        addDep("rcCharacters", null);
+        addDep("rcScenes", segIdx);
+        addDep("rcSmartSegment", null);
         break;
     }
     return deps;

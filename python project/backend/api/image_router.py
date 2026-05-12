@@ -5,8 +5,8 @@ import re
 import traceback
 from fastapi import APIRouter, HTTPException, UploadFile, File
 from backend.models.schemas import ImageGenerateRequest
-from backend.api.config_router import config_list
-from backend.core.request_client import async_http_request
+from backend.api.config_router import get_config_list
+from backend.core.request_client import async_http_request, split_api_base, base_has_version, build_endpoint_url
 from backend.core.config_handler import (
     get_cached_strategy, set_cached_strategy, clear_cached_strategy
 )
@@ -101,27 +101,29 @@ def _strip_image_base64(value: str) -> str:
 
 
 def _get_applicable_strategies(api_base: str) -> list:
-    api_base = api_base.rstrip("/")
-    last_seg = api_base.rsplit("/", 1)[-1] if "/" in api_base else ""
-    is_versioned = bool(re.match(r'^v\d+$', last_seg))
-    if is_versioned:
+    """根据 api_base 形态决定策略尝试顺序。
+    - 用户填了完整 endpoint（以 /images/generations 等结尾）→ 只试 standard 策略
+    - 用户填了 /vN 结尾 → 只试 standard 策略
+    - 其他（裸 host 或自定义路径）→ custom 优先、standard 降级
+    standard 策略用 build_endpoint_url 自动补 /v1。
+    """
+    base, trailing = split_api_base(api_base)
+    if trailing or base_has_version(base):
         return [s for s in STRATEGIES if s["url_suffix"]]
-    else:
-        custom_first = [s for s in STRATEGIES if not s["url_suffix"]]
-        standard = [s for s in STRATEGIES if s["url_suffix"]]
-        return custom_first + standard
+    custom_first = [s for s in STRATEGIES if not s["url_suffix"]]
+    standard = [s for s in STRATEGIES if s["url_suffix"]]
+    return custom_first + standard
 
 
 def _build_url(api_base: str, strategy: dict) -> str:
-    api_base = api_base.rstrip("/")
-    suffix = strategy["url_suffix"]
-    if suffix:
-        last_seg = api_base.rsplit("/", 1)[-1] if "/" in api_base else ""
-        if re.match(r'^v\d+$', last_seg):
-            return api_base + suffix
-        else:
-            return api_base
-    return api_base
+    """按 strategy 拼 URL：
+    - 没有 suffix（自定义策略）→ 用户填的是完整地址，原样使用
+    - 有 suffix（标准 OpenAI 风格）→ 用 build_endpoint_url 自适应
+    """
+    suffix = strategy.get("url_suffix")
+    if not suffix:
+        return (api_base or "").rstrip("/")
+    return build_endpoint_url(api_base, suffix)
 
 
 def _build_request_data(strategy: dict, model: str, prompt: str, width: int, height: int, n: int,
@@ -205,9 +207,12 @@ async def _parse_response(strategy: dict, result: dict) -> list:
 
 async def _poll_task_result(config: dict, headers: dict, task_id: str) -> list | None:
     """轮询指定 task_id 直到完成，返回图片数据。每个调用独立轮询自己的 task_id。"""
-    api_base = config["api_base"].rstrip("/")
-    base_url = api_base.rsplit("/v1", 1)[0] if "/v1" in api_base else api_base.rsplit("/", 1)[0]
-    status_url = f"{base_url}/v1/media/status"
+    # 轮询接口始终落在 /v1/media/status，不论用户填的是裸 host、/v1 还是完整 endpoint
+    from urllib.parse import urlparse
+    parsed = urlparse(config["api_base"])
+    scheme = parsed.scheme or "https"
+    host = parsed.netloc
+    status_url = f"{scheme}://{host}/v1/media/status"
 
     print(f"[图片生成] 开始轮询 task_id={task_id}")
     for attempt in range(180):
@@ -323,7 +328,7 @@ async def upload_image(file: UploadFile = File(...)):
 @router.post("/generate")
 async def generate_image(req: ImageGenerateRequest):
     """图片生成入口。每次调用完全独立，支持多个并发调用互不干扰。"""
-    config = next((c for c in config_list if c["id"] == req.config_id), None)
+    config = next((c for c in get_config_list() if c["id"] == req.config_id), None)
     if not config:
         raise HTTPException(status_code=404, detail="配置不存在")
 

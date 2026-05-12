@@ -9,9 +9,9 @@ from fastapi import APIRouter, HTTPException, UploadFile, File
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from backend.models.schemas import ChatRequest, SmartChatRequest, ImageGenerateRequest, VideoChatRequest
-from backend.api.config_router import config_list
+from backend.api.config_router import get_config_list
 from backend.api.image_router import generate_image
-from backend.core.request_client import async_http_request
+from backend.core.request_client import async_http_request, build_endpoint_url
 from backend.core.canvas_storage import get_data_root
 
 router = APIRouter(prefix="/api/chat", tags=["聊天对话"])
@@ -82,12 +82,12 @@ def _clamp_image_size(w: int, h: int) -> tuple:
 
 
 def get_config_by_id(config_id: str):
-    return next((c for c in config_list if c["id"] == config_id), None)
+    return next((c for c in get_config_list() if c["id"] == config_id), None)
 
 
 def get_first_config(config_type: str):
     allowed = {config_type, "both"}
-    return next((c for c in config_list if c.get("config_type") in allowed), None)
+    return next((c for c in get_config_list() if c.get("config_type") in allowed), None)
 
 
 def parse_image_request_rules(message: str) -> dict:
@@ -223,7 +223,7 @@ async def create_chat_response(config: dict, request_data: dict, stream: bool, t
     use_claude_native = _is_claude_model(config) and has_images
 
     if use_claude_native:
-        chat_url = config["api_base"].rstrip("/") + "/messages"
+        chat_url = build_endpoint_url(config["api_base"], "/messages")
         headers["x-api-key"] = config["api_key"]
         headers["anthropic-version"] = "2023-06-01"
         system_text, claude_msgs = _convert_messages_for_claude(request_data.get("messages", []))
@@ -291,7 +291,7 @@ async def create_chat_response(config: dict, request_data: dict, stream: bool, t
                     content += block.get("text", "")
             return {"choices": [{"message": {"role": "assistant", "content": content}, "finish_reason": result.get("stop_reason", "end_turn")}]}
 
-    chat_url = config["api_base"].rstrip("/") + "/chat/completions"
+    chat_url = build_endpoint_url(config["api_base"], "/chat/completions")
 
     async def stream_generator():
         try:

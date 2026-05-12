@@ -2968,7 +2968,24 @@ function downloadImage(imageUrl) {
       .catch((e) => console.warn('[canvas] 大 payload 保存失败', e));
   }
 
+  function _canvasSaveAllowed() {
+    // 只有已成功加载过磁盘 state 之后才允许保存。
+    // loadStateStatus 状态机：booting → init → loading → ok → (后续) ready；失败会变 error / init-error。
+    // 放行：ok / ready / sync-error（sync-error 发生在加载后，数据仍是从磁盘读的真实值）
+    // 阻止：booting / init / loading / error / init-error —— 此时 STATE 可能为空，保存会覆盖磁盘
+    try {
+      const s = STATE && STATE.debugInfo && STATE.debugInfo.loadStateStatus;
+      return s === "ok" || s === "ready" || s === "sync-error";
+    } catch (_) { return false; }
+  }
+
   function _doPersist() {
+    if (!_canvasSaveAllowed()) {
+      console.warn('[canvas] 跳过保存：画布状态未加载完成 (loadStateStatus=' + (STATE.debugInfo && STATE.debugInfo.loadStateStatus) + ')');
+      _persistInFlight = false;
+      _persistPendingAgain = false;
+      return;
+    }
     if (_persistInFlight) {
       _persistPendingAgain = true;
       return;
@@ -3037,6 +3054,11 @@ function downloadImage(imageUrl) {
   }
   function flushCanvasSaveNow(opts = {}) {
     if (_persistCanvasTimer) { clearTimeout(_persistCanvasTimer); _persistCanvasTimer = null; }
+    if (!_canvasSaveAllowed()) {
+      console.warn('[canvas] flushCanvasSaveNow 跳过：画布尚未加载完成');
+      if (opts.toast) showToast('画布尚未加载完成，已跳过保存');
+      return;
+    }
     try { persistCurrentHistory(); } catch (_) {}
     _doPersist();
     if (opts.toast) showToast('画布已保存');
@@ -3048,6 +3070,10 @@ function downloadImage(imageUrl) {
     window.__canvasUnloadBound = true;
     const flushOnExit = () => {
       if (_persistCanvasTimer) { clearTimeout(_persistCanvasTimer); _persistCanvasTimer = null; }
+      if (!_canvasSaveAllowed()) {
+        console.warn('[canvas] 离开页面时跳过保存：画布尚未加载完成');
+        return;
+      }
       try {
         persistCurrentHistory();
         const body = JSON.stringify({ sessions: STATE.historySessions, assetLibrary: STATE.assetLibrary });

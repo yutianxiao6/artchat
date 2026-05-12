@@ -17,6 +17,7 @@ class ConfigTestRequest(BaseModel):
     api_base: str
     api_key: str
     model_name: str
+    id: Optional[str] = None  # 如传入且已存在于配置列表，测试成功的图片策略会缓存到该 id
 
 # 聊天请求模型
 class ChatRequest(BaseModel):

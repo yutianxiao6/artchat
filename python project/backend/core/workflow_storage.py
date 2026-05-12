@@ -30,19 +30,53 @@ def list_workflows() -> List[Dict]:
         return []
     try:
         with open(index_path, "r", encoding="utf-8") as f:
-            return json.load(f)
+            entries = json.load(f)
+        if not isinstance(entries, list):
+            return []
     except Exception:
         return []
+
+    # 旧索引可能缺 templateId/inputPreview，按需从每个 workflow.json 补一次并回写
+    needs_rewrite = False
+    for i, e in enumerate(entries):
+        if "templateId" in e and "inputPreview" in e:
+            continue
+        wf_path = os.path.join(WORKFLOW_ROOT, e.get("id", ""), "workflow.json")
+        if not os.path.isfile(wf_path):
+            e.setdefault("templateId", None)
+            e.setdefault("inputPreview", "")
+            needs_rewrite = True
+            continue
+        try:
+            with open(wf_path, "r", encoding="utf-8") as fp:
+                wf = json.load(fp)
+            e["templateId"] = wf.get("templateId") or None
+            e["inputPreview"] = ((wf.get("input") or {}).get("plot") or "")[:100]
+            needs_rewrite = True
+        except Exception:
+            e.setdefault("templateId", None)
+            e.setdefault("inputPreview", "")
+    if needs_rewrite:
+        try:
+            with open(index_path, "w", encoding="utf-8") as f:
+                json.dump(entries, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
+    return entries
 
 
 def save_workflow_index(workflows: List[Dict]):
     index_path = os.path.join(WORKFLOW_ROOT, "workflow_list.json")
     summaries = []
     for wf in workflows:
+        input_data = wf.get("input") or {}
+        plot_preview = (input_data.get("plot") or "")[:100]
         summaries.append({
             "id": wf.get("id", ""),
             "title": wf.get("title", ""),
             "createdAt": wf.get("createdAt", ""),
+            "templateId": wf.get("templateId") or None,
+            "inputPreview": plot_preview,
         })
     with open(index_path, "w", encoding="utf-8") as f:
         json.dump(summaries, f, ensure_ascii=False, indent=2)

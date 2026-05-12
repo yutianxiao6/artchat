@@ -275,6 +275,7 @@
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          id: data.id || undefined,
           api_base: data.api_base,
           api_key: data.api_key,
           model_name: data.model_name,
