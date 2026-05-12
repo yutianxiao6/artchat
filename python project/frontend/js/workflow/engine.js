@@ -220,7 +220,7 @@
 
   /* ── 多剧集模型 ── */
   // 跨集共享的全局字段（不属于任何单集）
-  var SHARED_GLOBAL_NODES = { mainCharacters: true };
+  var SHARED_GLOBAL_NODES = { mainCharacters: true, episodePlan: true };
 
   // 哪些顶层字段属于"剧集级"（每集独立）
   P._getEpisodeFieldKeys = function (wfPipeline) {
@@ -706,6 +706,11 @@
       return !!(wf.input && wf.input.videoUrl && wf.input.plot);
     }
     if (nodeType === "output" || nodeType === "rcOutput") return true;
+    // episodePlan：集数 <= 1 时自动通过（单集不需要拆分），此时直接把 input.plot 作为本集 plot
+    if (nodeType === "episodePlan") {
+      var epCount_ = parseInt(wf.input && wf.input.episodeCount) || 0;
+      if (epCount_ <= 1) return !!(wf.input && wf.input.plot);
+    }
 
     var nd = null;
     var typeDef = NR.get(nodeType);
@@ -741,7 +746,8 @@
 
     switch (nodeType) {
       case "input": case "fpInput": case "rcInput": break;
-      case "script": addDep("input", null); break;
+      case "episodePlan": addDep("input", null); break;
+      case "script": addDep("episodePlan", null); break;
       case "planCharactersScenes": addDep("script", null); break;
       case "mainCharacters": addDep("planCharactersScenes", null); break;
       case "minorCharacters": addDep("planCharactersScenes", null); break;

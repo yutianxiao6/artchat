@@ -294,3 +294,8 @@
 .wf-exec-dot-review-passed { width:6px; height:6px; border-radius:50%; background:#22c55e; margin-top:4px; flex-shrink:0; box-shadow:0 0 4px rgba(34,197,94,.5); }
 .wf-exec-dot-review-failed { width:6px; height:6px; border-radius:50%; background:#f97316; margin-top:4px; flex-shrink:0; }
 @keyframes wf-pulse-review { 0%,100%{opacity:1} 50%{opacity:.4} }
+
+/* ── Episode Plan Card (剧集规划节点卡片内的分集列表) ── */
+.wf-ep-plan-item { margin-top:6px; padding:6px 8px; border-radius:6px; background:rgba(14,165,233,.06); border:1px solid rgba(14,165,233,.2); }
+.wf-ep-plan-title { font-size:11px; font-weight:600; color:#38bdf8; margin-bottom:3px; }
+.wf-ep-plan-plot { font-size:10px; color:#cbd5e1; line-height:1.45; white-space:pre-wrap; word-break:break-word; }

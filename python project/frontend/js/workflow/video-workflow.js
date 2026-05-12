@@ -329,12 +329,88 @@
         + '<div class="wf-detail-section"><div class="wf-detail-label">视频类型（全集通用）</div>'
         + '<input class="wf-detail-input" id="wf-input-type" placeholder="如：短剧、广告、MV..." value="' + esc(wf.input.type) + '"></div>';
       if (!isSequel) {
-        html += '<div class="wf-detail-section"><div class="wf-detail-label">集数（首次生成时一次性拆分；之后可"新增剧集"续写）</div>'
+        html += '<div class="wf-detail-section"><div class="wf-detail-label">集数（>1 时由"剧集规划"节点拆分；留空或 1 则直接生成单集剧本）</div>'
           + '<input class="wf-detail-input" id="wf-input-episodes" type="number" min="1" max="20" placeholder="留空=单集" value="' + (wf.input.episodeCount || "") + '"></div>';
       }
       html += '<div class="wf-detail-section"><div class="wf-detail-label">每集段数（留空=AI自动；多集时所有集段数相同）</div>'
         + '<input class="wf-detail-input" id="wf-input-segments" type="number" min="1" max="30" placeholder="AI自动决定" value="' + (wf.input.segmentCount || "") + '"></div>'
         + '<div class="wf-detail-actions"><button class="wf-tb-btn primary" id="wf-save-input">保存</button></div>';
+      return html;
+    },
+  });
+
+  /* ── Node: episodePlan ── */
+  // 智能规划剧集：拆分大剧本到多集的 plot，避免 script 节点 token 超限。
+  // - 集数 <= 1：节点视为"已就绪"（由 engine.isNodeComplete 处理），跳过生成
+  // - 集数 > 1：模型把总情节均匀分配到 N 集，填充各 episode.plot
+  NR.register({
+    id: "episodePlan", label: "剧集规划", icon: "fa-sitemap", color: "#0ea5e9",
+    category: "global", allowMultiple: false,
+    getPreview: function (nd) {
+      var v = NR.getActiveVersion(nd);
+      if (!v) return "";
+      var eps = v.episodes || [];
+      if (!eps.length) return "";
+      return "已规划 " + eps.length + " 集：" + eps.map(function (e) { return e.title || ("第" + (e.index + 1) + "集"); }).slice(0, 3).join(" / ") + (eps.length > 3 ? " ..." : "");
+    },
+    generate: async function (ctx) {
+      var wf = ctx.workflow;
+      var engine = window._wfEngine;
+      var epCount = parseInt(wf.input.episodeCount) || 1;
+      var plot = wf.input.plot || "";
+      if (!plot) throw new Error("请先填写输入情节");
+
+      var data = await callApi("/api/workflow/generate/episode-plan", {
+        chat_config_id: getConfigId("chat", "episodePlan"),
+        plot: plot,
+        style: wf.input.style,
+        type: wf.input.type,
+        episode_count: epCount,
+      });
+      var episodes = (data.episodes || []).slice(0, Math.max(1, epCount));
+      if (!episodes.length) throw new Error("模型未返回分集大纲");
+
+      // 把拆分结果落到 wf.episodes
+      // 现有 wf.episodes[0] 作为第1集；多出来的集创建 addEpisode
+      if (engine && wf.episodes && wf.episodes.length) {
+        var firstEp = wf.episodes[0];
+        firstEp.plot = episodes[0].plot || plot;
+        firstEp.title = episodes[0].title || firstEp.title || "第1集";
+        // 续集：只在当前只有 1 集时创建，避免覆盖已有续写
+        if (wf.episodes.length === 1) {
+          for (var ei = 1; ei < episodes.length; ei++) {
+            var ep = engine.addEpisode(episodes[ei].title || ("第" + (ei + 1) + "集"));
+            if (ep) {
+              ep.plot = episodes[ei].plot || "";
+            }
+          }
+          engine.switchEpisode(firstEp.id);
+        }
+      }
+
+      return { episodes: episodes };
+    },
+    renderDetail: function (nd, wf, ctx) {
+      var dis = _getDisabledAttr(ctx, "episodePlan");
+      var epCount = parseInt(wf.input.episodeCount) || 1;
+      var v = NR.getActiveVersion(nd);
+      var html = "";
+      if (epCount <= 1) {
+        html += '<div class="wf-detail-text" style="color:#64748b;">当前集数为 1，无需拆分；本节点自动通过，直接进入剧本生成。</div>';
+        html += '<div class="wf-detail-text" style="color:#94a3b8;font-size:11px;margin-top:6px;">提示：如果你的情节篇幅较长，建议在上一节点填写集数（≥ 2），让 AI 把剧本均匀分配到多集，避免一次性生成导致超限。</div>';
+        return html;
+      }
+      html += '<div class="wf-detail-text" style="color:#64748b;margin-bottom:6px;">将把总情节拆分为 ' + epCount + ' 集的分集大纲。每集结果会写入对应剧集的"简要情节"，之后每集可独立生成剧本。</div>';
+      if (v && v.episodes && v.episodes.length) {
+        html += '<div class="wf-detail-section"><div class="wf-detail-label">分集大纲</div>';
+        v.episodes.forEach(function (ep, i) {
+          html += '<div class="wf-detail-text" style="margin-bottom:6px;"><strong>' + esc(ep.title || ("第" + (i + 1) + "集")) + '</strong><br>' + esc(ep.plot || "") + '</div>';
+        });
+        html += '</div>';
+      } else {
+        html += '<div class="wf-detail-text" style="color:#94a3b8;">尚未规划</div>';
+      }
+      html += '<div class="wf-detail-actions"><button class="wf-tb-btn primary" data-gen-global="episodePlan"' + dis + '><i class="fa fa-magic"></i> ' + (v ? "重新规划" : "智能规划剧集") + '</button></div>';
       return html;
     },
   });
@@ -351,66 +427,21 @@
       var wf = ctx.workflow;
       var engine = window._wfEngine;
       var curEp = (engine && engine.currentEpisode && engine.currentEpisode(wf)) || null;
-      var epCount = parseInt(wf.input.episodeCount) || 0;
-      var isFirstEpisodeAndMulti = epCount > 1 && (!curEp || curEp.index === 0) && (wf.episodes || []).length === 1;
 
-      if (isFirstEpisodeAndMulti) {
-        // 多剧集一次性拆分：让模型按 episode_count 分配剧情，并保证每集段数相同
-        var data = await callApi("/api/workflow/generate/script-multi", {
-          workflow_id: wf.id, chat_config_id: getConfigId("chat", "script"),
-          plot: (curEp && curEp.plot) || wf.input.plot,
-          style: wf.input.style, type: wf.input.type,
-          segments_per_episode: wf.input.segmentCount,
-          episode_count: epCount,
-        });
-        var episodes = (data.episodes || []).slice(0, epCount);
-        if (!episodes.length) throw new Error("模型未返回任何剧集");
-        var firstEp = wf.episodes[0];
-        // 把第1集应用到当前 episode + segments
-        var firstData = episodes[0];
-        if (firstData.segments) engine.createSegments(wf, firstData.segments);
-        // 生成后续 episode 的占位（scripts/segments 由 _bakeEpisode 填）
-        for (var ei = 1; ei < episodes.length; ei++) {
-          var ep = engine.addEpisode("第" + (ei + 1) + "集");
-          // addEpisode 会切换到新 ep。把 episodes[ei] 数据写入这个 ep
-          if (ep) {
-            ep.plot = (episodes[ei].plot || "");
-            engine.createSegments(wf, episodes[ei].segments || []);
-            // 写入 script 节点
-            var scrArr = wf.scripts || [];
-            if (!scrArr.length) { wf.scripts = [NR.createNodeData()]; scrArr = wf.scripts; }
-            NR.addVersion(scrArr[0], {
-              fullText: episodes[ei].full_text || "",
-              segments: episodes[ei].segments || [],
-              mainCharacters: data.main_characters || [],
-            });
-            // 把当前 wf 的状态快照回到这个 ep
-            var snapEp = engine._snapshotEpisode(wf, engine.getPipeline());
-            Object.keys(snapEp).forEach(function (k) { ep[k] = snapEp[k]; });
-          }
-        }
-        // 切回第1集
-        engine.switchEpisode(firstEp.id);
-        var fullText = firstData.full_text || "";
-        var tpl = (window.WF_Templates || []).find(function (t) { return t.id === wf.templateId; });
-        var defaultTitle = tpl ? tpl.name : "新工作流";
-        if (fullText && (wf.title === defaultTitle || wf.title === "新工作流")) {
-          wf.title = fullText.replace(/[\n\r]/g, " ").slice(0, 20);
-        }
-        return {
-          fullText: fullText,
-          segments: firstData.segments || [],
-          mainCharacters: data.main_characters || [],
-        };
-      }
+      // 规划过的集（episodePlan 已生成且包含本集）：plot 已自洽，不再传前集剧本。
+      // 未规划过的续写集（用户手动"新增剧集"扩出来）：按原有逻辑传前集上下文保证衔接。
+      var epPlanV = NR.getActiveVersion((wf.episodePlans || [])[0]);
+      var curIdx = curEp ? curEp.index : 0;
+      var plannedEpisodes = (epPlanV && epPlanV.episodes) || [];
+      var isPlanned = plannedEpisodes.some(function (e) { return (e.index | 0) === curIdx; });
+      var prevCtx = isPlanned ? null : getPrevEpisodesContext(wf);
 
-      var prevCtx = getPrevEpisodesContext(wf);
       var data = await callApi("/api/workflow/generate/script", {
         workflow_id: wf.id, chat_config_id: getConfigId("chat", "script"),
         plot: (curEp && curEp.plot) || wf.input.plot,
         style: wf.input.style, type: wf.input.type,
         segment_count: wf.input.segmentCount,
-        episode_index: curEp ? curEp.index : 0,
+        episode_index: curIdx,
         prev_episodes: prevCtx ? prevCtx.episodes : [],
       });
       if (data.segments && data.segments.length) {
@@ -1533,6 +1564,7 @@
     title: "视频工作流",
     pipeline: [
       { nodeType: "input", category: "global" },
+      { nodeType: "episodePlan", category: "global" },
       { nodeType: "script", category: "global" },
       { nodeType: "planCharactersScenes", category: "global" },
       { nodeType: "mainCharacters", category: "global" },

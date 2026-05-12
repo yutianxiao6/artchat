@@ -307,6 +307,17 @@
     }
     html += '</div></div>';
 
+    // -- Episode Plan column --（仅多集时渲染为可见卡片；单集视为透传）
+    if (!wf.episodePlanSkip) {
+      var epCountRC = parseInt(wf.input && wf.input.episodeCount) || 0;
+      if (epCountRC > 1) {
+        var epArr = wf.episodePlans || [];
+        html += '<div class="wf-gcol" data-col="episodePlan"><div class="wf-col-header">剧集规划</div><div class="wf-col-body">';
+        html += renderContentCard(engine, "episodePlan", epArr[0], 0, null);
+        html += '</div></div>';
+      }
+    }
+
     // -- Script column --
     if (!wf.scriptSkip) {
       var scriptArr = wf.scripts || [];
@@ -522,6 +533,19 @@
       if (v.segments && v.segments.length) {
         html += '<div class="wf-card-tag">' + v.segments.length + ' 段</div>';
       }
+    } else if (nodeType === "episodePlan") {
+      var epList = v.episodes || [];
+      if (epList.length) {
+        html += '<div class="wf-card-tag">共 ' + epList.length + ' 集</div>';
+        epList.forEach(function (ep, i) {
+          html += '<div class="wf-ep-plan-item">'
+            + '<div class="wf-ep-plan-title">' + esc(ep.title || ("第" + (i + 1) + "集")) + '</div>'
+            + '<div class="wf-ep-plan-plot">' + esc((ep.plot || "").slice(0, 140)) + ((ep.plot || "").length > 140 ? '…' : '') + '</div>'
+            + '</div>';
+        });
+      } else {
+        html += '<div class="wf-card-text">已规划</div>';
+      }
     } else if (nodeType === "planCharactersScenes") {
       var mc = v.mainCharacters || [];
       var segs = v.segments || [];
@@ -662,7 +686,7 @@
 
     if (isPipelineNode && nodeType !== "input" && nodeType !== "fpInput" && nodeType !== "rcInput" && nodeType !== "rcOutput" && nodeType !== "rcKeyframes") {
       html += renderModelSelect(engine, nodeType);
-      if (nodeType !== "planCharactersScenes" && nodeType !== "planFrames") {
+      if (nodeType !== "planCharactersScenes" && nodeType !== "planFrames" && nodeType !== "episodePlan") {
         html += renderSkipToggle(engine, key);
       }
       if (nodeType === "storyboard") {
@@ -729,6 +753,7 @@
     // video 模板节点 + 二创纯文本节点 都用聊天模型
     var needsChat = [
       "script", "planCharactersScenes", "planFrames", "videoPrompt", "framePrompt",
+      "episodePlan",
       "rcPlotAlign", "rcPlotRewrite", "rcStoryboard"
     ].indexOf(nodeType) >= 0;
     var needsImage = [

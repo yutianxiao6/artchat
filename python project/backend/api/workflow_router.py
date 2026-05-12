@@ -813,6 +813,70 @@ async def gen_script_multi(body: dict):
     return JSONResponse({"code": 0, "data": result})
 
 
+@router.post("/generate/episode-plan")
+async def gen_episode_plan(body: dict):
+    """只拆剧情为 N 集，每集返回独立的 plot，不生成剧本正文。
+    用于前置节点：避免大剧本一次性全部塞进 script 节点导致 token 超限。
+    - episode_count <= 1：视为单集直通，直接返回原 plot。
+    - episode_count > 1：让模型均匀分配情节到每一集，保证集间因果衔接。
+    """
+    plot = body.get("plot", "") or ""
+    style = body.get("style", "") or ""
+    vtype = body.get("type", "") or ""
+    try:
+        episode_count = int(body.get("episode_count") or 1)
+    except Exception:
+        episode_count = 1
+    episode_count = max(1, min(episode_count, 20))
+
+    if episode_count <= 1:
+        return JSONResponse({"code": 0, "data": {
+            "episodes": [{"index": 0, "title": "第1集", "plot": plot}],
+            "single": True,
+        }})
+
+    config = get_config_by_id(body.get("chat_config_id", "")) or get_first_config("chat")
+    if not config:
+        raise HTTPException(status_code=400, detail="未找到聊天配置")
+
+    system_prompt = f"""你是一位专业的影视编剧。用户给了一个总体情节，请把它拆成 {episode_count} 集的分集大纲。
+
+要求：
+1. 把总体情节中的事件、冲突、转折均匀分配到 {episode_count} 集中，每集承担一块故事进度。
+2. 每集必须有独立的起承转合，同时与前后集因果衔接、悬念递进，避免事件重复。
+3. 每集 plot 控制在 120-220 字之间，清楚交代本集主要事件、人物动机、结尾留的钩子。
+4. 只输出分集大纲，不要输出剧本正文、分段、人物表等。
+5. 风格参考：{style}；类型参考：{vtype}。
+
+只输出JSON：
+{{
+  "episodes": [
+    {{"index": 0, "title": "第1集标题", "plot": "本集情节简述"}},
+    {{"index": 1, "title": "第2集标题", "plot": "本集情节简述"}}
+  ]
+}}"""
+    user_text = f"总体情节：\n{plot}\n\n请拆成 {episode_count} 集。"
+    result = await call_llm_json(config, system_prompt, user_text, max_tokens=4000)
+
+    eps = result.get("episodes") or []
+    if not isinstance(eps, list) or not eps:
+        raise HTTPException(status_code=500, detail="模型未返回 episodes")
+
+    fixed = []
+    for i, ep in enumerate(eps[:episode_count]):
+        if not isinstance(ep, dict):
+            ep = {}
+        fixed.append({
+            "index": i,
+            "title": (ep.get("title") or f"第{i+1}集").strip() or f"第{i+1}集",
+            "plot": (ep.get("plot") or "").strip(),
+        })
+    while len(fixed) < episode_count:
+        i = len(fixed)
+        fixed.append({"index": i, "title": f"第{i+1}集", "plot": ""})
+    return JSONResponse({"code": 0, "data": {"episodes": fixed, "single": False}})
+
+
 @router.post("/generate/script-iterate")
 async def gen_script_iterate(body: dict):
     config = get_config_by_id(body.get("chat_config_id", "")) or get_first_config("chat")
