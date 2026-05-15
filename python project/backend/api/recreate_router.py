@@ -1676,12 +1676,15 @@ def _compose_grid_core(
 @router.post("/compose-grid/{workflow_id}")
 async def compose_grid_api(workflow_id: str, body: dict):
     """
-    入参：{segments: [{index, frame_urls, rows?, cols?}]}；缺 rows/cols 时按数量推导。
+    入参：{segments: [{index, frame_urls, rows?, cols?}], out_subdir?, filename_prefix?}
+    可选 out_subdir / filename_prefix 用于避免覆盖默认 grid_composed/seg_{idx}.jpg。
     返回：{segments: [{index, url, width, height, cell_w, cell_h, rows, cols, urls}]}
     """
     segs_in = body.get("segments") or []
     if not segs_in:
         raise HTTPException(status_code=400, detail="缺少 segments")
+    out_subdir = (body.get("out_subdir") or "grid_composed").strip().replace("/", "_")
+    filename_prefix = (body.get("filename_prefix") or "seg").strip().replace("/", "_")
     out_segs = []
     for s in segs_in:
         idx = int(s.get("index", 0))
@@ -1694,7 +1697,8 @@ async def compose_grid_api(workflow_id: str, body: dict):
         if rows <= 0 or cols <= 0:
             rows, cols = _rows_cols_for_count(len(urls))
         try:
-            r = _compose_grid_core(workflow_id, idx, urls, rows, cols)
+            r = _compose_grid_core(workflow_id, idx, urls, rows, cols,
+                                    out_subdir=out_subdir, filename_prefix=filename_prefix)
             r["index"] = idx
             out_segs.append(r)
         except HTTPException:

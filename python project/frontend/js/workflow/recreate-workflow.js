@@ -2225,8 +2225,11 @@
     var rows = st.rows, cols = st.cols, picks = st.picks || [];
     if (picks.length < rows * cols) { alert("请把所有格子选满"); return; }
     try {
+      var stamp = Date.now().toString(36);
       var data = await callApi("/api/recreate/compose-grid/" + wf.id, {
         segments: [{ index: segIdx, frame_urls: picks, rows: rows, cols: cols }],
+        out_subdir: "grid_reorg",
+        filename_prefix: nodeType + "_reorg_" + stamp,
       });
       var segOut = (data.segments || [])[0];
       if (!segOut || !segOut.url) throw new Error("compose-grid 返回为空");
@@ -2369,14 +2372,19 @@
       for (var i = 0; i < total; i++) {
         var r = Math.floor(i / cols), c = i % cols;
         var pickedUrl = picks[i];
-        var bgStyle = pickedUrl
-          ? 'background:#000 url("' + esc(pickedUrl) + '") center/cover;'
-          : (i === nextSlot ? 'background:rgba(96,165,250,.25);border:2px dashed #60a5fa;' : 'background:rgba(148,163,184,.1);border:1px dashed rgba(148,163,184,.3);');
-        previewCells += '<div style="position:absolute;left:' + (c * cellWPct) + '%;top:' + (r * cellHPct) + '%;width:' + cellWPct + '%;height:' + cellHPct + '%;'
-          + bgStyle
-          + 'box-sizing:border-box;display:flex;align-items:center;justify-content:center;color:#fbbf24;font-weight:bold;font-size:14px;text-shadow:0 1px 2px rgba(0,0,0,.8);">'
-          + (pickedUrl ? '' : (i + 1))
-          + '</div>';
+        var posStyle = 'position:absolute;left:' + (c * cellWPct) + '%;top:' + (r * cellHPct) + '%;width:' + cellWPct + '%;height:' + cellHPct + '%;';
+        if (pickedUrl) {
+          previewCells += '<div style="' + posStyle + 'overflow:hidden;background:#000;">'
+            + '<img src="' + esc(pickedUrl) + '" style="width:100%;height:100%;object-fit:cover;display:block;">'
+            + '</div>';
+        } else {
+          var bg = (i === nextSlot)
+            ? 'background:rgba(96,165,250,.25);border:2px dashed #60a5fa;'
+            : 'background:rgba(148,163,184,.1);border:1px dashed rgba(148,163,184,.3);';
+          previewCells += '<div style="' + posStyle + bg + 'box-sizing:border-box;display:flex;align-items:center;justify-content:center;color:#fbbf24;font-weight:bold;font-size:14px;text-shadow:0 1px 2px rgba(0,0,0,.8);">'
+            + (i + 1)
+            + '</div>';
+        }
       }
 
       // 候选 cells 列表
