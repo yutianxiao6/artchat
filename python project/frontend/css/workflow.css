@@ -319,3 +319,4 @@
 .wf-rc-replace-frame:hover { border-color:#60a5fa !important; transform:scale(1.04); }
 .wf-rc-ref-img { transition: transform .15s; }
 .wf-rc-ref-img:hover { transform:scale(1.05); }
+.wf-rc-ref-img .wf-ref-del-btn { opacity:1; }
