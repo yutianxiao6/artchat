@@ -147,6 +147,8 @@
         wf[step.nodeType + "s"] = [NR.createNodeData()];
       }
     });
+    var defaultSkips = (template && template.pipeline && template.pipeline.defaultSkips) || [];
+    defaultSkips.forEach(function (nt) { wf[nt + "Skip"] = true; });
     wf.segments = [];
     // 初始化 episode 模型
     var ep0 = Object.assign({
@@ -666,9 +668,21 @@
 
   P.isNodeSkipped = function (nodeType, segIdx, wf) {
     if (!wf) return false;
-    if (wf[nodeType + "Skip"]) return true;
+    var skipKey = nodeType + "Skip";
+    if (wf[skipKey] !== undefined) {
+      if (segIdx !== null && segIdx !== undefined && wf.segments && wf.segments[segIdx]) {
+        var segVal = wf.segments[segIdx][skipKey];
+        if (segVal !== undefined) return !!segVal;
+      }
+      return !!wf[skipKey];
+    }
     if (segIdx !== null && segIdx !== undefined && wf.segments && wf.segments[segIdx]) {
-      return !!wf.segments[segIdx][nodeType + "Skip"];
+      return !!wf.segments[segIdx][skipKey];
+    }
+    // 二创工作流里，frame-label / script / plot-rewrite 三个节点默认关闭
+    if (wf.templateId === "recreate-drama"
+        && (nodeType === "rcFrameLabel" || nodeType === "rcScript" || nodeType === "rcPlotRewrite")) {
+      return true;
     }
     return false;
   };
@@ -812,35 +826,22 @@
         addDep("rcScript", null);
         break;
       case "rcSmartSegment":
-        addDep("rcScript", null);
-        addDep("rcPlotRewrite", null);
+        addDep("rcKeyframes", null);
         break;
       case "rcRepFrames":
         addDep("rcSmartSegment", null);
-        addDep("rcFrameLabel", null);
         break;
-      case "rcPlanCharScenes":
+      case "rcGridCompose":
         addDep("rcRepFrames", null);
-        addDep("rcSmartSegment", null);
         break;
-      case "rcCharacters":
-        addDep("rcPlanCharScenes", null);
+      case "rcStoryboardOrig":
+        addDep("rcGridCompose", null);
         break;
-      case "rcScenes":
-        addDep("rcPlanCharScenes", null);
-        break;
-      case "rcStoryboard":
-        addDep("rcPlotRewrite", null);
-        addDep("rcCharacters", null);
-        addDep("rcScenes", segIdx);
-        addDep("rcRepFrames", null);
-        addDep("rcFrameLabel", null);
-        addDep("rcKeyframes", null);
+      case "rcStoryboardRemix":
+        addDep("rcStoryboardOrig", segIdx);
         break;
       case "rcVideoPrompt":
-        addDep("rcStoryboard", segIdx);
-        addDep("rcCharacters", null);
-        addDep("rcScenes", segIdx);
+        addDep("rcStoryboardRemix", segIdx);
         addDep("rcSmartSegment", null);
         break;
     }

@@ -323,15 +323,15 @@ def pipeline_extract_keyframes(
     返回 keyframes.json 结构字典（不含 url，由路由层拼接）。
     """
     params = dict(params or {})
-    min_scene_threshold = float(params.get("min_scene_threshold", 0.10))
-    long_shot_max_gap = float(params.get("long_shot_max_gap", 4.0))
-    merge_min_dt = float(params.get("merge_min_dt", 0.4))
-    sharpness_min = float(params.get("sharpness_min", 80.0))
-    hamming_dedup_threshold = int(params.get("hamming_dedup_threshold", 8))
+    min_scene_threshold = float(params.get("min_scene_threshold", 0.08))
+    long_shot_max_gap = float(params.get("long_shot_max_gap", 2.0))
+    merge_min_dt = float(params.get("merge_min_dt", 0.35))
+    sharpness_min = float(params.get("sharpness_min", 60.0))
+    hamming_dedup_threshold = int(params.get("hamming_dedup_threshold", 4))
     luma_lo = float(params.get("luma_lo", 10.0))
     luma_hi = float(params.get("luma_hi", 245.0))
     edge_density_min = float(params.get("edge_density_min", 0.02))
-    max_candidates = int(params.get("max_candidates", 300))
+    max_candidates = int(params.get("max_candidates", 600))
 
     meta = get_video_metadata(video_path)
     duration = meta["duration"]

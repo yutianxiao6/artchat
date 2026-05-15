@@ -5,6 +5,7 @@ recreate_router.py — 二创影视剧工作流专用路由
 
 import os
 import json
+import math
 import base64 as b64mod
 import asyncio
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form
@@ -218,6 +219,29 @@ def _load_ref_image_b64(image_url: str, max_size: int = 1500000) -> str:
         return ""
 
 
+def _load_thumbnail_b64(image_url: str, max_dim: int = 256, quality: int = 70) -> str:
+    """强制缩小到 max_dim 的 JPEG 缩略图。用于智能分段这种只需要判断画面相似性/转场的场景。"""
+    if not image_url or not image_url.startswith("/workflow-images/"):
+        return ""
+    rel = image_url.replace("/workflow-images/", "", 1)
+    path = os.path.join(WORKFLOW_ROOT, rel)
+    if not os.path.isfile(path):
+        return ""
+    try:
+        from PIL import Image
+        import io
+        img = Image.open(path)
+        if img.mode != "RGB":
+            img = img.convert("RGB")
+        if max(img.size) > max_dim:
+            img.thumbnail((max_dim, max_dim), Image.LANCZOS)
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=quality)
+        return "data:image/jpeg;base64," + b64mod.b64encode(buf.getvalue()).decode()
+    except Exception:
+        return ""
+
+
 def _collect_ref_images(extra_urls=None):
     refs = []
     seen = set()
@@ -412,6 +436,28 @@ async def extract_keyframes_api(workflow_id: str, body: dict):
     except OSError:
         pass
 
+    # 密度补帧：按 10s 滑动窗口（步长 5s）扫描，任何 10s 窗口内 < 9 帧就补到 9 帧
+    try:
+        density_added = _ensure_window_density(
+            video_path=video_path,
+            workflow_id=workflow_id,
+            window_sec=10.0,
+            stride_sec=5.0,
+            target_per_window=9,
+        )
+        if density_added > 0:
+            # 重新读 keyframes.json，把 result.frames 同步成最新（含补帧）
+            kf_path = os.path.join(wf_dir, "keyframes.json")
+            if os.path.isfile(kf_path):
+                try:
+                    new_kf = json.load(open(kf_path, "r", encoding="utf-8"))
+                    result["frames"] = new_kf.get("frames", result["frames"])
+                    result.setdefault("stats", {})["density_supplement_added"] = density_added
+                except Exception:
+                    pass
+    except Exception as e:
+        print(f"[extract-keyframes] 密度补帧失败（不阻断主流程）: {e}")
+
     return JSONResponse({"code": 0, "data": result})
 
 
@@ -435,7 +481,7 @@ def _parse_b64_image(b64_data: str):
     return media_type, raw
 
 
-async def _call_llm_json(config: dict, system_prompt: str, user_prompt: str, max_tokens: int = 20000) -> dict:
+async def _call_llm_json(config: dict, system_prompt: str, user_prompt: str, max_tokens: int = 20000, timeout: float = 180.0) -> dict:
     headers = {"Content-Type": "application/json", "Authorization": f"Bearer {config['api_key']}"}
     url = config["api_base"].rstrip("/") + "/chat/completions"
     data = {
@@ -444,7 +490,7 @@ async def _call_llm_json(config: dict, system_prompt: str, user_prompt: str, max
         "temperature": 0.7, "stream": False, "max_tokens": max_tokens,
         "response_format": {"type": "json_object"}
     }
-    response = await async_http_request("POST", url, headers, data, timeout=180.0)
+    response = await async_http_request("POST", url, headers, data, timeout=timeout)
     if response.status_code != 200:
         raise HTTPException(status_code=response.status_code, detail=response.text[:500])
     result = response.json()
@@ -454,7 +500,7 @@ async def _call_llm_json(config: dict, system_prompt: str, user_prompt: str, max
     return _parse_json_robust(content)
 
 
-async def _call_llm_vision_json(config: dict, system_prompt: str, user_text: str, images: list, max_tokens: int = 20000) -> dict:
+async def _call_llm_vision_json(config: dict, system_prompt: str, user_text: str, images: list, max_tokens: int = 20000, timeout: float = 180.0) -> dict:
     """调用视觉模型，images 格式: [{"b64": "data:...", "label": "说明"}]"""
     headers = {"Content-Type": "application/json", "Authorization": f"Bearer {config['api_key']}"}
     url = config["api_base"].rstrip("/")
@@ -482,7 +528,7 @@ async def _call_llm_vision_json(config: dict, system_prompt: str, user_text: str
             "system": system_prompt,
             "messages": [{"role": "user", "content": user_content}],
         }
-        response = await async_http_request("POST", url, headers, data, timeout=180.0)
+        response = await async_http_request("POST", url, headers, data, timeout=timeout)
         if response.status_code != 200:
             raise HTTPException(status_code=response.status_code, detail=response.text[:500])
         result = response.json()
@@ -511,7 +557,7 @@ async def _call_llm_vision_json(config: dict, system_prompt: str, user_text: str
             "temperature": 0.7, "stream": False, "max_tokens": max_tokens,
             "response_format": {"type": "json_object"}
         }
-        response = await async_http_request("POST", url, headers, data, timeout=180.0)
+        response = await async_http_request("POST", url, headers, data, timeout=timeout)
         if response.status_code != 200:
             raise HTTPException(status_code=response.status_code, detail=response.text[:500])
         result = response.json()
@@ -771,7 +817,7 @@ async def gen_frame_label(body: dict):
 async def llm_script_compose(config: dict, batches: list, duration: float, plot: str = "") -> dict:
     """
     输入：batches = [{start_index,end_index,start_ts,end_ts,camera_summary,script_fragment}]
-    输出：{full_script, segments:[{index,start,end,theme,script_text,camera_notes,frame_range:[s,e]}]}
+    输出：{full_script}  ——只产出整篇连贯剧本文本，不再分段。
     """
     raw_lines = []
     for i, b in enumerate(batches):
@@ -782,31 +828,23 @@ async def llm_script_compose(config: dict, batches: list, duration: float, plot:
             f"  片段: {b.get('script_fragment','')}"
         )
     raw_text = "\n\n".join(raw_lines) if raw_lines else "（无批标注）"
-    plot_block = f"\n【原始剧情参考】\n{plot[:1200]}\n" if plot else ""
+    plot_block = f"\n【原始剧情参考】\n{plot[:1500]}\n" if plot else ""
 
     system_prompt = f"""你是一位影视剧本撰写师。已有一份按批次记录的原视频帧序列笔记（见下方，每批包含运镜摘要+剧情片段）。
 
-任务：把所有批次合并为**一份连贯完整的剧本演绎文本**，并按叙事节奏**自然分段**（段数由叙事决定，3~15 段之间）。
-
+任务：把所有批次合并为**一份连贯完整的剧本演绎文本**，**不要分段**，直接输出整篇。
 要求：
-1. full_script：整部视频的完整连贯叙事（不拘泥批次边界，避免碎片化，控制在 400~1500 字）
-2. segments：按叙事自然段（不是按批次等分），每段给：
-   - start/end：对应原视频的时间（秒），必须严格按时间递进不重叠
-   - theme：一句话主题（≤20 字）
-   - script_text：本段剧情文本（80~300 字，包含动作/对白/情绪）
-   - camera_notes：本段运镜摘要（综合所涉批次的运镜描述）
-   - frame_range：[起始原始帧 index, 结束原始帧 index]
-3. 全部段的时间范围覆盖 0 到 {duration:.2f}s（最后一段 end 接近视频时长）
+1. 整片视频总时长约 {duration:.0f} 秒，按时间顺序叙述。
+2. 文本要连贯，整合动作、对白、情绪与运镜，避免碎片化。
+3. 字数 600~2500 字，长度按视频时长酌情。
+4. 必要时可用空行划分自然段，但不要给段编号、不要输出 segments 列表。
 {plot_block}
 只输出 JSON：
 {{
-  "full_script":"整片剧本文本",
-  "segments":[
-    {{"index":0,"start":0.0,"end":12.5,"theme":"...","script_text":"...","camera_notes":"...","frame_range":[0,5]}}
-  ]
+  "full_script":"整片剧本文本（一大段，可含自然分段空行）"
 }}"""
     user_text = f"视频总时长 {duration:.2f}s。原始批次笔记：\n\n{raw_text}"
-    return await _call_llm_json(config, system_prompt, user_text, max_tokens=16000)
+    return await _call_llm_json(config, system_prompt, user_text, max_tokens=12000, timeout=420.0)
 
 
 @router.post("/generate/script")
@@ -814,7 +852,7 @@ async def gen_script(body: dict):
     """
     Round 1.5：基于 frame_labels.batches 合成完整剧本并分段。
     输入：{workflow_id, chat_config_id, max_retries?}
-    输出：{full_script, segments:[...]} 写入 script.json。
+    输出：{full_script} 写入 script.json。
     """
     config = _get_config_by_id(body.get("chat_config_id", "")) or _get_first_config("chat")
     if not config:
@@ -874,29 +912,7 @@ async def gen_script(body: dict):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"剧本合成失败: {e}")
 
-    # 规范化 segments
-    segs = raw.get("segments") or []
-    out_segs = []
-    for i, s in enumerate(segs):
-        start = max(0.0, float(s.get("start", 0.0)))
-        end = min(duration, float(s.get("end", 0.0)))
-        if end <= start:
-            continue
-        fr = s.get("frame_range") or [0, 0]
-        if not isinstance(fr, list) or len(fr) < 2:
-            fr = [0, 0]
-        out_segs.append({
-            "index": len(out_segs),
-            "start": round(start, 2),
-            "end": round(end, 2),
-            "duration": round(end - start, 2),
-            "theme": (s.get("theme") or "")[:40],
-            "script_text": s.get("script_text") or "",
-            "camera_notes": s.get("camera_notes") or "",
-            "frame_range": [int(fr[0]), int(fr[1])],
-        })
-
-    result = {"full_script": raw.get("full_script") or "", "segments": out_segs}
+    result = {"full_script": raw.get("full_script") or ""}
     try:
         with open(os.path.join(wf_dir, "script.json"), "w", encoding="utf-8") as f:
             json.dump(result, f, ensure_ascii=False, indent=2)
@@ -907,178 +923,295 @@ async def gen_script(body: dict):
 
 
 # ═══════════════════════════════════════════════════
-#  Round 2：智能分段（纯文本 LLM）
-#  职责：把视觉帧分配到 rewrite-plot 决定的段数上
+#  Round 2：智能分段（纯关键帧视觉判转场）
+#  职责：直接看关键帧缩略图判断画面切换点，输出段边界。
+#        不依赖 script.json / rewrite_plot.json。
 # ═══════════════════════════════════════════════════
 
-async def llm_smart_segment(
+async def llm_detect_cuts_in_batch(
     config: dict,
-    script_segments: list,     # 原剧本段：[{index,start,end,script_text,frame_range:[s,e]}]
-    rewrite_segments: list,    # 新剧本段：[{index,script,dialogue,seconds,text,...}]
-    duration: float,
-    keyframes: "list | None" = None,  # [{index,url,timestamp}]，用于挑缩略图
-    max_seg_sec: float = 10.0,
-    min_seg_sec: float = 3.0,
-    max_thumbs_per_origin: int = 1,
-) -> dict:
-    """
-    视觉增强：为每个原剧本段送 1~2 张缩略图，让 LLM 结合画面与新剧情文本决定分段。
-    硬约束：**所有新段的时长总和 ≥ 视频时长**（只增不减，覆盖全部画面）。
-    输出每段的 start/end 和 frame_indices。
-    """
-    rw_block = "\n".join(
-        f"新段 {s.get('index', i)} | 建议时长 {float(s.get('seconds') or 0):.1f}s: "
-        + ((s.get('script') or s.get('text') or '').replace(chr(10), ' ')[:220])
-        for i, s in enumerate(rewrite_segments)
-    )
-    # 采样缩略图：每个原剧本段取中间一帧
-    images: list = []
-    kf_url = {f.get("index"): f.get("url", "") for f in (keyframes or [])}
-    sc_lines = []
-    for i, s in enumerate(script_segments):
-        fr = s.get("frame_range") or [0, 0]
-        sc_lines.append(
-            f"原段 {s.get('index', i)} [{s.get('start',0):.1f}s-{s.get('end',0):.1f}s | 帧{fr[0]}-{fr[1]}]: "
-            + (s.get("script_text") or "").replace("\n", " ")[:160]
-        )
-        # 挑中间一帧送入视觉
-        fr_lo, fr_hi = int(fr[0]), int(fr[1])
-        if fr_hi < fr_lo:
-            fr_lo, fr_hi = fr_hi, fr_lo
-        mid = (fr_lo + fr_hi) // 2
-        url = kf_url.get(mid) or kf_url.get(fr_lo) or kf_url.get(fr_hi)
-        if url:
-            b64 = _load_ref_image_b64(url)
-            if b64:
-                images.append({"b64": b64, "label": f"原段{s.get('index', i)} 中间帧"})
-                if len(images) >= len(script_segments) * max_thumbs_per_origin:
-                    continue
-
-    sc_block = "\n".join(sc_lines)
-    n_target = len(rewrite_segments)
-    total_suggested = sum(float(s.get("seconds") or 0) for s in rewrite_segments)
-
-    system_prompt = f"""你是一位影视剪辑师。综合画面缩略图 + 原剧本段 + 改编新剧本段，决定如何把新剧情段安排到视频时间轴上。
-
-关键硬约束：
-1. 输出 **正好 {n_target} 段**，index 与新剧情段号一致
-2. **时长只增不减**：所有段时长之和 ≥ 视频时长（{duration:.2f}s）。二创允许扩展时长（因为可能加对白/情绪停顿/额外镜头），但**严禁压缩**。新剧情建议总时长 {total_suggested:.1f}s，请据此分配每段 seconds
-3. 每段硬约束：{min_seg_sec:.1f}s ≤ seconds ≤ {max_seg_sec:.1f}s（段要短，便于分镜设计）
-4. start/end 表示该段**对应的原视频时间范围**（用于选参考帧）：start/end 按 0→{duration:.2f} 递进覆盖，第 1 段 start=0，最后一段 end={duration:.2f}；相邻段的 end/start 相等不重叠
-5. seconds 表示**新剧情本段目标时长**（可以 > end-start，因为二创延长）
-6. frame_indices：从原段 frame_range 挑选与本段 [start,end] 相交的原始帧 index（整数数组）
-7. theme 必须概括**新剧情**（≤25 字），不要沿用原剧本
-8. 请结合画面缩略图（标注了原段 index）理解画面节奏，确认段边界落在画面切换的合理位置
-
-只输出 JSON：
-{{
-  "segments":[
-    {{"index":0,"start":0.0,"end":6.2,"seconds":7.5,"theme":"新剧情主题","frame_indices":[0,1,2],"source_origin_segments":[0],"transitions":{{"in":"fade_in","out":"cut"}},"characters_in_scene":["..."]}}
-  ]
-}}"""
-    user_text = (
-        f"视频总时长 {duration:.2f}s，目标新段数 {n_target}；新剧情建议总时长 {total_suggested:.1f}s（允许 ≥ 视频时长）。\n\n"
-        f"【改编新剧本（含建议时长）】\n{rw_block}\n\n"
-        f"【原剧本分段（提供时间/帧范围参考；theme 不要沿用原剧本）】\n{sc_block}\n\n"
-        f"已附上 {len(images)} 张原段中间帧缩略图供画面参考。"
-    )
-    if images:
-        return await _call_llm_vision_json(config, system_prompt, user_text, images, max_tokens=12000)
-    return await _call_llm_json(config, system_prompt, user_text, max_tokens=12000)
-
-
-def _enforce_segment_constraints(
-    segments: list, duration: float,
-    max_seg_sec: float = 10.0, min_seg_sec: float = 3.0,
+    batch_frames: list,  # [{index, timestamp, b64}]
 ) -> list:
     """
-    后端兜底：
-      1. 把 start/end 规范化到 [0, duration]，相邻不重叠，首段 start=0，尾段 end=duration
-      2. seconds 字段：保留 LLM 给的值（允许 > end-start，表示二创目标时长）；缺失则回填 end-start
-      3. 超短段（视频时间段 < min_seg_sec）并入邻段；超长段切分
+    输入一批关键帧（按时间顺序，<=80 张），让视觉 LLM 输出哪些 index 是转场点
+    （即"和上一帧画面差异显著、属于新场景的开端"）。
+    返回：[{index:int, kind:str, reason?:str}]，kind ∈ cut/fade/dissolve/match_cut。
+    第一帧不算转场点（开场默认是新场景）。
     """
-    cleaned = []
-    for seg in segments:
-        start = max(0.0, float(seg.get("start", 0.0)))
-        end = min(duration, float(seg.get("end", 0.0)))
-        if end <= start:
+    if not batch_frames:
+        return []
+    images = [
+        {"b64": f["b64"], "label": f"idx={f['index']} t={f['timestamp']:.1f}s"}
+        for f in batch_frames if f.get("b64")
+    ]
+    if not images:
+        return []
+    idx_list = [f["index"] for f in batch_frames if f.get("b64")]
+    system_prompt = """你是一位专业影视剪辑师。下面给你一批按时间顺序的关键帧缩略图，每张图带 idx 标签。
+
+任务：找出**新场景开端**的帧（即与前一帧相比画面切换明显的位置）。
+- 同机位的小幅运动/对话切镜虽有差别但属于"同一场景延续"，不算转场。
+- 切到完全不同的地点/构图/角色组合 → cut。
+- 渐变黑/渐变白 → fade。叠化 → dissolve。配对剪辑 → match_cut。
+- 第一张缩略图不算转场点。
+
+只输出 JSON：
+{
+  "cuts": [
+    {"index": 12, "kind": "cut", "reason": "从室内对话切到室外街景"}
+  ]
+}
+没有转场就输出 {"cuts": []}。"""
+    user_text = f"本批共 {len(images)} 张关键帧，idx 序列：{idx_list}。请按时间顺序判断哪些 idx 是新场景开端。"
+    res = await _call_llm_vision_json(config, system_prompt, user_text, images, max_tokens=4000, timeout=240.0)
+    cuts = res.get("cuts") or []
+    valid = set(idx_list)
+    out = []
+    for c in cuts:
+        try:
+            i = int(c.get("index"))
+        except (TypeError, ValueError):
             continue
-        seconds = float(seg.get("seconds", end - start) or (end - start))
-        cleaned.append({
-            **seg,
-            "start": round(start, 2),
-            "end": round(end, 2),
-            "duration": round(end - start, 2),
-            "seconds": round(max(seconds, end - start), 2),  # seconds 至少等于视频段长
-            "frame_indices": list(seg.get("frame_indices") or []),
-        })
-    cleaned.sort(key=lambda s: s["start"])
-    if not cleaned:
+        if i not in valid:
+            continue
+        out.append({"index": i, "kind": (c.get("kind") or "cut")[:20], "reason": (c.get("reason") or "")[:80]})
+    return out
+
+
+async def detect_cuts_all_frames(
+    config: dict,
+    keyframes: list,  # [{index, timestamp, url}]
+    batch_size: int = 80,
+    overlap: int = 4,
+) -> list:
+    """
+    把所有关键帧按 batch_size 切批送视觉 LLM 判转场，相邻批保留 overlap 帧重叠以避免漏判跨批转场。
+    返回：去重后的 cut idx 列表（升序）。
+    """
+    if not keyframes:
+        return []
+    frames = []
+    for f in keyframes:
+        url = f.get("url") or ""
+        b = _load_thumbnail_b64(url, max_dim=256, quality=70) if url else ""
+        if not b:
+            continue
+        frames.append({"index": int(f.get("index", 0)), "timestamp": float(f.get("timestamp", 0.0)), "b64": b})
+    if not frames:
+        return []
+    frames.sort(key=lambda x: x["index"])
+
+    cut_set = set()
+    n = len(frames)
+    step = max(1, batch_size - overlap)
+    i = 0
+    while i < n:
+        batch = frames[i: i + batch_size]
+        if not batch:
+            break
+        try:
+            cuts = await llm_detect_cuts_in_batch(config, batch)
+        except Exception as e:
+            print(f"[smart-segment] batch [{i},{i+len(batch)}) detect failed: {str(e)[:120]}")
+            cuts = []
+        first_idx_in_batch = batch[0]["index"] if batch else None
+        for c in cuts:
+            if first_idx_in_batch is not None and c["index"] == first_idx_in_batch:
+                continue
+            cut_set.add(c["index"])
+        if i + batch_size >= n:
+            break
+        i += step
+    return sorted(cut_set)
+
+
+def _build_segments_from_cuts(
+    keyframes: list,
+    cut_indices: list,
+    duration: float,
+    min_sec: int = 7,
+    max_sec: int = 15,
+) -> list:
+    """
+    根据视觉识别出的 cut 帧 idx 列表构建 segments，强制每段满足：
+    - min_sec <= 段长 <= max_sec
+    - start / end / duration 均为整数秒
+    流程：
+    1) 按 cut 形成 raw 浮点段
+    2) 合并过短段（< min_sec）到相邻较短一侧
+    3) 拆分过长段（> max_sec）：均匀切，每块仍 >= min_sec
+    4) 整数化每段时长，保证 sum == round(duration)，每段 in [min_sec, max_sec]
+    5) 累加成 boundary 后回填关键帧
+    """
+    if not keyframes:
         return []
 
-    # 修补首尾，把 start=0 / end=duration，中间段相邻端点衔接
-    cleaned[0]["start"] = 0.0
-    cleaned[-1]["end"] = round(duration, 2)
-    for i in range(1, len(cleaned)):
-        prev = cleaned[i-1]
-        cur = cleaned[i]
-        cur["start"] = prev["end"]
-        if cur["end"] <= cur["start"]:
-            cur["end"] = min(duration, cur["start"] + 0.1)
-    for s in cleaned:
-        s["duration"] = round(s["end"] - s["start"], 2)
-        s["seconds"] = round(max(s.get("seconds", s["duration"]), s["duration"]), 2)
+    min_sec = max(1, int(min_sec))
+    max_sec = max(min_sec, int(max_sec))
 
-    # 合并超短段（基于视频段长）
-    merged = []
-    for seg in cleaned:
-        if merged and seg["duration"] < min_seg_sec:
-            prev = merged[-1]
-            prev["end"] = seg["end"]
-            prev["duration"] = round(prev["end"] - prev["start"], 2)
-            prev["seconds"] = round(prev.get("seconds", 0) + seg.get("seconds", 0), 2)
-            prev["frame_indices"] = list(prev["frame_indices"]) + list(seg["frame_indices"])
+    kfs = sorted(keyframes, key=lambda f: int(f.get("index", 0)))
+    ts_by_idx = {int(f.get("index", 0)): float(f.get("timestamp", 0.0)) for f in kfs}
+    all_idx = [int(f.get("index", 0)) for f in kfs]
+    first_idx = all_idx[0]
+
+    cuts = sorted(set(int(c) for c in cut_indices if int(c) != first_idx))
+    boundaries = [first_idx] + cuts
+
+    raw = []
+    for k, b_idx in enumerate(boundaries):
+        s = ts_by_idx.get(b_idx, 0.0)
+        if k + 1 < len(boundaries):
+            e = ts_by_idx.get(boundaries[k + 1], s)
+        else:
+            e = duration if duration > 0 else (kfs[-1].get("timestamp", s) + 1.0)
+        if e <= s:
+            e = s + 0.1
+        raw.append([float(s), float(e)])
+    if raw:
+        raw[-1][1] = max(float(duration), raw[-1][1])
+
+    total = int(round(duration)) if duration > 0 else int(round(raw[-1][1]))
+    total = max(1, total)
+
+    if total < min_sec:
+        return [{
+            "index": 0,
+            "start": 0,
+            "end": total,
+            "duration": total,
+            "seconds": total,
+            "frame_indices": sorted(set(all_idx)),
+            "transitions": {"in": "none", "out": "none"},
+            "theme": "",
+            "characters_in_scene": [],
+        }]
+
+    def _dur(s):
+        return s[1] - s[0]
+
+    # 合并过短段
+    changed = True
+    while changed and len(raw) > 1:
+        changed = False
+        for i in range(len(raw)):
+            if _dur(raw[i]) < min_sec - 1e-6:
+                if i == 0:
+                    target = 1
+                elif i == len(raw) - 1:
+                    target = len(raw) - 2
+                else:
+                    target = i - 1 if _dur(raw[i - 1]) <= _dur(raw[i + 1]) else i + 1
+                a, b = sorted([i, target])
+                raw = raw[:a] + [[raw[a][0], raw[b][1]]] + raw[b + 1:]
+                changed = True
+                break
+
+    # 拆分过长段
+    split_out = []
+    for s in raw:
+        d = _dur(s)
+        if d <= max_sec + 1e-6:
+            split_out.append(s)
             continue
-        merged.append(dict(seg))
-
-    # 切超长段（视频段长 > max_seg_sec）
-    final = []
-    for seg in merged:
-        dur = seg["duration"]
-        if dur <= max_seg_sec + 0.01:
-            final.append(seg)
+        n_split = math.ceil(d / max_sec)
+        n_split = min(n_split, max(1, int(d // min_sec)))
+        if n_split < 2:
+            split_out.append(s)
             continue
-        n_sub = max(2, int((dur + max_seg_sec - 0.01) // max_seg_sec) + (1 if dur % max_seg_sec > 0 else 0))
-        sub_dur = dur / n_sub
-        seconds_per_sub = seg.get("seconds", dur) / n_sub
-        frame_idx = seg["frame_indices"]
-        for k in range(n_sub):
-            s = seg["start"] + k * sub_dur
-            e = min(seg["end"], s + sub_dur)
-            per = max(1, len(frame_idx) // n_sub) if frame_idx else 0
-            sub_indices = frame_idx[k * per: (k + 1) * per] if (frame_idx and k < n_sub - 1) else (frame_idx[k * per:] if frame_idx else [])
-            final.append({
-                **seg,
-                "start": round(s, 2),
-                "end": round(e, 2),
-                "duration": round(e - s, 2),
-                "seconds": round(seconds_per_sub, 2),
-                "theme": (seg.get("theme") or "") + (f"（{k+1}/{n_sub}）" if n_sub > 1 else ""),
-                "frame_indices": sub_indices,
-            })
+        chunk = d / n_split
+        st = s[0]
+        for k in range(n_split):
+            ed = s[1] if k == n_split - 1 else st + chunk
+            split_out.append([st, ed])
+            st = ed
+    raw = split_out
+    n = len(raw)
 
-    for i, s in enumerate(final):
-        s["index"] = i
-    return final
+    # 整数化时长
+    durs = [max(min_sec, min(max_sec, int(round(_dur(s))))) for s in raw]
+    diff = total - sum(durs)
+
+    safety = 4 * n + 20
+    while diff != 0 and safety > 0:
+        safety -= 1
+        if diff > 0:
+            cands = [i for i, d in enumerate(durs) if d < max_sec]
+            if not cands:
+                break
+            i = max(cands, key=lambda x: durs[x])
+            durs[i] += 1
+            diff -= 1
+        else:
+            cands = [i for i, d in enumerate(durs) if d > min_sec]
+            if not cands:
+                break
+            i = max(cands, key=lambda x: durs[x])
+            durs[i] -= 1
+            diff += 1
+
+    # diff > 0：段数不够（n * max_sec < total），补段
+    while diff > 0:
+        take = min(max_sec, diff)
+        if take < min_sec and durs and durs[-1] + take <= max_sec:
+            durs[-1] += take
+        else:
+            durs.append(max(min_sec, take))
+        diff -= take
+    # diff < 0：段数过多（n * min_sec > total），合并末段
+    while diff < 0 and len(durs) > 1:
+        last = durs.pop()
+        durs[-1] = min(max_sec, durs[-1] + last)
+        diff = total - sum(durs)
+        if durs[-1] > max_sec:
+            extra = durs[-1] - max_sec
+            durs[-1] = max_sec
+            durs.append(max(min_sec, extra))
+
+    bs = [0]
+    for d in durs:
+        bs.append(bs[-1] + d)
+    n = len(bs) - 1
+
+    # 兜底：若最后一帧 ts 超出最后一段 end，则把最后一段拉长把它包进去。
+    # 这种情况发生在 duration 与关键帧实际时间范围不一致时（例如关键帧抽到了 170s
+    # 但 duration 标的 100s）。否则后面的帧会在区间筛选时全部被丢。
+    last_ts = max(ts_by_idx.values()) if ts_by_idx else 0.0
+    if last_ts >= bs[-1]:
+        bs[-1] = int(math.ceil(last_ts)) + 1
+
+    out = []
+    for i in range(n):
+        st = bs[i]
+        ed = bs[i + 1]
+        is_last = i == n - 1
+        # 区间：[st, ed)；最后一段闭区间 [st, ed] 以确保末帧能落入
+        if is_last:
+            seg_indices = [idx for idx in all_idx if ts_by_idx[idx] >= st - 1e-6 and ts_by_idx[idx] <= ed + 1e-6]
+        else:
+            seg_indices = [idx for idx in all_idx if ts_by_idx[idx] >= st - 1e-6 and ts_by_idx[idx] < ed - 1e-6]
+        if not seg_indices:
+            closest = min(all_idx, key=lambda x: abs(ts_by_idx[x] - (st + ed) / 2.0))
+            seg_indices = [closest]
+        out.append({
+            "index": i,
+            "start": st,
+            "end": ed,
+            "duration": ed - st,
+            "seconds": ed - st,
+            "frame_indices": sorted(set(seg_indices)),
+            "transitions": {"in": "cut" if i > 0 else "none", "out": "cut" if i < n - 1 else "none"},
+            "theme": "",
+            "characters_in_scene": [],
+        })
+    return out
 
 
 @router.post("/generate/smart-segment")
 async def gen_smart_segment(body: dict):
     """
-    Round 2：基于原剧本（script.json）+ 新剧本（rewrite_plot.json）做分段对齐。
-    不再发帧序列给 LLM，token 消耗显著降低。
-    输入 body: {workflow_id, chat_config_id, script_segments?, rewrite_segments?, max_seg_sec?, min_seg_sec?}
-    输出写入 segments.json。
+    Round 2：直接基于关键帧视觉判转场分段，不依赖剧本演绎/剧情重编排。
+    输入 body: {workflow_id, chat_config_id, batch_size?, min_sec?, max_sec?}
+    输出写入 segments.json。每段时长强制为整数秒，且 min_sec <= 段长 <= max_sec。
     """
     config = _get_config_by_id(body.get("chat_config_id", "")) or _get_first_config("chat")
     if not config:
@@ -1088,36 +1221,13 @@ async def gen_smart_segment(body: dict):
     if not wf_id:
         raise HTTPException(status_code=400, detail="缺少 workflow_id")
     wf_dir = get_workflow_dir(wf_id)
-    max_seg_sec = float(body.get("max_seg_sec", 10.0))
-    min_seg_sec = float(body.get("min_seg_sec", 3.0))
 
-    # 读原剧本段（script.json）
-    script_segments = body.get("script_segments") or []
-    if not script_segments:
-        sc_path = os.path.join(wf_dir, "script.json")
-        if os.path.isfile(sc_path):
-            try:
-                script_segments = json.load(open(sc_path, "r", encoding="utf-8")).get("segments", [])
-            except Exception:
-                script_segments = []
-    if not script_segments:
-        raise HTTPException(status_code=400, detail="未找到剧本演绎结果（请先运行 /generate/script）")
+    min_sec = int(body.get("min_sec", 7))
+    max_sec = int(body.get("max_sec", 15))
+    batch_size = int(body.get("batch_size", 80))
 
-    # 读新剧本段（rewrite_plot.json）
-    rewrite_segments = body.get("rewrite_segments") or []
-    if not rewrite_segments:
-        rw_path = os.path.join(wf_dir, "rewrite_plot.json")
-        if os.path.isfile(rw_path):
-            try:
-                rewrite_segments = json.load(open(rw_path, "r", encoding="utf-8")).get("segments", [])
-            except Exception:
-                rewrite_segments = []
-    if not rewrite_segments:
-        raise HTTPException(status_code=400, detail="未提供新剧情段数（请先运行剧情重编排）")
-
-    # 读 keyframes（供视觉）
-    keyframes_list: list = []
     duration = float(body.get("duration", 0.0))
+    keyframes_list: list = []
     kf_path = os.path.join(wf_dir, "keyframes.json")
     if os.path.isfile(kf_path):
         try:
@@ -1127,48 +1237,29 @@ async def gen_smart_segment(body: dict):
                 duration = float(kf_data.get("duration", 0.0))
         except Exception:
             pass
+    if not keyframes_list:
+        raise HTTPException(status_code=400, detail="未找到关键帧（请先运行关键帧提取）")
     if duration <= 0:
-        duration = max((s.get("end", 0.0) for s in script_segments), default=0.0)
+        duration = float(keyframes_list[-1].get("timestamp", 0.0)) + 1.0
 
-    # 单段情况
-    if len(rewrite_segments) <= 1:
-        all_indices = []
-        for s in script_segments:
-            fr = s.get("frame_range") or [0, 0]
-            for i in range(int(fr[0]), int(fr[1]) + 1):
-                all_indices.append(i)
-        rw0 = rewrite_segments[0] if rewrite_segments else {}
-        seg = {
-            "index": 0, "start": 0.0, "end": round(duration, 2), "duration": round(duration, 2),
-            "seconds": round(max(float(rw0.get("seconds", duration) or duration), duration), 2),
-            "theme": (rw0.get("script") or rw0.get("text") or "全片")[:25],
-            "frame_indices": sorted(set(all_indices)),
-            "transitions": {"in": "none", "out": "none"},
-            "characters_in_scene": rw0.get("characters_in_scene") or [],
-        }
-        result = {"segments": [seg], "constraints": {"max_seg_sec": max_seg_sec, "min_seg_sec": min_seg_sec}}
-    else:
-        try:
-            raw = await _retry_async(
-                lambda: llm_smart_segment(
-                    config, script_segments, rewrite_segments, duration,
-                    keyframes=keyframes_list,
-                    max_seg_sec=max_seg_sec, min_seg_sec=min_seg_sec,
-                ),
-                max_retries=max(0, int(body.get("max_retries", 2))),
-                label="smart-segment",
-            )
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=f"智能分段失败: {e}")
-        segments = _enforce_segment_constraints(
-            raw.get("segments") or [], duration,
-            max_seg_sec=max_seg_sec, min_seg_sec=min_seg_sec,
+    try:
+        cut_indices = await detect_cuts_all_frames(
+            config, keyframes_list,
+            batch_size=batch_size, overlap=4,
         )
-        result = {
-            "segments": segments,
-            "constraints": {"max_seg_sec": max_seg_sec, "min_seg_sec": min_seg_sec},
-        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"智能分段（视觉判转场）失败: {e}")
 
+    segments = _build_segments_from_cuts(
+        keyframes_list, cut_indices, duration,
+        min_sec=min_sec, max_sec=max_sec,
+    )
+
+    result = {
+        "segments": segments,
+        "constraints": {"min_sec": min_sec, "max_sec": max_sec, "batch_size": batch_size},
+        "cut_indices": cut_indices,
+    }
     try:
         with open(os.path.join(wf_dir, "segments.json"), "w", encoding="utf-8") as f:
             json.dump(result, f, ensure_ascii=False, indent=2)
@@ -1178,16 +1269,493 @@ async def gen_smart_segment(body: dict):
     return JSONResponse({"code": 0, "data": result})
 
 
+@router.post("/generate/review-segment")
+async def gen_review_segment(body: dict):
+    """
+    本地校验智能分段结果：检查段长是否在 [min_sec, max_sec] 内并为整数秒。
+    """
+    segments = body.get("segments") or []
+    if not segments:
+        raise HTTPException(status_code=400, detail="缺少 segments")
+    min_sec = int(body.get("min_sec", 7))
+    max_sec = int(body.get("max_sec", 15))
+
+    issues = []
+    for seg in segments:
+        i = int(seg.get("index", 0))
+        dur = float(seg.get("duration", 0.0))
+        if abs(dur - round(dur)) > 1e-6:
+            issues.append({"index": i, "severity": "error", "reason": f"段长 {dur} 不是整数秒"})
+        if dur < min_sec - 1e-6:
+            issues.append({"index": i, "severity": "error", "reason": f"段长 {dur:.0f}s 低于下限 {min_sec}s"})
+        elif dur > max_sec + 1e-6:
+            issues.append({"index": i, "severity": "error", "reason": f"段长 {dur:.0f}s 超过上限 {max_sec}s"})
+
+    ok = not any(i.get("severity") == "error" for i in issues)
+    return JSONResponse({"code": 0, "data": {
+        "ok": ok,
+        "summary": ("分段合理" if ok else f"存在不在 [{min_sec},{max_sec}]s 范围内或非整数的段"),
+        "issues": issues,
+    }})
+
+
 # ═══════════════════════════════════════════════════
-#  Round 3：段内选代表帧（视觉 LLM）
+#  关键帧补采：段内帧数不足时抽帧补齐，保证 4/6/9 宫格的可选下限
 # ═══════════════════════════════════════════════════
 
-def _target_count_for_duration(dur: float, rule: dict) -> int:
-    if dur < float(rule.get("lt5_threshold", 5.0)):
-        return int(rule.get("lt5", 4))
-    if dur < float(rule.get("lt10_threshold", 10.0)):
-        return int(rule.get("lt10", 6))
-    return int(rule.get("default", 9))
+def _ensure_window_density(
+    video_path: str,
+    workflow_id: str,
+    window_sec: float = 10.0,
+    stride_sec: float = 5.0,
+    target_per_window: int = 9,
+) -> int:
+    """
+    保证视频里任意一个 window_sec 长度的窗口内关键帧数 >= target_per_window。
+    用 stride_sec 步长滑动扫描，密度不足的窗口均匀补帧。
+    返回总共新增的帧数。直接读写 keyframes.json，不返回 frames 列表。
+    """
+    wf_dir = get_workflow_dir(workflow_id)
+    kf_path = os.path.join(wf_dir, "keyframes.json")
+    if not os.path.isfile(kf_path):
+        return 0
+    try:
+        kf_data = json.load(open(kf_path, "r", encoding="utf-8"))
+    except Exception:
+        return 0
+    frames = list(kf_data.get("frames") or [])
+    duration = float(kf_data.get("duration", 0.0))
+    if duration <= 0:
+        if not frames:
+            return 0
+        duration = max(float(f.get("timestamp", 0.0)) for f in frames) + 1.0
+
+    fps = kf_data.get("fps")
+    if not fps:
+        try:
+            from backend.core.video_processor import get_video_metadata
+            fps = get_video_metadata(video_path).get("fps")
+        except Exception:
+            fps = None
+
+    timestamps_sorted = sorted(float(f.get("timestamp", 0.0)) for f in frames)
+
+    def _count_in(lo: float, hi: float) -> int:
+        # 二分计数 [lo, hi)
+        import bisect
+        l = bisect.bisect_left(timestamps_sorted, lo - 1e-6)
+        r = bisect.bisect_left(timestamps_sorted, hi - 1e-6)
+        return r - l
+
+    # 收集需要补帧的窗口（按 lo 升序、不重叠的目标时间集合）
+    pending_picks: list = []  # [(target_t, source_window_idx)]
+    win_idx = 0
+    lo = 0.0
+    while lo < duration:
+        hi = min(duration, lo + window_sec)
+        # 末尾残窗（< window_sec 一半且不是起点）跳过：和上一个滑动窗口高度重叠
+        if hi - lo < window_sec * 0.5 + 1e-6 and lo > 0:
+            break
+        existing = _count_in(lo, hi)
+        if existing < target_per_window:
+            need = target_per_window - existing
+            # 在 (lo, hi) 内均匀生成 need 个时间点，避免与现有点过近
+            pad = max(0.05, (hi - lo) * 0.03)
+            a = lo + pad
+            b = hi - pad
+            # 以 (need + 1) 等分取内部 need 个点
+            picks = [a + (b - a) * (i + 1) / (need + 1) for i in range(need)]
+            for t in picks:
+                # 与已有 timestamps 太近的剔除（< 0.25s）
+                import bisect
+                pos = bisect.bisect_left(timestamps_sorted, t)
+                near = False
+                for j in (pos - 1, pos):
+                    if 0 <= j < len(timestamps_sorted) and abs(timestamps_sorted[j] - t) < 0.25:
+                        near = True
+                        break
+                if not near:
+                    pending_picks.append((round(t, 3), win_idx))
+        win_idx += 1
+        lo += stride_sec
+
+    if not pending_picks:
+        return 0
+
+    # 多窗口可能产生重叠候选点，做一次去重（精度 0.25s）
+    pending_picks.sort(key=lambda x: x[0])
+    deduped: list = []
+    for t, _wi in pending_picks:
+        if deduped and abs(deduped[-1] - t) < 0.25:
+            continue
+        deduped.append(t)
+    if not deduped:
+        return 0
+
+    try:
+        from backend.core.video_processor import dump_candidate_frames
+        supplement_dir = os.path.join(wf_dir, "keyframes")
+        os.makedirs(supplement_dir, exist_ok=True)
+        dumped = dump_candidate_frames(
+            video_path, deduped, supplement_dir, fps=fps,
+            naming="supp_density_%04d.jpg",
+        )
+    except Exception as e:
+        print(f"[density-supplement] dump_candidate_frames 失败: {e}")
+        return 0
+
+    if not dumped:
+        return 0
+
+    max_idx = max((int(f.get("index", -1)) for f in frames), default=-1)
+    added: list = []
+    for d in dumped:
+        max_idx += 1
+        added.append({
+            "index": max_idx,
+            "timestamp": round(float(d.get("timestamp", 0.0)), 3),
+            "filename": d.get("filename"),
+            "path": d.get("path"),
+            "url": f"/workflow-images/{workflow_id}/keyframes/{d.get('filename')}",
+            "is_supplement": True,
+            "scene_group": -1,
+            "sharpness": -1.0,
+            "reason": "density_window",
+        })
+
+    merged = list(frames) + added
+    merged.sort(key=lambda f: float(f.get("timestamp", 0.0)))
+    kf_data["frames"] = merged
+    try:
+        with open(kf_path, "w", encoding="utf-8") as f:
+            json.dump(kf_data, f, ensure_ascii=False, indent=2)
+    except OSError:
+        pass
+    print(f"[density-supplement] 补帧 {len(added)} 张（10s 窗口、步长 5s、目标 {target_per_window}）")
+    return len(added)
+
+
+@router.post("/supplement-frames/{workflow_id}")
+async def supplement_frames(workflow_id: str, body: dict):
+    """
+    在指定 [segment_start, segment_end] 内均匀抽 target 张帧，写入 keyframes 目录并 merge 到 keyframes.json。
+    入参：{segment_start, segment_end, target, segment_index?}
+    返回：{added_frames: [{index,timestamp,url,filename}], frames: <merged all frames>}
+    """
+    if not check_ffmpeg():
+        raise HTTPException(status_code=503, detail="ffmpeg 未安装，无法补采关键帧")
+
+    wf_dir = get_workflow_dir(workflow_id)
+    video_dir = os.path.join(wf_dir, "videos")
+    video_path = None
+    for ext in VIDEO_EXTENSIONS:
+        candidate = os.path.join(video_dir, f"source{ext}")
+        if os.path.isfile(candidate):
+            video_path = candidate
+            break
+    if not video_path:
+        raise HTTPException(status_code=400, detail="未找到已上传的视频文件")
+
+    try:
+        seg_start = float(body.get("segment_start", 0.0))
+        seg_end = float(body.get("segment_end", 0.0))
+        target = max(1, int(body.get("target", 4)))
+    except Exception:
+        raise HTTPException(status_code=400, detail="segment_start/segment_end/target 参数非法")
+    if seg_end <= seg_start:
+        raise HTTPException(status_code=400, detail="segment_end 必须大于 segment_start")
+    seg_idx = body.get("segment_index")
+
+    # 读现有 keyframes
+    kf_path = os.path.join(wf_dir, "keyframes.json")
+    kf_data: dict = {}
+    frames: list = []
+    if os.path.isfile(kf_path):
+        try:
+            kf_data = json.load(open(kf_path, "r", encoding="utf-8"))
+            frames = list(kf_data.get("frames") or [])
+        except Exception:
+            kf_data = {}
+            frames = []
+
+    try:
+        from backend.core.video_processor import dump_candidate_frames, get_video_metadata
+        fps = kf_data.get("fps") or get_video_metadata(video_path).get("fps")
+    except Exception:
+        fps = None
+
+    # 段内已存在的 timestamps，避免重复
+    existing_ts = sorted(
+        float(f.get("timestamp", 0.0))
+        for f in frames
+        if seg_start - 0.05 <= float(f.get("timestamp", 0.0)) <= seg_end + 0.05
+    )
+    # 均匀生成 target 个时间点；向内缩 5% 避免刚好踩在切点
+    pad = max(0.05, (seg_end - seg_start) * 0.03)
+    lo = seg_start + pad
+    hi = seg_end - pad
+    if target == 1:
+        picks = [(lo + hi) / 2]
+    else:
+        step = (hi - lo) / (target - 1) if target > 1 else 0
+        picks = [lo + i * step for i in range(target)]
+
+    # 和已有帧去重（差 < 0.25s 认为重复）
+    def _near_existing(t: float) -> bool:
+        for e in existing_ts:
+            if abs(e - t) < 0.25:
+                return True
+        return False
+    picks = [round(t, 3) for t in picks if not _near_existing(t)]
+
+    supplement_dir = os.path.join(wf_dir, "keyframes")
+    os.makedirs(supplement_dir, exist_ok=True)
+    seg_tag = f"s{int(seg_idx)}" if seg_idx is not None else "sx"
+    naming = f"supp_{seg_tag}_%04d.jpg"
+
+    added: list = []
+    if picks:
+        try:
+            dumped = dump_candidate_frames(video_path, picks, supplement_dir, fps=fps, naming=naming)
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"补采失败: {e}")
+        max_idx = max((int(f.get("index", -1)) for f in frames), default=-1)
+        for d in dumped:
+            max_idx += 1
+            added.append({
+                "index": max_idx,
+                "timestamp": round(float(d.get("timestamp", 0.0)), 3),
+                "filename": d.get("filename"),
+                "path": d.get("path"),
+                "url": f"/workflow-images/{workflow_id}/keyframes/{d.get('filename')}",
+                "is_supplement": True,
+                "scene_group": seg_idx if seg_idx is not None else -1,
+            })
+
+    merged_frames = list(frames) + added
+    merged_frames.sort(key=lambda f: float(f.get("timestamp", 0.0)))
+    kf_data["frames"] = merged_frames
+    try:
+        with open(kf_path, "w", encoding="utf-8") as f:
+            json.dump(kf_data, f, ensure_ascii=False, indent=2)
+    except OSError:
+        pass
+
+    return JSONResponse({"code": 0, "data": {"added_frames": added, "frames": merged_frames}})
+
+
+# ═══════════════════════════════════════════════════
+#  宫格合成：把 N 张同比例图按 rows×cols 拼成一张大图，长边控制在 [2048, 4096]
+# ═══════════════════════════════════════════════════
+
+def _rows_cols_for_count(n: int) -> tuple:
+    """根据格子数返回 (rows, cols)：4→2x2 / 6→2x3 / 9→3x3；其他向上兼容。"""
+    if n <= 4:
+        return 2, 2
+    if n <= 6:
+        return 2, 3
+    if n <= 9:
+        return 3, 3
+    # 兜底：接近正方
+    import math
+    cols = int(math.ceil(math.sqrt(n)))
+    rows = int(math.ceil(n / cols))
+    return rows, cols
+
+
+def _url_to_local_path(image_url: str) -> str:
+    if not image_url or not image_url.startswith("/workflow-images/"):
+        return ""
+    rel = image_url.replace("/workflow-images/", "", 1)
+    path = os.path.join(WORKFLOW_ROOT, rel)
+    return path if os.path.isfile(path) else ""
+
+
+def _clamp_long_edge(size: tuple, min_edge: int = 2048, max_edge: int = 4096) -> tuple:
+    """给定 (w,h)，返回调整后 (w,h)：长边超过 max_edge 等比缩到 max_edge；不足 min_edge 等比放到 min_edge。"""
+    w, h = size
+    if w <= 0 or h <= 0:
+        return size
+    long_edge = max(w, h)
+    if long_edge > max_edge:
+        k = max_edge / long_edge
+    elif long_edge < min_edge:
+        k = min_edge / long_edge
+    else:
+        return w, h
+    return max(1, int(round(w * k))), max(1, int(round(h * k)))
+
+
+def _compose_grid_core(
+    workflow_id: str, segment_index: int, frame_urls: list, rows: int, cols: int,
+    out_subdir: str = "grid_composed", filename_prefix: str = "seg",
+    min_long_edge: int = 2048, max_long_edge: int = 4096,
+) -> dict:
+    """
+    把 frame_urls 按 rows×cols 拼成一张大图，落盘，返回 {url,width,height,cell_w,cell_h,rows,cols,urls}。
+    同比例保证：以第一张图的 aspect 为基准，其余用 ImageOps.fit 同比例裁切后再贴。
+    """
+    from PIL import Image, ImageOps
+    import io
+
+    paths = []
+    for u in frame_urls:
+        p = _url_to_local_path(u)
+        if not p:
+            raise HTTPException(status_code=400, detail=f"帧 URL 无效或文件缺失: {u}")
+        paths.append(p)
+    if not paths:
+        raise HTTPException(status_code=400, detail="frame_urls 为空")
+    if rows * cols < len(paths):
+        raise HTTPException(status_code=400, detail=f"rows*cols={rows*cols} 小于帧数 {len(paths)}")
+
+    imgs = []
+    for p in paths:
+        im = Image.open(p)
+        if im.mode != "RGB":
+            im = im.convert("RGB")
+        imgs.append(im)
+
+    # 以第一张作为基准比例
+    base_w, base_h = imgs[0].size
+    aspect = base_w / base_h if base_h else 1.0
+
+    # 统一单格尺寸：取各图宽/高的中位
+    ws = sorted(im.size[0] for im in imgs)
+    hs = sorted(im.size[1] for im in imgs)
+    cell_w = ws[len(ws) // 2]
+    cell_h = hs[len(hs) // 2]
+    # 对齐基准比例
+    if abs((cell_w / cell_h) - aspect) > 0.02:
+        cell_h = max(1, int(round(cell_w / aspect)))
+
+    # 初步画布尺寸
+    total_w = cell_w * cols
+    total_h = cell_h * rows
+
+    # 缩放 cell 让长边落入目标范围
+    target_w, target_h = _clamp_long_edge((total_w, total_h), min_long_edge, max_long_edge)
+    if (target_w, target_h) != (total_w, total_h):
+        cell_w = max(1, target_w // cols)
+        cell_h = max(1, target_h // rows)
+        total_w = cell_w * cols
+        total_h = cell_h * rows
+
+    canvas = Image.new("RGB", (total_w, total_h), (0, 0, 0))
+    for i, im in enumerate(imgs):
+        r = i // cols
+        c = i % cols
+        # 同比例裁切 → 目标 cell 尺寸
+        fitted = ImageOps.fit(im, (cell_w, cell_h), method=Image.LANCZOS, centering=(0.5, 0.5))
+        canvas.paste(fitted, (c * cell_w, r * cell_h))
+
+    # 落盘
+    out_dir = os.path.join(get_workflow_dir(workflow_id), out_subdir)
+    os.makedirs(out_dir, exist_ok=True)
+    filename = f"{filename_prefix}_{int(segment_index)}.jpg"
+    out_path = os.path.join(out_dir, filename)
+    # 长边再 clamp 一次（防御性）
+    final_w, final_h = _clamp_long_edge(canvas.size, min_long_edge, max_long_edge)
+    if (final_w, final_h) != canvas.size:
+        canvas = canvas.resize((final_w, final_h), Image.LANCZOS)
+    canvas.save(out_path, format="JPEG", quality=85, optimize=True)
+
+    return {
+        "url": f"/workflow-images/{workflow_id}/{out_subdir}/{filename}",
+        "filename": filename,
+        "width": canvas.size[0],
+        "height": canvas.size[1],
+        "cell_w": cell_w,
+        "cell_h": cell_h,
+        "rows": rows,
+        "cols": cols,
+        "urls": list(frame_urls),
+    }
+
+
+@router.post("/compose-grid/{workflow_id}")
+async def compose_grid_api(workflow_id: str, body: dict):
+    """
+    入参：{segments: [{index, frame_urls, rows?, cols?}]}；缺 rows/cols 时按数量推导。
+    返回：{segments: [{index, url, width, height, cell_w, cell_h, rows, cols, urls}]}
+    """
+    segs_in = body.get("segments") or []
+    if not segs_in:
+        raise HTTPException(status_code=400, detail="缺少 segments")
+    out_segs = []
+    for s in segs_in:
+        idx = int(s.get("index", 0))
+        urls = s.get("frame_urls") or s.get("urls") or []
+        if not urls:
+            out_segs.append({"index": idx, "error": "no_frames"})
+            continue
+        rows = int(s.get("rows") or 0)
+        cols = int(s.get("cols") or 0)
+        if rows <= 0 or cols <= 0:
+            rows, cols = _rows_cols_for_count(len(urls))
+        try:
+            r = _compose_grid_core(workflow_id, idx, urls, rows, cols)
+            r["index"] = idx
+            out_segs.append(r)
+        except HTTPException:
+            raise
+        except Exception as e:
+            out_segs.append({"index": idx, "error": str(e)})
+    return JSONResponse({"code": 0, "data": {"segments": out_segs}})
+
+
+@router.post("/replace-grid-cell/{workflow_id}")
+async def replace_grid_cell_api(workflow_id: str, body: dict):
+    """
+    替换宫格的某一格：保持 rows/cols 不变，用新 url 替换 cell_index 位置后重新合成。
+    若传入 image_data（base64），先落盘到 workflow 目录再替换。
+    入参：{segment_index, cell_index, rows, cols, urls, replacement_url?, image_data?}
+    返回：与 compose-grid 同结构。
+    """
+    try:
+        seg_idx = int(body.get("segment_index", 0))
+        cell_idx = int(body.get("cell_index", 0))
+        rows = int(body.get("rows", 0))
+        cols = int(body.get("cols", 0))
+    except Exception:
+        raise HTTPException(status_code=400, detail="segment_index/cell_index/rows/cols 必填且为整数")
+    urls = list(body.get("urls") or [])
+    if not urls or rows <= 0 or cols <= 0:
+        raise HTTPException(status_code=400, detail="urls/rows/cols 不合法")
+    if cell_idx < 0 or cell_idx >= rows * cols or cell_idx >= len(urls):
+        raise HTTPException(status_code=400, detail="cell_index 越界")
+
+    repl_url = body.get("replacement_url")
+    if not repl_url:
+        image_data = body.get("image_data")
+        if not image_data:
+            raise HTTPException(status_code=400, detail="需要 replacement_url 或 image_data")
+        # 落盘上传图到 workflow 目录
+        try:
+            saved = save_workflow_image(workflow_id, image_data, prefix=f"grid_upload_s{seg_idx}_c{cell_idx}")
+            repl_url = saved.get("url")
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"保存替换图失败: {e}")
+    if not repl_url:
+        raise HTTPException(status_code=400, detail="replacement_url 为空")
+
+    urls[cell_idx] = repl_url
+    r = _compose_grid_core(workflow_id, seg_idx, urls, rows, cols)
+    r["index"] = seg_idx
+    r["replaced_cell_index"] = cell_idx
+    return JSONResponse({"code": 0, "data": r})
+
+
+def _target_count_for_duration(dur: float, rule: "dict | None" = None) -> int:
+    """按段时长确定宫格格数：≤7→4 / ≤12→6 / >12→9（≤15 和 >15 都取 9）。"""
+    rule = rule or {}
+    t_4 = float(rule.get("lte4", 7.0))
+    t_6 = float(rule.get("lte6", 12.0))
+    if dur <= t_4:
+        return int(rule.get("count_4", 4))
+    if dur <= t_6:
+        return int(rule.get("count_6", 6))
+    return int(rule.get("count_9", 9))
 
 
 async def llm_pick_representatives(
@@ -1259,8 +1827,6 @@ async def gen_select_representatives(body: dict):
                 frame_labels = json.load(open(fl_path, "r", encoding="utf-8")).get("frames", [])
             except Exception:
                 frame_labels = []
-    if not frame_labels:
-        raise HTTPException(status_code=400, detail="未找到 frame_labels")
 
     # 从 keyframes.json 读 url 映射
     kf_frames: list = []
@@ -1275,7 +1841,7 @@ async def gen_select_representatives(body: dict):
     label_map = {f.get("index"): f for f in frame_labels}
     max_concurrent = max(1, int(body.get("max_concurrent", 3)))
     max_retries = max(0, int(body.get("max_retries", 2)))
-    target_rule = body.get("target_rule") or {"lt5": 4, "lt10": 6, "default": 9}
+    target_rule = body.get("target_rule") or {}
 
     semaphore = asyncio.Semaphore(max_concurrent)
 
@@ -1389,15 +1955,13 @@ async def gen_rewrite_plot(body: dict):
         except Exception:
             pass
 
-    # 从 script.json 读完整原剧本（首选，比零散帧标注连贯得多）
+    # 从 script.json 读完整原剧本
     script_full = ""
-    script_segments: list = []
     sc_path = os.path.join(wf_dir, "script.json")
     if os.path.isfile(sc_path):
         try:
             sc = json.load(open(sc_path, "r", encoding="utf-8"))
             script_full = sc.get("full_script", "")
-            script_segments = sc.get("segments", [])
         except Exception:
             pass
 
@@ -1410,38 +1974,48 @@ async def gen_rewrite_plot(body: dict):
                 frame_labels = json.load(open(fl_path, "r", encoding="utf-8")).get("frames", [])
             except Exception:
                 frame_labels = []
+        MAX_TL_LINES = 120
+        if len(frame_labels) > MAX_TL_LINES:
+            step = max(1, len(frame_labels) // MAX_TL_LINES)
+            frame_labels = frame_labels[::step][:MAX_TL_LINES]
         lines = []
         for f in frame_labels:
-            ct = (f.get("content") or "").replace("\n", " ")[:50]
+            ct = (f.get("content") or "").replace("\n", " ")[:40]
             if not ct:
                 continue
             ts = f.get("timestamp", 0.0)
-            sub = f.get("subtitle") or ""
+            sub = (f.get("subtitle") or "")[:24]
             line = f"  [{ts:.1f}s] {ct}"
             if sub:
-                line += f" ‹{sub[:30]}›"
+                line += f" ‹{sub}›"
             lines.append(line)
         timeline_text = "\n".join(lines)
 
+    # overview 精简：只留 name/features
     overview_block = ""
     if overview:
-        overview_block = f"\n【全局清单参考】\n{json.dumps(overview, ensure_ascii=False, indent=2)}\n"
+        compact = {}
+        for key in ("characters", "scenes"):
+            items = overview.get(key) or []
+            compact[key] = [
+                {"name": (it.get("name") or "")[:30], "features": (it.get("features") or "")[:120]}
+                for it in items[:20]
+                if isinstance(it, dict)
+            ]
+        if overview.get("narrative"):
+            compact["narrative"] = str(overview["narrative"])[:120]
+        ov_text = json.dumps(compact, ensure_ascii=False, indent=2)
+        overview_block = f"\n【全局清单参考】\n{ov_text[:2500]}\n"
 
-    # 构造原视频剧本块（优先用 script.json 的连贯版本）
+    # 原视频剧本块
     if script_full:
-        script_block = f"\n【原视频剧本演绎（按时间顺序的完整叙事）】\n{script_full}\n"
-        if script_segments:
-            sc_brief = "\n".join(
-                f"  段 {s.get('index')} [{s.get('start',0):.1f}s-{s.get('end',0):.1f}s]: {s.get('theme','')}"
-                for s in script_segments
-            )
-            script_block += f"\n【原剧本分段概览】\n{sc_brief}\n"
+        script_block = f"\n【原视频剧本演绎（按时间顺序的完整叙事）】\n{script_full[:6000]}\n"
     elif timeline_text:
         script_block = f"\n【原视频帧内容摘要（按时间顺序）】\n{timeline_text}\n"
     else:
         script_block = ""
 
-    # 视频总时长（用于 duration 建议约束）
+    # 视频总时长
     video_duration = 0.0
     kf_path2 = os.path.join(wf_dir, "keyframes.json")
     if os.path.isfile(kf_path2):
@@ -1449,39 +2023,24 @@ async def gen_rewrite_plot(body: dict):
             video_duration = float(json.load(open(kf_path2, "r", encoding="utf-8")).get("duration", 0.0))
         except Exception:
             pass
-    dur_hint = f"（视频总时长 {video_duration:.1f} 秒）" if video_duration > 0 else ""
 
     system_prompt = f"""你是一位影视二次创作编剧。请基于下列材料重新编排剧情。
 
 【二创方向】{direction or '（用户未指定，保持原有叙事结构，优化节奏）'}
 【目标风格】{style or '（保持原风格）'}
+【原视频总时长】{video_duration:.1f} 秒
+
+任务：产出**一篇完整的改编剧本**，**不要分段**，直接输出整篇连贯文本。
 
 要求：
-1. **段数要多、每段要短**：建议 **8~20 段**；每段建议时长 **4~10 秒**（便于后续分镜设计）
-2. **总时长只增不减**：新剧情所有段的 seconds 之和**必须 ≥ 视频总时长 {video_duration:.1f} 秒**（可显著大于；严禁压缩）。二创通常会加入新情节/铺垫/情绪停顿，允许最多达到原时长的 2 倍
-3. 每段应能对应一段连续时间的画面（段序必须与视频时间线自然对应）
-4. 每段产出：
-   - script：本段**详细剧本**，完整包含动作/场景变化/情绪节拍/**运镜过渡安排**（如"开场近景缓推→中景切换→对手镜头"），供后续分镜使用；100~300 字
-   - dialogue：本段**台词、旁白、画外音**集合（按出场顺序分别注明说话人、情绪；无则写 "（无对白）"）
-   - seconds：本段建议时长（浮点数，单位秒，4~10 秒为宜）
-   - scene_action：keep/modify/new
-   - characters_in_scene：本段出场人物名（沿用全局清单 name）
-5. 人物清单 characters：列出全片主要人物（沿用全局清单 name，追加新形象描述）
-6. scenes 字段仅列出新增或大改的场景，保持原场景的不用写
+1. full_script：整片改编剧本，按时间顺序连贯叙述，整合动作/场景/情绪/对白与运镜过渡。可使用空行作自然分段，但不要给段编号、不要输出 segments 列表。
+2. 字数 800~3000 字，长度按视频时长酌情。可加入新情节/铺垫/情绪停顿，但叙事顺序需与原视频时间线大致对应。
+3. characters：列出全片主要人物（沿用全局清单 name，追加新形象描述）。
+4. scenes：仅列出新增或大改的场景，保持原场景的不用写。
 
 只输出 JSON：
 {{
-  "segments": [
-    {{
-      "index":0,
-      "script":"包含动作场景情绪运镜过渡的详细剧本",
-      "dialogue":"台词/旁白",
-      "seconds":6.0,
-      "scene_action":"keep",
-      "scene_note":"",
-      "characters_in_scene":["角色A"]
-    }}
-  ],
+  "full_script":"整片改编剧本（一大段，可含自然分段空行，含台词与运镜过渡）",
   "characters": [
     {{"name":"角色A","original_desc":"...","new_desc":"..."}}
   ],
@@ -1490,32 +2049,18 @@ async def gen_rewrite_plot(body: dict):
   ]
 }}"""
     user_prompt = (
-        f"【用户输入的原始剧情（梗概）】\n{original_plot}\n{overview_block}"
+        f"【用户输入的原始剧情（梗概）】\n{original_plot[:2000]}\n{overview_block}"
         f"{script_block}\n"
-        f"请按二创方向重新编排，产出新的分段剧情与人物/场景清单。"
+        f"请按二创方向重新编排，产出整篇新剧本（不要分段）+ 人物/场景清单。"
     )
     result = await _retry_async(
-        lambda: _call_llm_json(config, system_prompt, user_prompt, max_tokens=20000),
+        lambda: _call_llm_json(config, system_prompt, user_prompt, max_tokens=12000, timeout=420.0),
         max_retries=max(0, int(body.get("max_retries", 2))),
         label="rewrite-plot",
     )
 
-    # 规范化：强制 index 连续；字段兜底（兼容老字段名 text → script）
-    segs = result.get("segments") or []
-    for i, s in enumerate(segs):
-        s["index"] = i
-        if not s.get("script"):
-            s["script"] = s.get("text", "")
-        if "text" not in s:
-            s["text"] = s.get("script", "")  # 保持 text 字段兼容下游（smart-segment 等仍读 text）
-        s["dialogue"] = s.get("dialogue", "") or ""
-        try:
-            s["seconds"] = float(s.get("seconds", 0))
-        except (TypeError, ValueError):
-            s["seconds"] = 0.0
-
     out = {
-        "segments": segs,
+        "full_script": result.get("full_script") or "",
         "characters": result.get("characters") or [],
         "scenes": result.get("scenes") or [],
     }
@@ -1530,11 +2075,11 @@ async def gen_rewrite_plot(body: dict):
 @router.post("/generate/rewrite-plot-chat")
 async def gen_rewrite_plot_chat(body: dict):
     """
-    基于用户对话修改剧情重编排。接受当前 segments/characters/scenes + 对话历史 + 用户消息，
-    产出更新后的 segments/characters/scenes。允许用户调整段数、修改单段内容、改变二创方向。
+    基于用户对话修改剧情重编排。接受当前 full_script/characters/scenes + 对话历史 + 用户消息，
+    产出更新后的 full_script/characters/scenes（整篇剧本，不分段）。
     body: {
       workflow_id, chat_config_id,
-      current_segments, current_characters?, current_scenes?,
+      current_full_script, current_characters?, current_scenes?,
       chat_history: [{role:"user"|"assistant", content}],
       user_message,
       direction?, style?
@@ -1553,14 +2098,14 @@ async def gen_rewrite_plot_chat(body: dict):
     if not user_message:
         raise HTTPException(status_code=400, detail="未提供用户消息")
 
-    current_segments = body.get("current_segments") or []
+    current_full_script = (body.get("current_full_script") or "").strip()
     current_characters = body.get("current_characters") or []
     current_scenes = body.get("current_scenes") or []
     chat_history = body.get("chat_history") or []
     direction = (body.get("direction") or "").strip()
     style = (body.get("style") or "").strip()
 
-    # 视频时长（用于硬约束）
+    # 视频时长
     video_duration = 0.0
     kf_path = os.path.join(wf_dir, "keyframes.json")
     if os.path.isfile(kf_path):
@@ -1569,17 +2114,20 @@ async def gen_rewrite_plot_chat(body: dict):
         except Exception:
             pass
 
-    cur_block = json.dumps({
-        "segments": current_segments,
-        "characters": current_characters,
-        "scenes": current_scenes,
-    }, ensure_ascii=False, indent=2)
+    slim_chars = [
+        {"name": (c.get("name") or "")[:30], "new_desc": (c.get("new_desc") or "")[:200]}
+        for c in current_characters[:20] if isinstance(c, dict)
+    ]
+    slim_scenes = [
+        {"name": (s.get("name") or "")[:30], "new_desc": (s.get("new_desc") or "")[:200]}
+        for s in current_scenes[:20] if isinstance(s, dict)
+    ]
 
     history_block = ""
     if chat_history:
         history_block = "\n【对话历史】\n" + "\n".join(
-            f"[{m.get('role','user')}] {(m.get('content') or '')[:500]}"
-            for m in chat_history[-10:]  # 最近 10 条
+            f"[{m.get('role','user')}] {(m.get('content') or '')[:300]}"
+            for m in chat_history[-6:]
         )
 
     system_prompt = f"""你是一位影视二次创作编剧。用户正在审阅已有的改编剧本，并通过对话要求调整。请根据用户消息修改剧本并输出完整新版本。
@@ -1588,23 +2136,27 @@ async def gen_rewrite_plot_chat(body: dict):
 【目标风格】{style or '（保持原风格）'}
 【视频时长】{video_duration:.1f} 秒
 
-硬约束：
-1. 总时长只增不减：所有段 seconds 之和 ≥ {video_duration:.1f} 秒
-2. 每段 seconds 4~10 秒（便于分镜）
-3. 段数可以增加或减少（按用户要求）
-4. 每段必须输出 script（含运镜过渡的详细剧本）+ dialogue（台词/旁白）+ seconds + characters_in_scene
-5. 输出**完整新版本**（不是增量），包含所有段（用户只指定修改某段时，其他段保持原样）
-6. 必须在 message 字段对用户说明本次改动（做了哪些修改、为什么）
+要求：
+1. 输出**一篇完整改编剧本**（不分段，整篇连贯；可用空行作自然段落），按时间顺序叙述，整合动作/场景/情绪/台词/运镜过渡。
+2. 字数 800~3000 字。可加入新情节/铺垫/情绪停顿，但叙事顺序需与原视频时间线大致对应。
+3. 用户可能要求调整局部，也可能要求整体改，未提到的部分保留原样。
+4. characters / scenes 输出完整新版本（用户没要求改就原样返回）。
+5. 必须在 message 字段对用户说明本次改动（做了哪些修改、为什么，200 字内）。
 
 只输出 JSON：
 {{
-  "segments":[{{"index":0,"script":"...","dialogue":"...","seconds":6.0,"scene_action":"keep","characters_in_scene":["..."]}}],
+  "full_script":"整片改编剧本（一大段，可含自然分段空行）",
   "characters":[{{"name":"...","original_desc":"...","new_desc":"..."}}],
   "scenes":[{{"name":"...","original_desc":"...","new_desc":"..."}}],
   "message":"对用户说明本次改动的文字（200 字内）"
 }}"""
+    cur_block = json.dumps({
+        "full_script": current_full_script[:6000],
+        "characters": slim_chars,
+        "scenes": slim_scenes,
+    }, ensure_ascii=False, indent=2)
     user_prompt = (
-        f"【当前剧本编排（完整 JSON）】\n{cur_block}\n"
+        f"【当前剧本编排】\n{cur_block}\n"
         f"{history_block}\n\n"
         f"【用户本次消息】\n{user_message}\n\n"
         f"请基于用户要求修改剧本，输出完整新版本。"
@@ -1612,37 +2164,26 @@ async def gen_rewrite_plot_chat(body: dict):
 
     try:
         result = await _retry_async(
-            lambda: _call_llm_json(config, system_prompt, user_prompt, max_tokens=20000),
+            lambda: _call_llm_json(config, system_prompt, user_prompt, max_tokens=12000, timeout=420.0),
             max_retries=max(0, int(body.get("max_retries", 2))),
             label="rewrite-plot-chat",
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"对话修改失败: {e}")
 
-    # 规范化 segments（同 gen_rewrite_plot）
-    segs = result.get("segments") or []
-    for i, s in enumerate(segs):
-        s["index"] = i
-        if not s.get("script"):
-            s["script"] = s.get("text", "")
-        if "text" not in s:
-            s["text"] = s.get("script", "")
-        s["dialogue"] = s.get("dialogue", "") or ""
-        try:
-            s["seconds"] = float(s.get("seconds", 0))
-        except (TypeError, ValueError):
-            s["seconds"] = 0.0
-
     out = {
-        "segments": segs,
+        "full_script": result.get("full_script") or current_full_script,
         "characters": result.get("characters") or current_characters,
         "scenes": result.get("scenes") or current_scenes,
         "message": result.get("message", "") or "",
     }
-    # 持久化当前版本（同步覆盖 rewrite_plot.json，供下游消费）
     try:
         with open(os.path.join(wf_dir, "rewrite_plot.json"), "w", encoding="utf-8") as f:
-            json.dump({"segments": out["segments"], "characters": out["characters"], "scenes": out["scenes"]}, f, ensure_ascii=False, indent=2)
+            json.dump({
+                "full_script": out["full_script"],
+                "characters": out["characters"],
+                "scenes": out["scenes"],
+            }, f, ensure_ascii=False, indent=2)
     except OSError:
         pass
     return JSONResponse({"code": 0, "data": out})
@@ -2362,6 +2903,11 @@ async def gen_rc_video_prompt(body: dict):
     direction = body.get("direction", "")
     total_segments = int(body.get("total_segments") or 1)
 
+    # 整篇剧本（来自 rcPlotRewrite/rcScript/输入剧情，前端按优先级挑好后传入）
+    full_script = (body.get("full_script") or "").strip()
+    full_script_source = body.get("full_script_source") or ""  # rewrite/script/input
+    seg_start = float(segment.get("start") or 0.0)
+    seg_end = float(segment.get("end") or (seg_start + duration))
     seg_text = segment.get("script") or segment.get("script_text") or segment.get("text") or segment.get("theme") or ""
     camera_notes = segment.get("camera_notes") or ""
     n_shots = len(shots)
@@ -2490,7 +3036,16 @@ async def gen_rc_video_prompt(body: dict):
 
 只输出JSON：{{"full_text": "完整提示词文本"}}"""
 
-    user_prompt = f"段落剧本：{seg_text}"
+    user_prompt_parts = []
+    if full_script:
+        src_label = {"rewrite": "改编新剧本", "script": "原视频剧本", "input": "用户输入的剧情梗概"}.get(full_script_source, "完整剧本参考")
+        user_prompt_parts.append(f"【{src_label}（整片）】\n{full_script[:6000]}")
+    user_prompt_parts.append(
+        f"【本段时间窗】{seg_start:.1f}s ~ {seg_end:.1f}s（共 {duration} 秒）。请只为这段时间窗内的画面写提示词，叙事内容请从整片剧本中按时间窗对应的部分提取。"
+    )
+    if seg_text:
+        user_prompt_parts.append(f"【本段补充信息】{seg_text}")
+    user_prompt = "\n\n".join(user_prompt_parts)
 
     max_retries = max(0, int(body.get("max_retries", 2)))
     try:

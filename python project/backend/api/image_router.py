@@ -4,7 +4,7 @@ import json
 import re
 import traceback
 from fastapi import APIRouter, HTTPException, UploadFile, File
-from backend.models.schemas import ImageGenerateRequest
+from backend.models.schemas import ImageGenerateRequest, PanoramaGenerateRequest
 from backend.api.config_router import get_config_list
 from backend.core.request_client import async_http_request, split_api_base, base_has_version, build_endpoint_url
 from backend.core.config_handler import (
@@ -387,3 +387,275 @@ async def generate_image(req: ImageGenerateRequest):
         last_error = f"策略 {strategy['id']} 失败"
 
     raise HTTPException(status_code=500, detail=f"图片生成失败: {last_error}")
+
+
+# ═══════════════════════════════════════════════════
+#  全景图生成（cubemap → equirectangular）
+# ═══════════════════════════════════════════════════
+
+# 6 个 cubemap 方位的 prompt 后缀。forward 用上传图，其余 5 个用图生图生成
+PANORAMA_FACE_PROMPTS = {
+    "right":  "same scene continuation, camera rotated exactly 90 degrees to the right, horizon kept perfectly level, same time of day, same lighting and style, seamless side view of the same environment",
+    "back":   "same scene continuation, camera rotated 180 degrees facing the opposite direction, horizon kept perfectly level, same time of day, same lighting and style, seamless back view of the same environment",
+    "left":   "same scene continuation, camera rotated exactly 90 degrees to the left, horizon kept perfectly level, same time of day, same lighting and style, seamless side view of the same environment",
+    "up":     "looking straight up at the sky/ceiling of the same scene, fisheye-like top-down-from-below view, same lighting and style, no horizon visible, fills entire frame",
+    "down":   "looking straight down at the ground/floor of the same scene, top-down view of the surface directly below the camera, same lighting and style, no horizon visible, fills entire frame",
+}
+
+PANORAMA_NEG_PROMPT = "text, watermark, logo, signature, frame, border, split screen, collage, different scene, different style, different time of day"
+
+
+def _decode_b64_image_to_rgb(b64_data: str):
+    """把 data:image base64 解成 RGB ndarray (H,W,3) uint8"""
+    import numpy as np
+    from PIL import Image
+    import io
+    if not b64_data:
+        return None
+    raw = b64_data
+    if raw.startswith("data:image"):
+        raw = raw.split(",", 1)[-1]
+    raw = re.sub(r"\s+", "", raw)
+    missing = len(raw) % 4
+    if missing:
+        raw += "=" * (4 - missing)
+    try:
+        img = Image.open(io.BytesIO(base64.b64decode(raw)))
+        if img.mode != "RGB":
+            img = img.convert("RGB")
+        return np.asarray(img)
+    except Exception as e:
+        print(f"[全景] base64 → 图片解码失败: {e}")
+        return None
+
+
+def _resize_to_square(rgb, size: int):
+    """中心裁剪 + resize 到 size×size。cubemap 每个面必须是正方形。"""
+    import numpy as np
+    import cv2
+    h, w = rgb.shape[:2]
+    side = min(h, w)
+    y0 = (h - side) // 2
+    x0 = (w - side) // 2
+    cropped = rgb[y0:y0 + side, x0:x0 + side]
+    if cropped.shape[0] != size:
+        cropped = cv2.resize(cropped, (size, size), interpolation=cv2.INTER_AREA if cropped.shape[0] > size else cv2.INTER_CUBIC)
+    return cropped
+
+
+def _rgb_to_b64_png(rgb) -> str:
+    """RGB ndarray → 不含前缀的 base64 PNG"""
+    from PIL import Image
+    import io
+    img = Image.fromarray(rgb)
+    buf = io.BytesIO()
+    img.save(buf, format="PNG", optimize=False)
+    return base64.b64encode(buf.getvalue()).decode("utf-8")
+
+
+def _build_cubemap_to_equirect_maps(out_w: int, out_h: int, face_size: int):
+    """预计算 equirectangular 每个像素 → cubemap(face, u, v) 的查表。
+    返回 6 个 face 的 (map_x, map_y, mask) 三元组，mask 标记该像素属于该 face。
+    """
+    import numpy as np
+    # 输出像素坐标 → 经纬度
+    j = np.arange(out_h, dtype=np.float32)
+    i = np.arange(out_w, dtype=np.float32)
+    ii, jj = np.meshgrid(i, j)
+    # 经度 lon ∈ [-π, π)，纬度 lat ∈ [π/2, -π/2]
+    lon = (ii / out_w) * (2 * np.pi) - np.pi
+    lat = np.pi / 2 - (jj / out_h) * np.pi
+    # 单位方向向量（与 panorama-viewer.js 的着色器约定保持一致）
+    # 着色器：lon = atan2(x, -z), lat = asin(y)
+    # 反推：x = cos(lat)*sin(lon), y = sin(lat), z = -cos(lat)*cos(lon)
+    cos_lat = np.cos(lat)
+    x = cos_lat * np.sin(lon)
+    y = np.sin(lat)
+    z = -cos_lat * np.cos(lon)
+    # 选择主导分量 → 决定属于哪个 face
+    ax, ay, az = np.abs(x), np.abs(y), np.abs(z)
+    max_axis = np.maximum(np.maximum(ax, ay), az)
+
+    faces = {}
+    s = face_size
+
+    # +X = right （x 最大且 x>0）
+    sel = (ax >= ay) & (ax >= az) & (x > 0)
+    u = -z[sel] / x[sel]
+    v = -y[sel] / x[sel]
+    faces["right"] = (sel, (u + 1) * 0.5 * (s - 1), (v + 1) * 0.5 * (s - 1))
+
+    # -X = left
+    sel = (ax >= ay) & (ax >= az) & (x < 0)
+    u = -z[sel] / x[sel]
+    v = y[sel] / x[sel]
+    faces["left"] = (sel, (u + 1) * 0.5 * (s - 1), (v + 1) * 0.5 * (s - 1))
+
+    # +Y = up（y 最大且 y>0）
+    sel = (ay >= ax) & (ay >= az) & (y > 0)
+    u = x[sel] / y[sel]
+    v = -z[sel] / y[sel]
+    faces["up"] = (sel, (u + 1) * 0.5 * (s - 1), (v + 1) * 0.5 * (s - 1))
+
+    # -Y = down
+    sel = (ay >= ax) & (ay >= az) & (y < 0)
+    u = x[sel] / (-y[sel])
+    v = -z[sel] / (-y[sel])
+    faces["down"] = (sel, (u + 1) * 0.5 * (s - 1), (v + 1) * 0.5 * (s - 1))
+
+    # -Z = forward（z 最大负，约定 forward 是 -z 方向）
+    sel = (az >= ax) & (az >= ay) & (z < 0)
+    u = x[sel] / (-z[sel])
+    v = -y[sel] / (-z[sel])
+    faces["forward"] = (sel, (u + 1) * 0.5 * (s - 1), (v + 1) * 0.5 * (s - 1))
+
+    # +Z = back
+    sel = (az >= ax) & (az >= ay) & (z > 0)
+    u = -x[sel] / z[sel]
+    v = -y[sel] / z[sel]
+    faces["back"] = (sel, (u + 1) * 0.5 * (s - 1), (v + 1) * 0.5 * (s - 1))
+
+    return faces
+
+
+def _composite_cubemap_to_equirect(faces_rgb: dict, out_w: int = 4096) -> "np.ndarray":
+    """faces_rgb: {face_name: HxWx3 uint8}, 6 个面齐全。返回 equirectangular RGB。"""
+    import numpy as np
+    out_h = out_w // 2
+    face_size = next(iter(faces_rgb.values())).shape[0]
+    panorama = np.zeros((out_h, out_w, 3), dtype=np.uint8)
+    face_maps = _build_cubemap_to_equirect_maps(out_w, out_h, face_size)
+    for name, (sel, u, v) in face_maps.items():
+        face = faces_rgb.get(name)
+        if face is None:
+            continue
+        # numpy 双线性采样（cv2.remap 对 N×1 形状有 SHRT_MAX 行数限制，不能直接用）
+        u = np.clip(u, 0, face_size - 1)
+        v = np.clip(v, 0, face_size - 1)
+        u0 = np.floor(u).astype(np.int32)
+        v0 = np.floor(v).astype(np.int32)
+        u1 = np.minimum(u0 + 1, face_size - 1)
+        v1 = np.minimum(v0 + 1, face_size - 1)
+        fu = (u - u0).astype(np.float32)[:, None]
+        fv = (v - v0).astype(np.float32)[:, None]
+        p00 = face[v0, u0].astype(np.float32)
+        p10 = face[v0, u1].astype(np.float32)
+        p01 = face[v1, u0].astype(np.float32)
+        p11 = face[v1, u1].astype(np.float32)
+        sampled = (p00 * (1 - fu) * (1 - fv)
+                   + p10 * fu * (1 - fv)
+                   + p01 * (1 - fu) * fv
+                   + p11 * fu * fv)
+        panorama[sel] = np.clip(sampled, 0, 255).astype(np.uint8)
+    return panorama
+
+
+async def _gen_one_face_via_internal(config: dict, headers: dict, prompt: str,
+                                      negative_prompt: str, face_size: int,
+                                      ref_b64_data_url: str):
+    """复用现有探测/缓存逻辑生成单个 face。返回 RGB ndarray 或 None。"""
+    normalized_images = [_strip_image_base64(ref_b64_data_url)] if ref_b64_data_url else []
+
+    cached_sid = get_cached_strategy(config["id"])
+    strategies_to_try = []
+    if cached_sid and cached_sid in STRATEGY_MAP:
+        s = STRATEGY_MAP[cached_sid]
+        if not (normalized_images and s["request_format"] == "none"):
+            strategies_to_try.append(s)
+    explore = _get_applicable_strategies(config["api_base"])
+    if normalized_images:
+        explore = [s for s in explore if s["request_format"] != "none"]
+    for s in explore:
+        if s not in strategies_to_try:
+            strategies_to_try.append(s)
+
+    for strategy in strategies_to_try:
+        result = await _try_strategy(
+            strategy, config, headers, prompt, face_size, face_size, 1,
+            negative_prompt, normalized_images,
+        )
+        if result:
+            b64 = (result[0] or {}).get("b64_json", "")
+            if b64:
+                return _decode_b64_image_to_rgb(b64)
+    return None
+
+
+@router.post("/generate-panorama")
+async def generate_panorama(req: PanoramaGenerateRequest):
+    """以 forward 图为基准，生成另外 5 个方位面，OpenCV 合成 equirectangular 全景。"""
+    config = next((c for c in get_config_list() if c["id"] == req.config_id), None)
+    if not config:
+        raise HTTPException(status_code=404, detail="配置不存在")
+
+    forward_rgb = _decode_b64_image_to_rgb(req.image_base64)
+    if forward_rgb is None:
+        raise HTTPException(status_code=400, detail="参考图解码失败")
+
+    face_size = max(512, min(2048, int(req.face_size or 1024)))
+    out_w = max(1024, min(8192, int(req.out_width or 4096)))
+    if out_w % 2:
+        out_w -= 1
+    out_h = out_w // 2
+
+    forward_face = _resize_to_square(forward_rgb, face_size)
+    ref_b64 = "data:image/png;base64," + _rgb_to_b64_png(forward_face)
+    scene_hint = (req.prompt or "").strip()
+    neg = (req.negative_prompt or "").strip() or PANORAMA_NEG_PROMPT
+
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {config['api_key']}",
+    }
+
+    async def gen_face(name: str):
+        base_prompt = PANORAMA_FACE_PROMPTS[name]
+        prompt = f"{scene_hint}. {base_prompt}" if scene_hint else base_prompt
+        rgb = await _gen_one_face_via_internal(config, headers, prompt, neg, face_size, ref_b64)
+        if rgb is None:
+            print(f"[全景] face={name} 生成失败")
+            return name, None
+        return name, _resize_to_square(rgb, face_size)
+
+    other_faces = ["right", "back", "left", "up", "down"]
+    print(f"[全景] 开始生成 5 个方位面 (face_size={face_size}, out={out_w}x{out_h})")
+    results = await asyncio.gather(*[gen_face(n) for n in other_faces], return_exceptions=True)
+
+    faces_rgb = {"forward": forward_face}
+    failed = []
+    for item in results:
+        if isinstance(item, Exception):
+            print(f"[全景] face 异常: {item}")
+            continue
+        name, rgb = item
+        if rgb is not None:
+            faces_rgb[name] = rgb
+        else:
+            failed.append(name)
+
+    # 缺失的面用 forward 兜底（差但不会黑屏）
+    for name in other_faces:
+        if name not in faces_rgb:
+            faces_rgb[name] = forward_face
+
+    if failed:
+        print(f"[全景] 警告：以下面生成失败已用 forward 兜底: {failed}")
+
+    print(f"[全景] 合成 equirectangular {out_w}x{out_h}")
+    try:
+        panorama_rgb = _composite_cubemap_to_equirect(faces_rgb, out_w=out_w)
+        b64_png = _rgb_to_b64_png(panorama_rgb)
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"全景合成失败: {e}")
+
+    return {
+        "code": 0,
+        "data": [{"b64_json": b64_png}],
+        "meta": {
+            "width": out_w,
+            "height": out_h,
+            "face_size": face_size,
+            "failed_faces": failed,
+        },
+    }

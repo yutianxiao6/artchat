@@ -70,6 +70,15 @@ class ImageGenerateRequest(BaseModel):
     n: int = 1
 
 
+class PanoramaGenerateRequest(BaseModel):
+    config_id: str
+    image_base64: str  # forward 方位参考图（必填）
+    prompt: Optional[str] = ""  # 场景额外描述（可选，会拼到方位 prompt 后）
+    negative_prompt: Optional[str] = ""
+    face_size: int = 1024  # 单个 cubemap 面分辨率
+    out_width: int = 4096  # 全景输出宽度（高度 = 宽度 / 2）
+
+
 class CanvasStatePayload(BaseModel):
     sessions: List[Dict[str, Any]] = []
     assetLibrary: List[Dict[str, Any]] = []

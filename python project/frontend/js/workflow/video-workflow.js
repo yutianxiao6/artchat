@@ -652,10 +652,22 @@
           delete c.imageUrl; delete c.imageUrls; delete c.gridInfo;
         });
       }
+      // 重新生成：把 imageUrl/imageUrls/gridInfo 剥掉再发给后端
+      // （后端 gen_single 见到 imageUrl 会直接 return 跳过；宫格模式上一步已处理）
+      var charsForApi = chars.map(function (c) {
+        var copy = {};
+        for (var k in c) if (Object.prototype.hasOwnProperty.call(c, k)) copy[k] = c[k];
+        if (!gridMerge) {
+          delete copy.imageUrl;
+          delete copy.imageUrls;
+          delete copy.gridInfo;
+        }
+        return copy;
+      });
       var preset = findPreset("character", nd.presetId || "default");
       var data = await callApi("/api/workflow/generate/main-characters", {
         workflow_id: wf.id, image_config_id: getConfigId("image", "mainCharacters"),
-        characters: chars, style: wf.input.style,
+        characters: charsForApi, style: wf.input.style,
         ref_image_urls: nd.refImages || [],
         image_count: getImageCount("mainCharacters"),
         preset_id: nd.presetId || "default",
@@ -739,10 +751,21 @@
           delete c.imageUrl; delete c.imageUrls; delete c.gridInfo;
         });
       }
+      // 重新生成：剥掉旧 imageUrl/imageUrls/gridInfo，否则后端会因为已有图直接 return
+      var charsForApi = chars.map(function (c) {
+        var copy = {};
+        for (var k in c) if (Object.prototype.hasOwnProperty.call(c, k)) copy[k] = c[k];
+        if (!gridMerge) {
+          delete copy.imageUrl;
+          delete copy.imageUrls;
+          delete copy.gridInfo;
+        }
+        return copy;
+      });
       var preset = findPreset("character", nd.presetId || "default");
       var data = await callApi("/api/workflow/generate/minor-characters", {
         workflow_id: wf.id, image_config_id: getConfigId("image", "minorCharacters"),
-        characters: chars, style: wf.input.style,
+        characters: charsForApi, style: wf.input.style,
         ref_image_urls: nd.refImages || [],
         image_count: getImageCount("minorCharacters"),
         preset_id: nd.presetId || "default",
@@ -829,9 +852,20 @@
           if (prevV && prevV.scenes) prevScenes = prevV.scenes;
         }
       }
+      // 重新生成：剥掉旧 imageUrl/imageUrls/gridInfo，否则后端 gen_single 见 imageUrl 会直接 return
+      var scenesForApi = scenes.map(function (s) {
+        var copy = {};
+        for (var k in s) if (Object.prototype.hasOwnProperty.call(s, k)) copy[k] = s[k];
+        if (!gridMerge) {
+          delete copy.imageUrl;
+          delete copy.imageUrls;
+          delete copy.gridInfo;
+        }
+        return copy;
+      });
       var data = await callApi("/api/workflow/generate/scene", {
         workflow_id: wf.id, image_config_id: getConfigId("image", "scene"),
-        scenes: scenes, prev_segment_scenes: prevScenes,
+        scenes: scenesForApi, prev_segment_scenes: prevScenes,
         style: wf.input.style, ref_image_urls: nd.refImages || [],
         image_count: getImageCount("scene"),
       });
@@ -1921,7 +1955,6 @@
       return;
     }
     _syncEditableFields(engine);
-    // 标记宫格合并模式到 nodeData 上，generate 函数会读取并清除
     if (options && options.gridMerge) {
       var arr = wf[nodeType + "s"] || [];
       if (arr[0]) arr[0]._gridMerge = true;
@@ -1996,10 +2029,16 @@
       var itemRefs = singleChar.refImages || [];
       var refImageUrls = itemRefs.concat(nodeRefs.filter(function (u) { return itemRefs.indexOf(u) < 0; }));
       var preset = findPreset("character", nd.presetId || "default");
+      // 剥掉旧 imageUrl/imageUrls/gridInfo，否则后端 gen_single 见 imageUrl 会直接 return
+      var charForApi = {};
+      for (var k in singleChar) if (Object.prototype.hasOwnProperty.call(singleChar, k)) charForApi[k] = singleChar[k];
+      delete charForApi.imageUrl;
+      delete charForApi.imageUrls;
+      delete charForApi.gridInfo;
       var data = await callApi("/api/workflow/generate/" + (charType === "mainCharacters" ? "main-characters" : "minor-characters"), {
         workflow_id: wf.id,
         image_config_id: getConfigId("image", charType),
-        characters: [singleChar],
+        characters: [charForApi],
         style: wf.input.style,
         ref_image_urls: refImageUrls,
         image_count: getImageCount(charType),
@@ -2074,10 +2113,16 @@
       var nodeRefs = nd.refImages || [];
       var itemRefs = singleScene.refImages || [];
       var refImageUrls = itemRefs.concat(nodeRefs.filter(function (u) { return itemRefs.indexOf(u) < 0; }));
+      // 剥掉旧 imageUrl/imageUrls/gridInfo，否则后端见 imageUrl 会跳过
+      var sceneForApi = {};
+      for (var k in singleScene) if (Object.prototype.hasOwnProperty.call(singleScene, k)) sceneForApi[k] = singleScene[k];
+      delete sceneForApi.imageUrl;
+      delete sceneForApi.imageUrls;
+      delete sceneForApi.gridInfo;
       var data = await callApi("/api/workflow/generate/scene", {
         workflow_id: wf.id,
         image_config_id: getConfigId("image", "scene"),
-        scenes: [singleScene],
+        scenes: [sceneForApi],
         prev_segment_scenes: prevScenes,
         style: wf.input.style,
         ref_image_urls: refImageUrls,

@@ -754,14 +754,14 @@
     var needsChat = [
       "script", "planCharactersScenes", "planFrames", "videoPrompt", "framePrompt",
       "episodePlan",
-      "rcPlotAlign", "rcPlotRewrite", "rcStoryboard"
+      "rcPlotAlign", "rcPlotRewrite"
     ].indexOf(nodeType) >= 0;
     var needsImage = [
       "mainCharacters", "minorCharacters", "scene", "firstFrame", "storyboard", "lastFrame", "storyTemplate",
-      "rcCharacters", "rcScenes", "rcImageGen"
+      "rcStoryboardRemix"
     ].indexOf(nodeType) >= 0;
-    // 视觉模型（帧标注、段内选帧——使用视觉 LLM）
-    var needsVision = ["rcFrameLabel", "rcRepFrames"].indexOf(nodeType) >= 0;
+    // 视觉模型（帧标注、段内选帧、分段审核、二创分镜对话 都需要视觉 LLM）
+    var needsVision = ["rcFrameLabel", "rcRepFrames", "rcSmartSegment", "rcStoryboardOrig", "rcStoryboardRemix", "rcVideoPrompt"].indexOf(nodeType) >= 0;
     var dirty = false;
     var html = '';
     if (needsVision) {
@@ -1434,6 +1434,23 @@
       }
       if (field === "promptTemplate") {
         if (nd) nd.promptTemplate = e.target.value;
+        engine.save();
+        return;
+      }
+      // 节点级配置字段（存在 nd 上，不走 version），主要用于 rcKeyframes 高级参数 / rcSmartSegment 段时长限制等
+      var NODE_LEVEL_FIELDS = {
+        min_scene_threshold: 1, long_shot_max_gap: 1, merge_min_dt: 1,
+        sharpness_min: 1, hamming_dedup_threshold: 1,
+        luma_lo: 1, luma_hi: 1, edge_density_min: 1, max_candidates: 1,
+        batchSize: 1, maxConcurrentOverride: 1,
+        minSegSec: 1, maxSegSec: 1,
+      };
+      if (NODE_LEVEL_FIELDS[field]) {
+        if (nd) {
+          var rawVal = e.target.value;
+          var numVal = parseFloat(rawVal);
+          nd[field] = (rawVal === "" || isNaN(numVal)) ? rawVal : numVal;
+        }
         engine.save();
         return;
       }

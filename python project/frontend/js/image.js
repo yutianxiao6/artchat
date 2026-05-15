@@ -414,7 +414,7 @@
           <section class="canvas-panel" style="flex:0.9;"><div class="canvas-panel-header"><div class="canvas-panel-title"><i class="fa fa-history"></i> 历史会话记录</div><button class="btn btn-default" id="new-canvas-session-btn">新建</button></div><div class="canvas-panel-subtitle">所有画布记录都会保存到本地文件。</div><div class="canvas-history-list custom-scrollbar" id="canvas-history-list"></div></section>
         </aside>
         <section class="canvas-main">
-          <div class="canvas-topbar"><div class="left"><span class="badge">双击创建节点</span><span class="badge">滚轮缩放</span><span class="badge">Ctrl+C / Ctrl+V / Ctrl+Z / Delete</span></div><div class="right"><button class="btn btn-default" id="quick-add-node-btn">新建节点</button><span class="badge" id="canvas-zoom-badge">100%</span><button class="btn btn-default" id="reset-canvas-btn">清空画布</button></div></div>
+          <div class="canvas-topbar"><div class="left"><span class="badge">双击创建节点</span><span class="badge">滚轮缩放</span><span class="badge">Ctrl+C / Ctrl+V / Ctrl+Z / Delete</span></div><div class="right"><button class="btn btn-default" id="open-panorama-viewer-btn"><i class="fa fa-globe"></i> 全景查看器</button><button class="btn btn-default" id="quick-add-node-btn">新建节点</button><span class="badge" id="canvas-zoom-badge">100%</span><button class="btn btn-default" id="reset-canvas-btn">清空画布</button></div></div>
           <div class="canvas-board-wrap" id="canvas-board-wrap"><div class="canvas-board" id="canvas-board"><div class="canvas-world" id="canvas-world"><svg class="canvas-svg" id="canvas-svg"></svg><div id="edge-dom-layer" class="edge-dom-layer"></div><div id="canvas-node-layer" class="canvas-node-layer"></div></div><div class="canvas-empty" id="canvas-empty-tip">双击画布、右键画布或直接粘贴图片来创建节点</div><div class="canvas-selection-box" id="canvas-selection-box" style="display:none"></div></div><div id="canvas-context-menu-root"></div></div>
         </section>
       </div>
@@ -457,6 +457,7 @@
         return;
       }
       if (target.closest("#reset-canvas-btn")) return resetCanvas();
+      if (target.closest("#open-panorama-viewer-btn")) { if (window.PanoramaViewer) window.PanoramaViewer.open(); return; }
       if (target.closest("#quick-add-node-btn")) { const rect = getBoardRect(); const point = clientToCanvasPoint(rect.left + rect.width / 2, rect.top + Math.max(180, rect.height / 2)); return addNodeAt(point.x - NODE_WIDTH / 2, point.y - 120); }
       if (target.closest("#new-canvas-session-btn")) return createNewHistorySession();
       if (target.closest("#create-asset-category-btn")) return createAssetCategory();
@@ -473,6 +474,15 @@
         event.preventDefault();
         event.stopPropagation();
         return runGenerateNode(runGenerate.getAttribute("data-run-generate"));
+      }
+
+      const viewPanorama = target.closest("[data-view-panorama]");
+      if (viewPanorama) {
+        event.preventDefault();
+        event.stopPropagation();
+        const url = viewPanorama.getAttribute("data-view-panorama");
+        if (url && window.PanoramaViewer) window.PanoramaViewer.openWithImage(url, "全景图");
+        return;
       }
 
       const edgeHit = target instanceof SVGElement ? target.closest(".edge-hit[data-edge-id]") : target.closest(".edge-hit[data-edge-id]");
@@ -2201,7 +2211,12 @@ function downloadImage(imageUrl) {
         <div class="node-mini-field"><label>张数</label><input type="number" min="1" max="4" value="${Number(node.count || 1)}" data-node-id="${node.id}" data-field="count"></div>
         <div class="node-mini-field"><label>模型选择</label><select data-node-id="${node.id}" data-field="modelId">${modelOptions}</select></div>
       </div>
-      <div class="node-actions"><button class="btn btn-primary" type="button" data-run-generate="${node.id}">${node.busy ? "生成中..." : "开始生成"}</button></div>
+      ${(() => {
+        const viewPanoBtn = (node.isPanorama && node.outputImages && node.outputImages[0])
+          ? `<button class="btn btn-default" type="button" data-view-panorama="${node.outputImages[0]}" title="在全景查看器打开"><i class="fa fa-globe"></i> 查看全景</button>`
+          : "";
+        return `<div class="node-actions"><button class="btn btn-primary" type="button" data-run-generate="${node.id}">${node.busy ? "生成中..." : "开始生成"}</button>${viewPanoBtn}</div>`;
+      })()}
     </div></div>`;
 
     return `<div class="node ${selectedCls} ${multiSelected} ${linkedHighlight} ${isSelected ? 'is-selected' : ''} ${isExpanded ? 'is-expanded' : ''}" data-node-id="${node.id}" style="${nodeStyle}">
@@ -3064,6 +3079,57 @@ function downloadImage(imageUrl) {
     if (opts.toast) showToast('画布已保存');
   }
   window.flushImageCanvasSave = flushCanvasSaveNow;
+
+  // 外部入口：把 dataURL（如全景查看器截图）作为新节点放入画布。
+  // 走和粘贴/上传一致的管线：写素材库 → 建节点 → 持久化。
+  async function addImageNodeFromDataUrl(dataUrl, options = {}) {
+    if (!dataUrl || typeof dataUrl !== "string") return null;
+    const base64 = extractBase64(dataUrl);
+    if (!base64) return null;
+    pushUndoSnapshot();
+    const rect = getBoardRect();
+    const point = rect.width
+      ? clientToCanvasPoint(rect.left + rect.width / 2, rect.top + Math.max(180, rect.height / 2))
+      : { x: 200, y: 200 };
+    const node = createNode(point.x - NODE_DEFAULT_W / 2, point.y - NODE_DEFAULT_H / 2);
+    node.imageUrl = dataUrl;
+    node.imageBase64 = base64;
+    const img = await loadImageElement(dataUrl);
+    if (img && img.naturalWidth && img.naturalHeight) {
+      node.displayWidth = img.naturalWidth;
+      node.displayHeight = img.naturalHeight;
+      const clamped = clampCanvasSize(img.naturalWidth, img.naturalHeight);
+      node.width = clamped.width;
+      node.height = clamped.height;
+    }
+    STATE.nodes.push(node);
+    STATE.selectedNodeId = node.id;
+    STATE.selectedEdgeId = null;
+    renderCanvas();
+    const title = String(options.title || "全景截图").slice(0, 40);
+    const mime = String(options.mime || "image/png");
+    try {
+      const asset = await saveAssetFile({
+        title,
+        source: "全景查看器",
+        category: STATE.pendingAssetCategory || DEFAULT_ASSET_CATEGORY,
+        mime_type: mime,
+        image_base64: base64,
+      });
+      if (asset) {
+        node.assetId = asset.id;
+        if (asset.imageUrl) node.imageUrl = asset.imageUrl;
+        mergeAssetIntoLibrary(asset);
+      }
+    } catch (e) {
+      console.warn("[canvas] 保存全景截图素材失败", e);
+    }
+    persistCanvasState();
+    renderCanvas();
+    renderLeftPanel();
+    return node.id;
+  }
+  window.ImageCanvas = Object.assign(window.ImageCanvas || {}, { addImageNodeFromDataUrl });
 
   // 关闭页面/切后台时强制保存，防止数据丢失
   if (!window.__canvasUnloadBound) {
