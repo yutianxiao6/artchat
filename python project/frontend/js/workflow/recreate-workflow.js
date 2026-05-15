@@ -1211,7 +1211,7 @@
               + '</label>'
             : "")
         + '</div>'
-        + '<textarea class="wf-detail-textarea" id="wf-rc-remix-chat-input-' + ctx.segIndex + '" rows="3" placeholder="' + (isTyping ? 'AI 正在绘制分镜，请稍候...' : (isPipeline ? '在此输入广播文字（最后一条用户消息会作为 user_message 发给后端）' : '描述想要的改编分镜，可用 "图片1" / "图片2" 引用参考图...')) + '" style="margin-top:6px;"' + (isTyping ? ' disabled' : '') + '></textarea>'
+        + '<textarea class="wf-detail-textarea" id="wf-rc-remix-chat-input-' + ctx.segIndex + '" rows="3" placeholder="' + (isTyping ? 'AI 正在绘制分镜，请稍候...' : (isPipeline ? '在此输入广播文字（最后一条用户消息会作为 user_message 发给后端）' : '描述想要的改编分镜，可用 "图片1" / "图片2" 引用参考图...')) + '" style="margin-top:6px;"' + (isTyping ? ' disabled' : '') + '>' + esc(nd._draftMsg || "") + '</textarea>'
         + '<div style="display:flex;gap:6px;margin-top:6px;">'
         + (isPipeline
             ? '<div style="font-size:11px;color:#64748b;align-self:center;">使用顶部「全部段落生成」按钮触发广播生成</div>'
@@ -1484,12 +1484,11 @@
       if (!topNd) return;
       // 顶层 pipeline 视图的 textarea id 后缀是 "null"（ctx.segIndex 为 null）
       var topInput = document.getElementById("wf-rc-remix-chat-input-null");
-      var pendingMsg = topInput && topInput.value ? topInput.value.trim() : "";
+      var pendingMsg = ((topInput && topInput.value) || topNd._draftMsg || "").trim();
 
       var topRefs = (topNd.refImages || []).slice();
       var topUseLlm = !!topNd.useLlm;
       var topEditRemix = !!topNd.editRemix;
-      // 顶层对话历史 + 把 pendingMsg 当作最后一条 user 消息（如果有）
       var topHistory = (topNd.chatHistory || []).filter(function (m) { return !m._typing; });
       if (pendingMsg) topHistory = topHistory.concat([{ role: "user", content: pendingMsg }]);
 
@@ -1502,8 +1501,10 @@
         snd.chatHistory = topHistory.slice();
         snd.useLlm = topUseLlm;
         snd.editRemix = topEditRemix;
+        snd._draftMsg = "";
       }
       if (topInput) topInput.value = "";
+      topNd._draftMsg = "";
       engine.save();
     }, true);
 
@@ -2048,6 +2049,18 @@
       }
     });
 
+    // textarea input → 暂存 nd._draftMsg，避免重渲染丢失文字
+    document.addEventListener("input", function (e) {
+      var el = e.target;
+      if (!el.id || el.id.indexOf("wf-rc-remix-chat-input-") !== 0) return;
+      var engine = window._wfEngine;
+      var wf = engine && engine.current();
+      if (!wf || wf.templateId !== "recreate-drama") return;
+      var segIdxRaw = el.id.slice("wf-rc-remix-chat-input-".length);
+      var nd = _getRemixNd(wf, segIdxRaw);
+      if (nd) nd._draftMsg = el.value;
+    });
+
     // 视觉模型增强 / 修改二创分镜 toggle（两者互斥）
     document.addEventListener("change", function (e) {
       var el = e.target;
@@ -2124,6 +2137,7 @@
     if (msg) nd.chatHistory.push({ role: "user", content: msg });
     nd.chatHistory.push({ role: "assistant", content: "", _typing: true });
     if (input) input.value = "";
+    nd._draftMsg = "";
     engine.save();
     if (window.WF_Renderer) window.WF_Renderer.render(engine);
 
