@@ -2732,15 +2732,17 @@ async def _gen_image_via_internal(config_id: str, prompt: str, ref_b64_list: lis
 @router.post("/generate/rc-storyboard-remix")
 async def gen_rc_storyboard_remix(body: dict):
     """
-    二创分镜（对话式）：基于原版宫格大图 + 用户输入做 i2i，可选用视觉 LLM 增强。
+    二创分镜（对话式）：基于原版宫格大图 + 用户输入做 i2i，可选用视觉 LLM 增强或在已有二创分镜上修改。
 
     body: {
       workflow_id, image_config_id, segment_index,
       origin_grid: {url, rows, cols, urls[], cell_w?, cell_h?, width?, height?},
       user_message?: 本轮用户文字,
       reference_images?: [{url, label}] 用户上传的参考图,
-      use_llm?: bool 默认 false。开启时 chat_config_id 用视觉 LLM 先出 cell prompts；
-                关闭则直接把用户文字 + 原版图传给图像 API。
+      use_llm?: bool 默认 false。开启时 chat_config_id 用视觉 LLM 先出 cell prompts。
+      edit_remix?: bool 默认 false。开启时把 remix_grid 作为 i2i 参考图（在已有二创上继续修改）；
+                   与 use_llm 互斥，同时为 true 时报 400。
+      remix_grid?: {url, rows, cols, ...} 仅 edit_remix=true 时使用，必填。
       chat_config_id?: 仅 use_llm=true 时用,
       chat_history?: 仅 use_llm=true 时用,
     }
@@ -2773,12 +2775,19 @@ async def gen_rc_storyboard_remix(body: dict):
     user_message = (body.get("user_message") or "").strip()
     reference_images = body.get("reference_images") or []
     use_llm = bool(body.get("use_llm"))
+    edit_remix = bool(body.get("edit_remix"))
+    if use_llm and edit_remix:
+        raise HTTPException(status_code=400, detail="视觉模型增强与修改二创分镜不能同时开启")
 
-    # 原版图：直接按原尺寸读取（_load_ref_image_b64 内部仅在 >max_size 时缩到 1024 长边）
-    # 提高阈值到 8MB，让宫格图大概率原样传入
-    g_b64 = _load_ref_image_b64(grid_url, max_size=8 * 1024 * 1024)
+    # 选择 i2i 参考图：edit_remix 用 remix_grid.url，否则用 origin_grid.url
+    base_grid = body.get("remix_grid") if edit_remix else None
+    base_grid_url = (base_grid or {}).get("url") if edit_remix else grid_url
+    if edit_remix and not base_grid_url:
+        raise HTTPException(status_code=400, detail="edit_remix=true 时必须提供 remix_grid.url")
+
+    g_b64 = _load_ref_image_b64(base_grid_url, max_size=8 * 1024 * 1024)
     if not g_b64:
-        raise HTTPException(status_code=400, detail=f"原版宫格图读取失败: {grid_url}")
+        raise HTTPException(status_code=400, detail=f"参考宫格图读取失败: {base_grid_url}")
 
     # 用户上传参考图：去重 + 一次性加载
     ref_items = []
@@ -2866,14 +2875,24 @@ async def gen_rc_storyboard_remix(body: dict):
             f"Global style: {global_style}. All cells must share the same visual style, color palette, lighting and rendering quality."
         )
     else:
-        # 不走 LLM：直接把用户输入当作 prompt 喂给图像模型，原版图做 i2i 强约束
-        chat_message = "已基于原版分镜 + 你的描述重绘"
-        grid_prompt = (
-            f"A {rows}x{cols} storyboard grid keeping the exact same layout, composition and shot structure as the reference image, "
-            f"but restyled according to user instruction below. Hard-edged cell borders, no overlap.\n"
-            f"User instruction: {user_message or 'redraw in a fresh consistent cinematic style'}\n"
-            f"Keep all cells in the same visual style, color palette and lighting."
-        )
+        # 不走 LLM：直接把用户输入当作 prompt 喂给图像模型，参考图做 i2i 强约束
+        if edit_remix:
+            chat_message = "已在二创分镜基础上继续修改"
+            grid_prompt = (
+                f"Edit and refine the existing {rows}x{cols} remixed storyboard grid (the reference image) according to the user instruction below. "
+                f"Keep the exact same {rows}x{cols} layout, cell composition and shot structure; only apply the requested modifications. "
+                f"Hard-edged cell borders, no overlap.\n"
+                f"User modification instruction: {user_message or 'subtle refinement, improve quality and consistency'}\n"
+                f"Keep all cells in the same visual style, color palette and lighting."
+            )
+        else:
+            chat_message = "已基于原版分镜 + 你的描述重绘"
+            grid_prompt = (
+                f"A {rows}x{cols} storyboard grid keeping the exact same layout, composition and shot structure as the reference image, "
+                f"but restyled according to user instruction below. Hard-edged cell borders, no overlap.\n"
+                f"User instruction: {user_message or 'redraw in a fresh consistent cinematic style'}\n"
+                f"Keep all cells in the same visual style, color palette and lighting."
+            )
 
     ref_for_image = [g_b64] + ref_b64_user
     # 4K (3840×2160) 优先，失败退 2K (1920×1080)；全 16:9

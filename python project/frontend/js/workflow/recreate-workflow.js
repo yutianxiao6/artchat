@@ -1106,6 +1106,9 @@
       if (!origV || !origV.grid || !origV.grid.url) throw new Error("请先完成原版分镜");
       var nd = ctx.nodeData;
       var useLlm = !!nd.useLlm;
+      var v = NR.getActiveVersion(nd);
+      var editRemix = !!nd.editRemix && v && v.grid && v.grid.url;
+      if (useLlm && editRemix) editRemix = false;  // 互斥兜底
 
       var payload = {
         workflow_id: wf.id,
@@ -1115,7 +1118,9 @@
         user_message: "",
         reference_images: (nd._pendingRefImages || []),
         use_llm: useLlm,
+        edit_remix: editRemix,
       };
+      if (editRemix) payload.remix_grid = v.grid;
       if (useLlm) {
         payload.chat_config_id = getConfigId("vision", "rcStoryboardRemix");
         payload.chat_history = [];
@@ -1167,9 +1172,14 @@
         + (refs.length ? '<div style="margin:6px 0;">' + refHtml + '</div>' : '')
         + '<div style="display:flex;gap:6px;align-items:center;margin-top:4px;flex-wrap:wrap;">'
         + '<label class="wf-tb-btn" style="cursor:pointer;"><i class="fa fa-image"></i> 上传参考图<input type="file" accept="image/*" multiple data-rc-remix-ref-upload="' + ctx.segIndex + '" style="display:none;"></label>'
-        + '<label style="display:inline-flex;align-items:center;gap:4px;font-size:11px;color:#cbd5e1;cursor:pointer;user-select:none;" title="开启后用视觉模型分析原图为每格生成提示词，可能更准但更慢">'
-        +   '<input type="checkbox"' + (nd.useLlm ? ' checked' : '') + ' data-rc-remix-use-llm="' + ctx.segIndex + '" style="margin:0;"> 视觉模型增强'
+        + '<label style="display:inline-flex;align-items:center;gap:4px;font-size:11px;color:#cbd5e1;cursor:pointer;user-select:none;" title="开启后用视觉模型分析原图为每格生成提示词，可能更准但更慢。与「修改二创分镜」互斥">'
+        +   '<input type="checkbox"' + (nd.useLlm ? ' checked' : '') + (nd.editRemix ? ' disabled' : '') + ' data-rc-remix-use-llm="' + ctx.segIndex + '" style="margin:0;"> 视觉模型增强'
         + '</label>'
+        + (v && v.grid && v.grid.url
+            ? '<label style="display:inline-flex;align-items:center;gap:4px;font-size:11px;color:#cbd5e1;cursor:pointer;user-select:none;" title="开启后在已生成的二创分镜基础上继续修改，否则从原版分镜重新生成。与「视觉模型增强」互斥">'
+              + '<input type="checkbox"' + (nd.editRemix ? ' checked' : '') + (nd.useLlm ? ' disabled' : '') + ' data-rc-remix-edit="' + ctx.segIndex + '" style="margin:0;"> 修改二创分镜'
+              + '</label>'
+            : "")
         + '</div>'
         + '<textarea class="wf-detail-textarea" id="wf-rc-remix-chat-input-' + ctx.segIndex + '" rows="3" placeholder="' + (isTyping ? 'AI 正在绘制分镜，请稍候...' : '描述想要的改编分镜，可用 "图片1" / "图片2" 引用参考图...') + '" style="margin-top:6px;"' + (isTyping ? ' disabled' : '') + '></textarea>'
         + '<div style="display:flex;gap:6px;margin-top:6px;">'
@@ -1972,20 +1982,28 @@
       }
     });
 
-    // 视觉模型增强 toggle
+    // 视觉模型增强 / 修改二创分镜 toggle（两者互斥）
     document.addEventListener("change", function (e) {
       var el = e.target;
-      var segAttr = el.getAttribute && el.getAttribute("data-rc-remix-use-llm");
-      if (segAttr === null || segAttr === undefined) return;
+      var llmAttr = el.getAttribute && el.getAttribute("data-rc-remix-use-llm");
+      var editAttr = el.getAttribute && el.getAttribute("data-rc-remix-edit");
+      if (llmAttr === null && editAttr === null) return;
       var engine = window._wfEngine;
       var wf = engine && engine.current();
       if (!wf || wf.templateId !== "recreate-drama") return;
-      var segIdx = parseInt(segAttr);
+      var segIdx = parseInt(llmAttr !== null ? llmAttr : editAttr);
       var seg = (wf.segments || [])[segIdx];
       var nd = seg && ((seg.rcStoryboardRemixs || [])[0]);
       if (!nd) return;
-      nd.useLlm = !!el.checked;
+      if (llmAttr !== null) {
+        nd.useLlm = !!el.checked;
+        if (nd.useLlm) nd.editRemix = false;
+      } else {
+        nd.editRemix = !!el.checked;
+        if (nd.editRemix) nd.useLlm = false;
+      }
       engine.save();
+      if (window.WF_Renderer) window.WF_Renderer.render(engine);
     });
 
     // 参考图上传
@@ -2053,6 +2071,9 @@
       refs.push({ url: refList[i].url, label: "图片" + (i + 1) });
     }
     var useLlm = !!nd.useLlm;
+    var v = NR.getActiveVersion(nd);
+    var editRemix = !!nd.editRemix && v && v.grid && v.grid.url;
+    if (useLlm && editRemix) editRemix = false;
 
     try {
       var payload = {
@@ -2063,7 +2084,9 @@
         user_message: msg || "",
         reference_images: refs,
         use_llm: useLlm,
+        edit_remix: editRemix,
       };
+      if (editRemix) payload.remix_grid = v.grid;
       if (useLlm) {
         payload.chat_config_id = getConfigId("vision", "rcStoryboardRemix");
         payload.chat_history = nd.chatHistory.filter(function (m) { return !m._typing; }).slice(0, -1);
