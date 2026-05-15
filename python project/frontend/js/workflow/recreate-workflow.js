@@ -86,6 +86,21 @@
       + '</div>';
   }
 
+  // 段级 / 顶层 pipeline 视图共用的 nd 取值：segIdx 不合法时回退到 wf.rcStoryboardRemixs[0]
+  function _getRemixNd(wf, segIdxRaw) {
+    var segIdx = parseInt(segIdxRaw);
+    if (isNaN(segIdx) || segIdx < 0) {
+      if (!wf.rcStoryboardRemixs) wf.rcStoryboardRemixs = [];
+      if (!wf.rcStoryboardRemixs[0]) wf.rcStoryboardRemixs[0] = NR.createNodeData();
+      return wf.rcStoryboardRemixs[0];
+    }
+    var seg = (wf.segments || [])[segIdx];
+    if (!seg) return null;
+    if (!seg.rcStoryboardRemixs) seg.rcStoryboardRemixs = [];
+    if (!seg.rcStoryboardRemixs[0]) seg.rcStoryboardRemixs[0] = NR.createNodeData();
+    return seg.rcStoryboardRemixs[0];
+  }
+
   // 全局并发：节点级 override 优先，否则读 wf.globalConcurrency，默认 3
   function getConcurrency(wf, nd) {
     var over = nd && nd.maxConcurrentOverride;
@@ -1108,35 +1123,50 @@
       var useLlm = !!nd.useLlm;
       var v = NR.getActiveVersion(nd);
       var editRemix = !!nd.editRemix && v && v.grid && v.grid.url;
-      if (useLlm && editRemix) editRemix = false;  // 互斥兜底
+      if (useLlm && editRemix) editRemix = false;
+
+      // 取 chatHistory 最后一条 user 消息作为本次 user_message；其余 history 仅 LLM 模式用
+      var history = (nd.chatHistory || []).filter(function (m) { return !m._typing; });
+      var lastUserMsg = "";
+      for (var i = history.length - 1; i >= 0; i--) {
+        if (history[i].role === "user") { lastUserMsg = history[i].content || ""; break; }
+      }
+      var refs = (nd.refImages || []).map(function (r, i) {
+        return { url: r.url, label: "图片" + (i + 1) };
+      });
 
       var payload = {
         workflow_id: wf.id,
         image_config_id: getConfigId("image", "rcStoryboardRemix"),
         segment_index: segIdx,
         origin_grid: origV.grid,
-        user_message: "",
-        reference_images: (nd._pendingRefImages || []),
+        user_message: lastUserMsg,
+        reference_images: refs,
         use_llm: useLlm,
         edit_remix: editRemix,
       };
       if (editRemix) payload.remix_grid = v.grid;
       if (useLlm) {
         payload.chat_config_id = getConfigId("vision", "rcStoryboardRemix");
-        payload.chat_history = [];
+        payload.chat_history = history.slice(0, -1);
       }
       var data = await callApi("/api/recreate/generate/rc-storyboard-remix", payload);
       return { grid: data.grid || null, chat_message: data.message || "" };
     },
     renderDetail: function (nd, wf, ctx) {
+      var isPipeline = !!ctx.isPipelineNode;
       var v = NR.getActiveVersion(nd);
       var dis = _getDisabledAttr(ctx, "rcStoryboardRemix");
       var history = nd.chatHistory || [];
       var isTyping = history.length && history[history.length - 1]._typing;
       var refs = nd.refImages || [];
       var html = "";
-      // 当前二创宫格（若已生成）
-      if (v && v.grid && v.grid.url) {
+      if (isPipeline) {
+        html += '<div class="wf-detail-text" style="color:#94a3b8;font-size:11px;line-height:1.6;margin-bottom:8px;">'
+          + '此处的参考图、对话内容、视觉模型/修改二创开关将在「全部段落生成」时广播到所有段，覆盖各段独立设置。'
+          + '</div>';
+      } else if (v && v.grid && v.grid.url) {
+        // 当前二创宫格（若已生成）
         var g = v.grid;
         var gridHtml = (nd.editing && window.WF_GridEditor)
           ? window.WF_GridEditor.renderEditable({ grid: g, nodeKey: "rcStoryboardRemix", segIndex: ctx.segIndex, source: "frames+upload" })
@@ -1181,10 +1211,12 @@
               + '</label>'
             : "")
         + '</div>'
-        + '<textarea class="wf-detail-textarea" id="wf-rc-remix-chat-input-' + ctx.segIndex + '" rows="3" placeholder="' + (isTyping ? 'AI 正在绘制分镜，请稍候...' : '描述想要的改编分镜，可用 "图片1" / "图片2" 引用参考图...') + '" style="margin-top:6px;"' + (isTyping ? ' disabled' : '') + '></textarea>'
+        + '<textarea class="wf-detail-textarea" id="wf-rc-remix-chat-input-' + ctx.segIndex + '" rows="3" placeholder="' + (isTyping ? 'AI 正在绘制分镜，请稍候...' : (isPipeline ? '在此输入广播文字（最后一条用户消息会作为 user_message 发给后端）' : '描述想要的改编分镜，可用 "图片1" / "图片2" 引用参考图...')) + '" style="margin-top:6px;"' + (isTyping ? ' disabled' : '') + '></textarea>'
         + '<div style="display:flex;gap:6px;margin-top:6px;">'
-        + '<button class="wf-tb-btn primary" data-rc-remix-send="' + ctx.segIndex + '"' + (isTyping ? ' disabled' : dis) + '><i class="fa fa-paper-plane"></i> ' + (isTyping ? 'AI 正在绘制...' : '生成二创分镜') + '</button>'
-        + (history.length ? '<button class="wf-tb-btn" data-rc-remix-clear="' + ctx.segIndex + '"><i class="fa fa-trash-o"></i> 清空对话</button>' : '')
+        + (isPipeline
+            ? '<div style="font-size:11px;color:#64748b;align-self:center;">使用顶部「全部段落生成」按钮触发广播生成</div>'
+            : '<button class="wf-tb-btn primary" data-rc-remix-send="' + ctx.segIndex + '"' + (isTyping ? ' disabled' : dis) + '><i class="fa fa-paper-plane"></i> ' + (isTyping ? 'AI 正在绘制...' : '生成二创分镜') + '</button>'
+              + (history.length ? '<button class="wf-tb-btn" data-rc-remix-clear="' + ctx.segIndex + '"><i class="fa fa-trash-o"></i> 清空对话</button>' : ''))
         + '</div>'
         + '</div>';
       return html;
@@ -1437,6 +1469,44 @@
   }
 
   function bindRecreateEvents() {
+    // 拦截「rcStoryboardRemix 全部段落生成」按钮：先把顶层（pipeline 视图那个）nd 的
+    // refImages / chatHistory / useLlm / editRemix / 输入框文字 广播到每个段的 nd，再让事件继续走
+    // 通用 handleGenAllSegments 调用 generate
+    document.addEventListener("click", function (e) {
+      var btn = e.target.closest && e.target.closest('[data-gen-all-seg="rcStoryboardRemix"]');
+      if (!btn) return;
+      var engine = window._wfEngine;
+      var wf = engine && engine.current();
+      if (!wf || wf.templateId !== "recreate-drama") return;
+      if (!wf.segments || !wf.segments.length) return;
+
+      var topNd = (wf.rcStoryboardRemixs || [])[0];
+      if (!topNd) return;
+      // 顶层 pipeline 视图的 textarea id 后缀是 "null"（ctx.segIndex 为 null）
+      var topInput = document.getElementById("wf-rc-remix-chat-input-null");
+      var pendingMsg = topInput && topInput.value ? topInput.value.trim() : "";
+
+      var topRefs = (topNd.refImages || []).slice();
+      var topUseLlm = !!topNd.useLlm;
+      var topEditRemix = !!topNd.editRemix;
+      // 顶层对话历史 + 把 pendingMsg 当作最后一条 user 消息（如果有）
+      var topHistory = (topNd.chatHistory || []).filter(function (m) { return !m._typing; });
+      if (pendingMsg) topHistory = topHistory.concat([{ role: "user", content: pendingMsg }]);
+
+      for (var i = 0; i < wf.segments.length; i++) {
+        var seg = wf.segments[i];
+        if (!seg.rcStoryboardRemixs) seg.rcStoryboardRemixs = [];
+        if (!seg.rcStoryboardRemixs[0]) seg.rcStoryboardRemixs[0] = NR.createNodeData();
+        var snd = seg.rcStoryboardRemixs[0];
+        snd.refImages = topRefs.slice();
+        snd.chatHistory = topHistory.slice();
+        snd.useLlm = topUseLlm;
+        snd.editRemix = topEditRemix;
+      }
+      if (topInput) topInput.value = "";
+      engine.save();
+    }, true);
+
     document.addEventListener("click", function (e) {
       var wfRoot = e.target.closest && e.target.closest("#workflow");
       if (!wfRoot) return;
@@ -1960,9 +2030,7 @@
       // 二创对话：清空
       var remixClr = e.target.closest && e.target.closest("[data-rc-remix-clear]");
       if (remixClr) {
-        var rcIdx = parseInt(remixClr.getAttribute("data-rc-remix-clear"));
-        var segC = (wf.segments || [])[rcIdx];
-        var ndC = segC && ((segC.rcStoryboardRemixs || [])[0]);
+        var ndC = _getRemixNd(wf, remixClr.getAttribute("data-rc-remix-clear"));
         if (ndC) { ndC.chatHistory = []; engine.save(); if (window.WF_Renderer) window.WF_Renderer.render(engine); }
         return;
       }
@@ -1970,9 +2038,7 @@
       var refDel = e.target.closest && e.target.closest("[data-del-rc-remix-ref]");
       if (refDel) {
         var rdIdx = parseInt(refDel.getAttribute("data-del-rc-remix-ref"));
-        var rdSeg = parseInt(refDel.getAttribute("data-seg"));
-        var segRD = (wf.segments || [])[rdSeg];
-        var ndRD = segRD && ((segRD.rcStoryboardRemixs || [])[0]);
+        var ndRD = _getRemixNd(wf, refDel.getAttribute("data-seg"));
         if (ndRD && ndRD.refImages) {
           ndRD.refImages.splice(rdIdx, 1);
           engine.save();
@@ -1991,9 +2057,7 @@
       var engine = window._wfEngine;
       var wf = engine && engine.current();
       if (!wf || wf.templateId !== "recreate-drama") return;
-      var segIdx = parseInt(llmAttr !== null ? llmAttr : editAttr);
-      var seg = (wf.segments || [])[segIdx];
-      var nd = seg && ((seg.rcStoryboardRemixs || [])[0]);
+      var nd = _getRemixNd(wf, llmAttr !== null ? llmAttr : editAttr);
       if (!nd) return;
       if (llmAttr !== null) {
         nd.useLlm = !!el.checked;
@@ -2015,11 +2079,10 @@
       var wf = engine && engine.current();
       if (!wf || wf.templateId !== "recreate-drama") return;
       if (!el.files || !el.files.length) return;
-      var segIdx = parseInt(segAttr);
-      var seg = (wf.segments || [])[segIdx];
-      var nd = seg && ((seg.rcStoryboardRemixs || [])[0]);
+      var nd = _getRemixNd(wf, segAttr);
       if (!nd) return;
       nd.refImages = nd.refImages || [];
+      var prefix = "remix_ref_s" + segAttr;
       for (var i = 0; i < el.files.length; i++) {
         var f = el.files[i];
         try {
@@ -2031,7 +2094,7 @@
           });
           var resp = await fetch("/api/recreate/upload-image/" + wf.id, {
             method: "POST", headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ image_data: dataUrl, prefix: "remix_ref_s" + segIdx }),
+            body: JSON.stringify({ image_data: dataUrl, prefix: prefix }),
           });
           var j = await resp.json();
           if (j.code !== 0) throw new Error(j.detail || j.message || "上传失败");
