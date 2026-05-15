@@ -2739,10 +2739,12 @@ async def gen_rc_storyboard_remix(body: dict):
       origin_grid: {url, rows, cols, urls[], cell_w?, cell_h?, width?, height?},
       user_message?: 本轮用户文字,
       reference_images?: [{url, label}] 用户上传的参考图,
-      use_llm?: bool 默认 false。开启时 chat_config_id 用视觉 LLM 先出 cell prompts。
-      edit_remix?: bool 默认 false。开启时把 remix_grid 作为 i2i 参考图（在已有二创上继续修改）；
-                   与 use_llm 互斥，同时为 true 时报 400。
-      remix_grid?: {url, rows, cols, ...} 仅 edit_remix=true 时使用，必填。
+      mode?: "single" | "per_cell" 默认 "per_cell"。
+              single   = 一次出整张 N×N 宫格大图
+              per_cell = 每格分别 i2i，最后拼成大图
+      use_llm?: bool 默认 false。开启时 chat_config_id 用视觉 LLM 先出 cell prompts（仅 single 模式生效）。
+      edit_remix?: bool 默认 false。开启时把 remix_grid 作为 i2i 参考图；与 use_llm 互斥。
+      remix_grid?: {url, rows, cols, urls[], ...} 仅 edit_remix=true 时使用，必填。
       chat_config_id?: 仅 use_llm=true 时用,
       chat_history?: 仅 use_llm=true 时用,
     }
@@ -2776,6 +2778,9 @@ async def gen_rc_storyboard_remix(body: dict):
     reference_images = body.get("reference_images") or []
     use_llm = bool(body.get("use_llm"))
     edit_remix = bool(body.get("edit_remix"))
+    mode = (body.get("mode") or "per_cell").strip()
+    if mode not in ("single", "per_cell"):
+        mode = "per_cell"
     if use_llm and edit_remix:
         raise HTTPException(status_code=400, detail="视觉模型增强与修改二创分镜不能同时开启")
 
@@ -2804,7 +2809,13 @@ async def gen_rc_storyboard_remix(body: dict):
 
     chat_message = ""
     grid_prompt = ""
-    grid_neg = "blurry seams between cells, inconsistent style across cells, mismatched lighting, watermark, text labels, captions"
+    grid_neg = (
+        "blurry seams between cells, inconsistent style across cells, mismatched lighting, "
+        "watermark, text labels, captions, subtitles, chinese characters, english text, any text overlay"
+    )
+    cell_neg = (
+        "watermark, text, captions, subtitles, chinese characters, english text, any text overlay, signature, logo"
+    )
 
     if use_llm:
         chat_config = _get_config_by_id(body.get("chat_config_id", "")) or _get_first_config("chat")
@@ -2894,49 +2905,110 @@ async def gen_rc_storyboard_remix(body: dict):
                 f"Keep all cells in the same visual style, color palette and lighting."
             )
 
-    ref_for_image = [g_b64] + ref_b64_user
-    # 4K (3840×2160) 优先，失败退 2K (1920×1080)；全 16:9
-    resolution_attempts = [(3840, 2160), (1920, 1080)]
-    gen_data = None
-    last_err = ""
-    used_w = used_h = 0
-    for try_w, try_h in resolution_attempts:
+    if mode == "single":
+        # ── 模式 A：一次出整张 N×N 宫格 ──
+        ref_for_image = [g_b64] + ref_b64_user
+        # 4K (3840×2160) 优先，失败退 2K (1920×1080)；全 16:9
+        resolution_attempts = [(3840, 2160), (1920, 1080)]
+        gen_data = None
+        last_err = ""
+        used_w = used_h = 0
+        for try_w, try_h in resolution_attempts:
+            try:
+                gen_data = await _gen_image_via_internal(
+                    image_config_id, grid_prompt, ref_for_image,
+                    width=try_w, height=try_h, negative_prompt=grid_neg,
+                )
+                if gen_data:
+                    used_w, used_h = try_w, try_h
+                    break
+                last_err = "模型返回空"
+            except Exception as e:
+                last_err = str(e)
+                print(f"[二创][seg={seg_idx}] {try_w}x{try_h} 失败: {last_err}")
+                gen_data = None
+        if not gen_data:
+            raise HTTPException(status_code=500, detail=f"二创宫格图生成失败（4K/2K 均失败）: {last_err}")
+
+        grid_image_url = save_workflow_image(wf_id, gen_data, prefix=f"remix_grid_s{seg_idx}")
+        sliced_urls = _slice_grid_image_to_cells(grid_image_url, rows, cols, wf_id, seg_idx) or cell_urls[:n_cells]
+        from PIL import Image
+        final_w, final_h = (0, 0)
+        p = _url_to_local_path(grid_image_url)
+        if p:
+            with Image.open(p) as im:
+                final_w, final_h = im.size
+        grid_remix = {
+            "url": grid_image_url,
+            "rows": rows, "cols": cols,
+            "urls": sliced_urls,
+            "width": final_w or used_w,
+            "height": final_h or used_h,
+            "cell_w": (final_w or used_w) // cols,
+            "cell_h": (final_h or used_h) // rows,
+            "index": seg_idx,
+        }
+        return JSONResponse({"code": 0, "data": {"grid": grid_remix, "message": chat_message}})
+
+    # ── 模式 B：逐格 i2i 后拼图（per_cell） ──
+    # edit_remix 时用 remix_grid.urls 作为每格底图（已有二创继续修改），否则用原版各 cell
+    per_cell_base_urls = []
+    if edit_remix:
+        rg_urls = ((body.get("remix_grid") or {}).get("urls") or [])
+        per_cell_base_urls = list(rg_urls)[:n_cells]
+    if len(per_cell_base_urls) < n_cells:
+        per_cell_base_urls += list(cell_urls)[len(per_cell_base_urls):n_cells]
+
+    # 取 LLM 已生成的 cell_prompts（如果有），否则每格用 user_message
+    llm_cell_prompts = locals().get("cell_prompts") or []
+    def _prompt_for_cell(i):
+        base = (llm_cell_prompts[i] if i < len(llm_cell_prompts) and llm_cell_prompts[i] else (user_message or "")).strip()
+        if not base:
+            base = "cinematic shot, same composition as reference"
+        prefix = "Modify this movie shot per user instruction." if edit_remix else "Restyled movie shot keeping same composition as reference image."
+        return f"{prefix} {base}. Clean image, no text, no subtitles, no captions, no logo, no watermark."
+
+    # 单格目标尺寸：16:9 1024×576
+    cell_w_out, cell_h_out = 1024, 576
+
+    async def _gen_one_cell(i):
+        base_b64 = _load_ref_image_b64(per_cell_base_urls[i], max_size=8 * 1024 * 1024) if per_cell_base_urls[i] else ""
+        refs = ([base_b64] if base_b64 else []) + ref_b64_user
         try:
-            gen_data = await _gen_image_via_internal(
-                image_config_id, grid_prompt, ref_for_image,
-                width=try_w, height=try_h, negative_prompt=grid_neg,
+            data_url = await _gen_image_via_internal(
+                image_config_id, _prompt_for_cell(i), refs,
+                width=cell_w_out, height=cell_h_out, negative_prompt=cell_neg,
             )
-            if gen_data:
-                used_w, used_h = try_w, try_h
-                break
-            last_err = "模型返回空"
         except Exception as e:
-            last_err = str(e)
-            print(f"[二创][seg={seg_idx}] {try_w}x{try_h} 失败: {last_err}")
-            gen_data = None
-    if not gen_data:
-        raise HTTPException(status_code=500, detail=f"二创宫格图生成失败（4K/2K 均失败）: {last_err}")
+            print(f"[二创][seg={seg_idx}] per_cell {i} 失败: {e}")
+            return None
+        if not data_url:
+            return None
+        try:
+            return save_workflow_image(wf_id, data_url, prefix=f"remix_cell_s{seg_idx}_c{i}")
+        except Exception as e:
+            print(f"[二创][seg={seg_idx}] per_cell {i} 落盘失败: {e}")
+            return None
 
-    grid_image_url = save_workflow_image(wf_id, gen_data, prefix=f"remix_grid_s{seg_idx}")
-    sliced_urls = _slice_grid_image_to_cells(grid_image_url, rows, cols, wf_id, seg_idx) or cell_urls[:n_cells]
+    new_cell_urls = await asyncio.gather(*[_gen_one_cell(i) for i in range(n_cells)])
+    failed = []
+    final_cell_urls = []
+    for i, u in enumerate(new_cell_urls):
+        if u:
+            final_cell_urls.append(u)
+        else:
+            failed.append(i)
+            final_cell_urls.append(per_cell_base_urls[i])
+    if failed and len(failed) == n_cells:
+        raise HTTPException(status_code=500, detail=f"二创宫格图生成失败（所有 {n_cells} 格均失败）")
+    if failed:
+        chat_message += f"\n（提示：第 {', '.join(str(f+1) for f in failed)} 格生成失败，已沿用原格）"
 
-    from PIL import Image
-    final_w, final_h = (0, 0)
-    p = _url_to_local_path(grid_image_url)
-    if p:
-        with Image.open(p) as im:
-            final_w, final_h = im.size
-
-    grid_remix = {
-        "url": grid_image_url,
-        "rows": rows, "cols": cols,
-        "urls": sliced_urls,
-        "width": final_w or used_w,
-        "height": final_h or used_h,
-        "cell_w": (final_w or used_w) // cols,
-        "cell_h": (final_h or used_h) // rows,
-        "index": seg_idx,
-    }
+    grid_remix = _compose_grid_core(
+        wf_id, seg_idx, final_cell_urls, rows, cols,
+        out_subdir="grid_remix", filename_prefix="remix_per_cell_seg",
+    )
+    grid_remix["index"] = seg_idx
     return JSONResponse({"code": 0, "data": {"grid": grid_remix, "message": chat_message}})
 
 

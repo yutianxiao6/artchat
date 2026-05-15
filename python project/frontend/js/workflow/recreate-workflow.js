@@ -801,12 +801,20 @@
       var html = "";
       if (v && v.grid && v.grid.url) {
         var g = v.grid;
-        var gridHtml = (nd.editing && window.WF_GridEditor)
-          ? window.WF_GridEditor.renderEditable({ grid: g, nodeKey: "rcStoryboardOrig", segIndex: ctx.segIndex, source: "frames" })
-          : '<img class="wf-preview-img" src="' + esc(g.url) + '" data-preview="' + esc(g.url) + '" style="width:100%;max-width:560px;border-radius:8px;cursor:zoom-in;">';
+        var reorgActive = nd.editing && nd._reorgState;
+        var gridHtml;
+        if (reorgActive) {
+          gridHtml = window.WF_GridEditor.renderReorgPanel({ grid: g, nodeKey: "rcStoryboardOrig", segIndex: ctx.segIndex, nd: nd });
+        } else if (nd.editing && window.WF_GridEditor) {
+          gridHtml = window.WF_GridEditor.renderEditable({ grid: g, nodeKey: "rcStoryboardOrig", segIndex: ctx.segIndex, source: "frames" });
+        } else {
+          gridHtml = '<img class="wf-preview-img" src="' + esc(g.url) + '" data-preview="' + esc(g.url) + '" style="width:100%;max-width:560px;border-radius:8px;cursor:zoom-in;">';
+        }
         html += '<div class="wf-detail-section">' + gridHtml
-          + '<div style="display:flex;gap:6px;margin-top:6px;">'
+          + '<div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap;">'
           + '<button class="wf-tb-btn" data-rc-sb-edit="rcStoryboardOrig" data-seg="' + ctx.segIndex + '"><i class="fa fa-' + (nd.editing ? "check" : "pencil") + '"></i> ' + (nd.editing ? "完成编辑" : "编辑宫格") + '</button>'
+          + (nd.editing && !reorgActive ? '<button class="wf-tb-btn" data-rc-sb-reorg="rcStoryboardOrig" data-seg="' + ctx.segIndex + '"><i class="fa fa-th"></i> 重组</button>' : '')
+          + (reorgActive ? '<button class="wf-tb-btn" data-rc-sb-reorg-cancel="rcStoryboardOrig" data-seg="' + ctx.segIndex + '"><i class="fa fa-times"></i> 取消重组</button>' : '')
           + '</div></div>';
         html += '<div class="wf-detail-section" style="font-size:12px;line-height:1.6;">'
           + (v.theme ? '<div><span style="color:#94a3b8;">主题：</span>' + esc(v.theme) + '</div>' : '')
@@ -1120,12 +1128,10 @@
       var origV = NR.getActiveVersion((seg.rcStoryboardOrigs || [])[0]);
       if (!origV || !origV.grid || !origV.grid.url) throw new Error("请先完成原版分镜");
       var nd = ctx.nodeData;
-      var useLlm = !!nd.useLlm;
       var v = NR.getActiveVersion(nd);
       var editRemix = !!nd.editRemix && v && v.grid && v.grid.url;
-      if (useLlm && editRemix) editRemix = false;
+      var mode = nd.remixMode || "per_cell";
 
-      // 取 chatHistory 最后一条 user 消息作为本次 user_message；其余 history 仅 LLM 模式用
       var history = (nd.chatHistory || []).filter(function (m) { return !m._typing; });
       var lastUserMsg = "";
       for (var i = history.length - 1; i >= 0; i--) {
@@ -1142,14 +1148,10 @@
         origin_grid: origV.grid,
         user_message: lastUserMsg,
         reference_images: refs,
-        use_llm: useLlm,
+        mode: mode,
         edit_remix: editRemix,
       };
       if (editRemix) payload.remix_grid = v.grid;
-      if (useLlm) {
-        payload.chat_config_id = getConfigId("vision", "rcStoryboardRemix");
-        payload.chat_history = history.slice(0, -1);
-      }
       var data = await callApi("/api/recreate/generate/rc-storyboard-remix", payload);
       return { grid: data.grid || null, chat_message: data.message || "" };
     },
@@ -1168,12 +1170,20 @@
       } else if (v && v.grid && v.grid.url) {
         // 当前二创宫格（若已生成）
         var g = v.grid;
-        var gridHtml = (nd.editing && window.WF_GridEditor)
-          ? window.WF_GridEditor.renderEditable({ grid: g, nodeKey: "rcStoryboardRemix", segIndex: ctx.segIndex, source: "frames+upload" })
-          : '<img class="wf-preview-img" src="' + esc(g.url) + '" data-preview="' + esc(g.url) + '" style="width:100%;max-width:560px;border-radius:8px;cursor:zoom-in;">';
+        var reorgActive = nd.editing && nd._reorgState;
+        var gridHtml;
+        if (reorgActive) {
+          gridHtml = window.WF_GridEditor.renderReorgPanel({ grid: g, nodeKey: "rcStoryboardRemix", segIndex: ctx.segIndex, nd: nd });
+        } else if (nd.editing && window.WF_GridEditor) {
+          gridHtml = window.WF_GridEditor.renderEditable({ grid: g, nodeKey: "rcStoryboardRemix", segIndex: ctx.segIndex, source: "frames+upload" });
+        } else {
+          gridHtml = '<img class="wf-preview-img" src="' + esc(g.url) + '" data-preview="' + esc(g.url) + '" style="width:100%;max-width:560px;border-radius:8px;cursor:zoom-in;">';
+        }
         html += '<div class="wf-detail-section">' + gridHtml
-          + '<div style="display:flex;gap:6px;margin-top:6px;">'
+          + '<div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap;">'
           + '<button class="wf-tb-btn" data-rc-sb-edit="rcStoryboardRemix" data-seg="' + ctx.segIndex + '"><i class="fa fa-' + (nd.editing ? "check" : "pencil") + '"></i> ' + (nd.editing ? "完成编辑" : "编辑宫格") + '</button>'
+          + (nd.editing && !reorgActive ? '<button class="wf-tb-btn" data-rc-sb-reorg="rcStoryboardRemix" data-seg="' + ctx.segIndex + '"><i class="fa fa-th"></i> 重组</button>' : '')
+          + (reorgActive ? '<button class="wf-tb-btn" data-rc-sb-reorg-cancel="rcStoryboardRemix" data-seg="' + ctx.segIndex + '"><i class="fa fa-times"></i> 取消重组</button>' : '')
           + '</div></div>';
       } else {
         html += '<div class="wf-detail-text" style="color:#64748b;">在下方对话框描述改编思路 + 上传参考图，点发送即可基于原版宫格生成二创分镜。</div>';
@@ -1202,12 +1212,13 @@
         + (refs.length ? '<div style="margin:6px 0;">' + refHtml + '</div>' : '')
         + '<div style="display:flex;gap:6px;align-items:center;margin-top:4px;flex-wrap:wrap;">'
         + '<label class="wf-tb-btn" style="cursor:pointer;"><i class="fa fa-image"></i> 上传参考图<input type="file" accept="image/*" multiple data-rc-remix-ref-upload="' + ctx.segIndex + '" style="display:none;"></label>'
-        + '<label style="display:inline-flex;align-items:center;gap:4px;font-size:11px;color:#cbd5e1;cursor:pointer;user-select:none;" title="开启后用视觉模型分析原图为每格生成提示词，可能更准但更慢。与「修改二创分镜」互斥">'
-        +   '<input type="checkbox"' + (nd.useLlm ? ' checked' : '') + (nd.editRemix ? ' disabled' : '') + ' data-rc-remix-use-llm="' + ctx.segIndex + '" style="margin:0;"> 视觉模型增强'
-        + '</label>'
+        + '<div style="display:inline-flex;border:1px solid rgba(148,163,184,.3);border-radius:6px;overflow:hidden;font-size:11px;" title="生成模式：逐格单独 i2i 拼图（默认，质量高）/ 一次出整张 N×N 宫格（快）">'
+        +   '<button class="wf-rc-mode-btn' + ((nd.remixMode || "per_cell") === "per_cell" ? " active" : "") + '" data-rc-remix-mode="per_cell" data-seg="' + ctx.segIndex + '" type="button">逐格生成</button>'
+        +   '<button class="wf-rc-mode-btn' + ((nd.remixMode || "per_cell") === "single" ? " active" : "") + '" data-rc-remix-mode="single" data-seg="' + ctx.segIndex + '" type="button">整张生成</button>'
+        + '</div>'
         + (v && v.grid && v.grid.url
-            ? '<label style="display:inline-flex;align-items:center;gap:4px;font-size:11px;color:#cbd5e1;cursor:pointer;user-select:none;" title="开启后在已生成的二创分镜基础上继续修改，否则从原版分镜重新生成。与「视觉模型增强」互斥">'
-              + '<input type="checkbox"' + (nd.editRemix ? ' checked' : '') + (nd.useLlm ? ' disabled' : '') + ' data-rc-remix-edit="' + ctx.segIndex + '" style="margin:0;"> 修改二创分镜'
+            ? '<label style="display:inline-flex;align-items:center;gap:4px;font-size:11px;color:#cbd5e1;cursor:pointer;user-select:none;" title="开启后在已生成的二创分镜基础上继续修改，否则从原版分镜重新生成">'
+              + '<input type="checkbox"' + (nd.editRemix ? ' checked' : '') + ' data-rc-remix-edit="' + ctx.segIndex + '" style="margin:0;"> 修改二创分镜'
               + '</label>'
             : "")
         + '</div>'
@@ -1487,8 +1498,8 @@
       var pendingMsg = ((topInput && topInput.value) || topNd._draftMsg || "").trim();
 
       var topRefs = (topNd.refImages || []).slice();
-      var topUseLlm = !!topNd.useLlm;
       var topEditRemix = !!topNd.editRemix;
+      var topMode = topNd.remixMode || "per_cell";
       var topHistory = (topNd.chatHistory || []).filter(function (m) { return !m._typing; });
       if (pendingMsg) topHistory = topHistory.concat([{ role: "user", content: pendingMsg }]);
 
@@ -1499,8 +1510,8 @@
         var snd = seg.rcStoryboardRemixs[0];
         snd.refImages = topRefs.slice();
         snd.chatHistory = topHistory.slice();
-        snd.useLlm = topUseLlm;
         snd.editRemix = topEditRemix;
+        snd.remixMode = topMode;
         snd._draftMsg = "";
       }
       if (topInput) topInput.value = "";
@@ -2002,9 +2013,86 @@
         var ndEd = segObj && ((segObj[nt + "s"] || [])[0]);
         if (ndEd) {
           ndEd.editing = !ndEd.editing;
+          if (!ndEd.editing) ndEd._reorgState = null;
           engine.save();
           if (window.WF_Renderer) window.WF_Renderer.render(engine);
         }
+        return;
+      }
+
+      // 进入重组
+      var reorgBtn = e.target.closest && e.target.closest("[data-rc-sb-reorg]");
+      if (reorgBtn) {
+        var rNt = reorgBtn.getAttribute("data-rc-sb-reorg");
+        var rSi = parseInt(reorgBtn.getAttribute("data-seg"));
+        var rSeg = (wf.segments || [])[rSi];
+        var rNd = rSeg && ((rSeg[rNt + "s"] || [])[0]);
+        if (rNd) { rNd._reorgState = {}; engine.save(); if (window.WF_Renderer) window.WF_Renderer.render(engine); }
+        return;
+      }
+      // 取消重组
+      var reorgCancel = e.target.closest && e.target.closest("[data-rc-sb-reorg-cancel]");
+      if (reorgCancel) {
+        var cNt = reorgCancel.getAttribute("data-rc-sb-reorg-cancel");
+        var cSi = parseInt(reorgCancel.getAttribute("data-seg"));
+        var cSeg = (wf.segments || [])[cSi];
+        var cNd = cSeg && ((cSeg[cNt + "s"] || [])[0]);
+        if (cNd) { cNd._reorgState = null; engine.save(); if (window.WF_Renderer) window.WF_Renderer.render(engine); }
+        return;
+      }
+      // 选尺寸
+      var sizeBtn = e.target.closest && e.target.closest("[data-rc-reorg-size]");
+      if (sizeBtn) {
+        var rc = sizeBtn.getAttribute("data-rc-reorg-size").split("x");
+        var sNt = sizeBtn.getAttribute("data-node");
+        var sSi = parseInt(sizeBtn.getAttribute("data-seg"));
+        var sSeg = (wf.segments || [])[sSi];
+        var sNd = sSeg && ((sSeg[sNt + "s"] || [])[0]);
+        if (sNd) {
+          sNd._reorgState = { rows: parseInt(rc[0]), cols: parseInt(rc[1]), picks: [] };
+          engine.save();
+          if (window.WF_Renderer) window.WF_Renderer.render(engine);
+        }
+        return;
+      }
+      // 点候选格 → push 到 picks
+      var candEl = e.target.closest && e.target.closest(".wf-rc-reorg-cand");
+      if (candEl) {
+        var url = candEl.getAttribute("data-url");
+        if (!url) return;
+        var nNt = candEl.getAttribute("data-node");
+        var nSi = parseInt(candEl.getAttribute("data-seg"));
+        var nSeg = (wf.segments || [])[nSi];
+        var nNd = nSeg && ((nSeg[nNt + "s"] || [])[0]);
+        if (!nNd || !nNd._reorgState) return;
+        var st = nNd._reorgState;
+        if (!st.picks) st.picks = [];
+        if (st.picks.length >= (st.rows * st.cols)) return;
+        st.picks.push(url);
+        engine.save();
+        if (window.WF_Renderer) window.WF_Renderer.render(engine);
+        return;
+      }
+      // 撤销上一格
+      var undoBtn = e.target.closest && e.target.closest("[data-rc-reorg-undo]");
+      if (undoBtn) {
+        var uNt = undoBtn.getAttribute("data-node");
+        var uSi = parseInt(undoBtn.getAttribute("data-rc-reorg-undo"));
+        var uSeg = (wf.segments || [])[uSi];
+        var uNd = uSeg && ((uSeg[uNt + "s"] || [])[0]);
+        if (uNd && uNd._reorgState && uNd._reorgState.picks && uNd._reorgState.picks.length) {
+          uNd._reorgState.picks.pop();
+          engine.save();
+          if (window.WF_Renderer) window.WF_Renderer.render(engine);
+        }
+        return;
+      }
+      // 完成 → 合成新宫格
+      var finBtn = e.target.closest && e.target.closest("[data-rc-reorg-finish]");
+      if (finBtn) {
+        var fNt = finBtn.getAttribute("data-node");
+        var fSi = parseInt(finBtn.getAttribute("data-rc-reorg-finish"));
+        _finishReorg(engine, wf, fNt, fSi);
         return;
       }
 
@@ -2061,24 +2149,30 @@
       if (nd) nd._draftMsg = el.value;
     });
 
-    // 视觉模型增强 / 修改二创分镜 toggle（两者互斥）
+    // 修改二创分镜 toggle
     document.addEventListener("change", function (e) {
       var el = e.target;
-      var llmAttr = el.getAttribute && el.getAttribute("data-rc-remix-use-llm");
       var editAttr = el.getAttribute && el.getAttribute("data-rc-remix-edit");
-      if (llmAttr === null && editAttr === null) return;
+      if (editAttr === null) return;
       var engine = window._wfEngine;
       var wf = engine && engine.current();
       if (!wf || wf.templateId !== "recreate-drama") return;
-      var nd = _getRemixNd(wf, llmAttr !== null ? llmAttr : editAttr);
+      var nd = _getRemixNd(wf, editAttr);
       if (!nd) return;
-      if (llmAttr !== null) {
-        nd.useLlm = !!el.checked;
-        if (nd.useLlm) nd.editRemix = false;
-      } else {
-        nd.editRemix = !!el.checked;
-        if (nd.editRemix) nd.useLlm = false;
-      }
+      nd.editRemix = !!el.checked;
+      engine.save();
+    });
+
+    // 生成模式切换（逐格 / 整张）
+    document.addEventListener("click", function (e) {
+      var btn = e.target.closest && e.target.closest("[data-rc-remix-mode]");
+      if (!btn) return;
+      var engine = window._wfEngine;
+      var wf = engine && engine.current();
+      if (!wf || wf.templateId !== "recreate-drama") return;
+      var nd = _getRemixNd(wf, btn.getAttribute("data-seg"));
+      if (!nd) return;
+      nd.remixMode = btn.getAttribute("data-rc-remix-mode");
       engine.save();
       if (window.WF_Renderer) window.WF_Renderer.render(engine);
     });
@@ -2123,6 +2217,40 @@
   }
 
   // ── 二创对话发送：把文本 + 参考图 + 历史打包给后端，附加 typing 占位 ──
+  async function _finishReorg(engine, wf, nodeType, segIdx) {
+    var seg = (wf.segments || [])[segIdx];
+    var nd = seg && ((seg[nodeType + "s"] || [])[0]);
+    if (!nd || !nd._reorgState) return;
+    var st = nd._reorgState;
+    var rows = st.rows, cols = st.cols, picks = st.picks || [];
+    if (picks.length < rows * cols) { alert("请把所有格子选满"); return; }
+    try {
+      var data = await callApi("/api/recreate/compose-grid/" + wf.id, {
+        segments: [{ index: segIdx, frame_urls: picks, rows: rows, cols: cols }],
+      });
+      var segOut = (data.segments || [])[0];
+      if (!segOut || !segOut.url) throw new Error("compose-grid 返回为空");
+      // 复制活跃版本除 id/createdAt 外的字段（如 theme/start/end），只替换 grid
+      var prev = NR.getActiveVersion(nd) || {};
+      var newData = {};
+      Object.keys(prev).forEach(function (k) {
+        if (k !== "id" && k !== "createdAt") newData[k] = prev[k];
+      });
+      newData.grid = {
+        url: segOut.url, rows: segOut.rows, cols: segOut.cols,
+        urls: segOut.urls || picks, width: segOut.width, height: segOut.height,
+        cell_w: segOut.cell_w, cell_h: segOut.cell_h,
+      };
+      NR.addVersion(nd, newData);
+      nd._reorgState = null;
+      nd.editing = false;
+      engine.save();
+      if (window.WF_Renderer) window.WF_Renderer.render(engine);
+    } catch (err) {
+      alert("重组失败：" + (err.message || err));
+    }
+  }
+
   async function _rcRemixSend(engine, wf, segIdx) {
     var seg = (wf.segments || [])[segIdx];
     var nd = seg && ((seg.rcStoryboardRemixs || [])[0]);
@@ -2147,10 +2275,9 @@
     for (var i = 0; i < refList.length; i++) {
       refs.push({ url: refList[i].url, label: "图片" + (i + 1) });
     }
-    var useLlm = !!nd.useLlm;
     var v = NR.getActiveVersion(nd);
     var editRemix = !!nd.editRemix && v && v.grid && v.grid.url;
-    if (useLlm && editRemix) editRemix = false;
+    var mode = nd.remixMode || "per_cell";
 
     try {
       var payload = {
@@ -2160,14 +2287,10 @@
         origin_grid: origV.grid,
         user_message: msg || "",
         reference_images: refs,
-        use_llm: useLlm,
+        mode: mode,
         edit_remix: editRemix,
       };
       if (editRemix) payload.remix_grid = v.grid;
-      if (useLlm) {
-        payload.chat_config_id = getConfigId("vision", "rcStoryboardRemix");
-        payload.chat_history = nd.chatHistory.filter(function (m) { return !m._typing; }).slice(0, -1);
-      }
       var data = await callApi("/api/recreate/generate/rc-storyboard-remix", payload);
       nd.chatHistory = nd.chatHistory.filter(function (m) { return !m._typing; });
       nd.chatHistory.push({ role: "assistant", content: data.message || "已生成二创分镜" });
@@ -2207,6 +2330,83 @@
       }
       html += '</div>';
       return html;
+    },
+
+    // 重组面板：选尺寸 → 按顺序点选原版各 cell 来填充
+    renderReorgPanel: function (opts) {
+      var nd = opts.nd;
+      var st = nd._reorgState || {};
+      var engine = window._wfEngine;
+      var wf = engine && engine.current();
+      if (!wf) return "";
+      // 来源：当前段的原版宫格 cells
+      var seg = (wf.segments || [])[opts.segIndex] || {};
+      var origV = NR.getActiveVersion((seg.rcStoryboardOrigs || [])[0]);
+      var sourceUrls = (origV && origV.grid && origV.grid.urls) || [];
+
+      var rows = st.rows || 0, cols = st.cols || 0;
+      var picks = st.picks || [];
+      var total = rows * cols;
+
+      // 第一步：尺寸选择
+      if (!rows || !cols) {
+        var sizes = [[2,2],[2,3],[3,2],[3,3]];
+        var btnsHtml = sizes.map(function (rc) {
+          return '<button class="wf-tb-btn" data-rc-reorg-size="' + rc[0] + 'x' + rc[1] + '" data-seg="' + opts.segIndex + '" data-node="' + esc(opts.nodeKey) + '">' + rc[0] + '×' + rc[1] + '</button>';
+        }).join("");
+        return '<div style="padding:12px;border:1px solid rgba(96,165,250,.3);border-radius:8px;background:rgba(96,165,250,.05);">'
+          + '<div style="font-size:13px;color:#dbeafe;margin-bottom:10px;"><i class="fa fa-th"></i> 重组宫格 · 选择尺寸</div>'
+          + '<div style="display:flex;gap:8px;flex-wrap:wrap;">' + btnsHtml + '</div>'
+          + '</div>';
+      }
+
+      // 第二步：填格阶段
+      var nextSlot = picks.length; // 下一个要填的位置
+      var cellWPct = 100 / cols, cellHPct = 100 / rows;
+
+      // 顶部：目标宫格预览（已选 cell 显示对应缩略图，未选格显示编号）
+      var previewCells = "";
+      for (var i = 0; i < total; i++) {
+        var r = Math.floor(i / cols), c = i % cols;
+        var pickedUrl = picks[i];
+        var bgStyle = pickedUrl
+          ? 'background:#000 url("' + esc(pickedUrl) + '") center/cover;'
+          : (i === nextSlot ? 'background:rgba(96,165,250,.25);border:2px dashed #60a5fa;' : 'background:rgba(148,163,184,.1);border:1px dashed rgba(148,163,184,.3);');
+        previewCells += '<div style="position:absolute;left:' + (c * cellWPct) + '%;top:' + (r * cellHPct) + '%;width:' + cellWPct + '%;height:' + cellHPct + '%;'
+          + bgStyle
+          + 'box-sizing:border-box;display:flex;align-items:center;justify-content:center;color:#fbbf24;font-weight:bold;font-size:14px;text-shadow:0 1px 2px rgba(0,0,0,.8);">'
+          + (pickedUrl ? '' : (i + 1))
+          + '</div>';
+      }
+
+      // 候选 cells 列表
+      var candHtml = sourceUrls.map(function (u, i) {
+        var disabled = !u;
+        var pickIdx = picks.indexOf(u);
+        return '<div class="wf-rc-reorg-cand" data-url="' + esc(u || "") + '" data-seg="' + opts.segIndex + '" data-node="' + esc(opts.nodeKey) + '" '
+          + 'style="position:relative;cursor:' + (disabled ? 'not-allowed' : 'pointer') + ';border:2px solid ' + (pickIdx >= 0 ? '#60a5fa' : 'transparent') + ';border-radius:6px;overflow:hidden;' + (disabled ? 'opacity:.4;' : '') + '">'
+          + (u ? '<img src="' + esc(u) + '" style="width:100%;height:80px;object-fit:cover;display:block;">' : '<div style="height:80px;background:#1e293b;"></div>')
+          + '<div style="position:absolute;left:2px;top:2px;background:rgba(0,0,0,.7);color:#fde68a;font-size:10px;padding:1px 4px;border-radius:3px;">原' + (i + 1) + '</div>'
+          + (pickIdx >= 0 ? '<div style="position:absolute;right:2px;top:2px;background:#60a5fa;color:#fff;font-size:11px;font-weight:bold;width:18px;height:18px;border-radius:50%;display:flex;align-items:center;justify-content:center;">' + (pickIdx + 1) + '</div>' : '')
+          + '</div>';
+      }).join("");
+
+      var allFilled = picks.length >= total;
+
+      return '<div style="padding:12px;border:1px solid rgba(96,165,250,.3);border-radius:8px;background:rgba(96,165,250,.05);">'
+        + '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">'
+        +   '<div style="font-size:13px;color:#dbeafe;"><i class="fa fa-th"></i> 重组 ' + rows + '×' + cols + ' · 已选 ' + picks.length + '/' + total + (allFilled ? '（点击完成生成新宫格）' : '（按顺序点击下方原图）') + '</div>'
+        +   '<button class="wf-tb-btn" data-rc-reorg-undo="' + opts.segIndex + '" data-node="' + esc(opts.nodeKey) + '"' + (picks.length === 0 ? ' disabled' : '') + '><i class="fa fa-undo"></i> 撤销上一格</button>'
+        + '</div>'
+        + '<div style="position:relative;width:100%;max-width:560px;aspect-ratio:' + cols + '/' + rows + ';margin-bottom:10px;border-radius:8px;overflow:hidden;background:#000;">'
+        +   previewCells
+        + '</div>'
+        + '<div style="font-size:11px;color:#94a3b8;margin-bottom:6px;">候选格（来自原版宫格 ' + sourceUrls.length + ' 格）：</div>'
+        + '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:6px;">' + candHtml + '</div>'
+        + '<div style="display:flex;gap:6px;margin-top:10px;">'
+        +   '<button class="wf-tb-btn primary" data-rc-reorg-finish="' + opts.segIndex + '" data-node="' + esc(opts.nodeKey) + '"' + (allFilled ? '' : ' disabled') + '><i class="fa fa-check"></i> 完成（合成新宫格）</button>'
+        + '</div>'
+        + '</div>';
     },
     // 打开替换弹窗
     openReplaceDialog: function (opts) {
