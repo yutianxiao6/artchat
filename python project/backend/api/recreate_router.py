@@ -2732,22 +2732,20 @@ async def _gen_image_via_internal(config_id: str, prompt: str, ref_b64_list: lis
 @router.post("/generate/rc-storyboard-remix")
 async def gen_rc_storyboard_remix(body: dict):
     """
-    二创分镜（对话式）：基于原版宫格大图 + 用户参考图 + 改编方向，一次性生成同 rows×cols 的二创宫格。
+    二创分镜（对话式）：基于原版宫格大图 + 用户输入做 i2i，可选用视觉 LLM 增强。
 
     body: {
-      workflow_id, chat_config_id, image_config_id, segment_index,
+      workflow_id, image_config_id, segment_index,
       origin_grid: {url, rows, cols, urls[], cell_w?, cell_h?, width?, height?},
-      origin_segment_info?: {transitions, theme, start, end, duration},
-      direction?, style?,
       user_message?: 本轮用户文字,
-      chat_history?: [{role, content}] 前序对话,
       reference_images?: [{url, label}] 用户上传的参考图,
+      use_llm?: bool 默认 false。开启时 chat_config_id 用视觉 LLM 先出 cell prompts；
+                关闭则直接把用户文字 + 原版图传给图像 API。
+      chat_config_id?: 仅 use_llm=true 时用,
+      chat_history?: 仅 use_llm=true 时用,
     }
     返回: {code:0, data:{grid:{url,rows,cols,urls,...}, message:"..."}}
     """
-    chat_config = _get_config_by_id(body.get("chat_config_id", "")) or _get_first_config("chat")
-    if not chat_config:
-        raise HTTPException(status_code=400, detail="未找到聊天/视觉配置")
     image_config_id = body.get("image_config_id") or ""
     if not _get_config_by_id(image_config_id):
         first_img = _get_first_config("image")
@@ -2772,14 +2770,17 @@ async def gen_rc_storyboard_remix(body: dict):
         raise HTTPException(status_code=400, detail="origin_grid 不完整（需要 url/rows/cols/urls）")
     n_cells = min(len(cell_urls), rows * cols)
 
-    seg_info = body.get("origin_segment_info") or {}
-    direction = (body.get("direction") or "").strip()
-    style = (body.get("style") or "").strip()
     user_message = (body.get("user_message") or "").strip()
-    chat_history = body.get("chat_history") or []
     reference_images = body.get("reference_images") or []
+    use_llm = bool(body.get("use_llm"))
 
-    # ── Step 1: 视觉 LLM 给每格出 prompt + 中文回复 ──
+    # 原版图：直接按原尺寸读取（_load_ref_image_b64 内部仅在 >max_size 时缩到 1024 长边）
+    # 提高阈值到 8MB，让宫格图大概率原样传入
+    g_b64 = _load_ref_image_b64(grid_url, max_size=8 * 1024 * 1024)
+    if not g_b64:
+        raise HTTPException(status_code=400, detail=f"原版宫格图读取失败: {grid_url}")
+
+    # 用户上传参考图：去重 + 一次性加载
     ref_items = []
     seen = set()
     for i, ri in enumerate(reference_images):
@@ -2787,114 +2788,97 @@ async def gen_rc_storyboard_remix(body: dict):
         if not ru or ru in seen:
             continue
         seen.add(ru)
-        b = _load_ref_image_b64(ru)
+        b = _load_ref_image_b64(ru, max_size=8 * 1024 * 1024)
         if b:
             ref_items.append({"b64": b, "label": (ri or {}).get("label") or f"参考图{i+1}"})
     ref_b64_user = [r["b64"] for r in ref_items]
 
-    images_for_llm = []
-    g_b64 = _load_ref_image_b64(grid_url)
-    if g_b64:
-        images_for_llm.append({"b64": g_b64, "label": f"原版宫格大图（{rows}×{cols}，从左到右、从上到下编号 1~{n_cells}）"})
-    images_for_llm.extend(ref_items)
-
-    # 给图像 API 做 i2i 的原版参考：强制压到长边 1024（避免请求体超大）
-    g_b64_for_image = _load_thumbnail_b64(grid_url, max_dim=1024, quality=82) or g_b64
-
-    hist_text = ""
-    if chat_history:
-        lines = []
-        for m in chat_history[-8:]:
-            role = "用户" if (m.get("role") == "user") else "助手"
-            content = (m.get("content") or "").strip()
-            if content:
-                lines.append(f"{role}: {content[:300]}")
-        if lines:
-            hist_text = "\n".join(lines)
-
-    seg_brief = ""
-    if seg_info:
-        seg_brief = (
-            f"主题: {seg_info.get('theme','')}; "
-            f"时长: {float(seg_info.get('duration') or 0):.1f}s; "
-            f"转场: {seg_info.get('transitions','')}"
-        )
-
-    system_prompt = f"""你是 AI 影视二创分镜提示词工程师。
-当前任务：为一段 {rows}×{cols}={n_cells} 格的原版分镜宫格生成二创版本的英文图像生成提示词。
-最终图像模型会**一次性**画出整张 {rows}×{cols} 宫格大图（每个 cell 是一个独立镜头），所以你的 prompt 必须按格描述。
-
-【二创方向】{direction or '（用户对话决定）'}
-【目标风格】{style or '（保持电影感，统一风格）'}
-【本段信息】{seg_brief or '（无）'}
-【历史对话】
-{hist_text or '（首轮对话）'}
-【用户本轮消息】{user_message or '（无文字，仅参考图/继续上轮）'}
-
-要求：
-1. 输出恰好 {n_cells} 条 cell_prompts，索引 0..{n_cells - 1}（行优先：左上为 0，向右递增；下一行从 cols 开始）
-2. 每条 cell_prompts 输出：
-   - cell_index: 整数，对应原版宫格位置
-   - prompt_en: 英文单格提示词，10-30 词，描述该镜头画面（保留原构图骨架，融入二创方向+风格+参考图特征）
-   - composition_notes: 构图说明（中文，简短）
-3. 输出 global_style_en：整体风格描述（光影、色调、画质、镜头语言），用于统一全图风格，10-20 词
-4. 输出 message：给用户的中文回复（说明改编思路 + 关键变化点，1-3 句话）
-
-只输出 JSON：
-{{
-  "cell_prompts": [{{"cell_index": 0, "prompt_en": "...", "composition_notes": "..."}}],
-  "global_style_en": "...",
-  "message": "..."
-}}"""
-    user_text = f"请为本段 {n_cells} 格分镜生成二创 prompt。"
-
-    try:
-        llm_result = await _retry_async(
-            lambda: _call_llm_vision_json(chat_config, system_prompt, user_text, images_for_llm, max_tokens=6000),
-            max_retries=int(body.get("max_retries", 1)),
-            label=f"remix-llm seg={seg_idx}",
-        )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"二创 prompt 生成失败: {e}")
-
-    cell_prompts_raw = llm_result.get("cell_prompts") or []
-    global_style = (llm_result.get("global_style_en") or "cinematic, consistent color grading, same lighting and style").strip()
-    chat_message = (llm_result.get("message") or "已生成二创分镜").strip()
-
-    by_idx = {}
-    for cp in cell_prompts_raw:
-        try:
-            ci = int(cp.get("cell_index"))
-        except Exception:
-            continue
-        by_idx[ci] = cp
-    cell_prompts = [(by_idx.get(i, {}).get("prompt_en") or "").strip() for i in range(n_cells)]
-
-    # ── Step 2: 拼成整张宫格 prompt，单次图像 API 调用直出 N×N 大图 ──
-    # 位置描述：用 row-X col-Y 帮助模型理解空间布局
-    def _cell_position_label(i):
-        r, c = i // cols, i % cols
-        return f"row {r+1} col {c+1}"
-
-    cells_block = "\n".join(
-        f"- Cell {i+1} ({_cell_position_label(i)}): {cell_prompts[i] or 'continuation of the same scene'}"
-        for i in range(n_cells)
-    )
-    grid_prompt = (
-        f"A single {rows}x{cols} storyboard grid image composed of {n_cells} distinct cinematic shots arranged in {rows} rows and {cols} columns, "
-        f"in reading order (left to right, top to bottom). Each cell is a separate movie shot, hard-edged borders between cells, no overlap.\n"
-        f"Cells:\n{cells_block}\n"
-        f"Global style: {global_style}. "
-        f"All cells must share the same visual style, color palette, lighting and rendering quality."
-    )
-    grid_neg = "blurry seams between cells, inconsistent style across cells, mismatched lighting, watermark, text labels, captions"
-
-    # 输出尺寸：以原版宫格的整体尺寸为基准
     out_w = _align16(int(origin_grid.get("width") or (origin_grid.get("cell_w", 1024) * cols)))
     out_h = _align16(int(origin_grid.get("height") or (origin_grid.get("cell_h", 1024) * rows)))
 
-    # 把原版宫格大图（压缩版） + 用户参考图一起作为 i2i 多参考输入
-    ref_for_image = ([g_b64_for_image] if g_b64_for_image else []) + ref_b64_user
+    chat_message = ""
+    grid_prompt = ""
+    grid_neg = "blurry seams between cells, inconsistent style across cells, mismatched lighting, watermark, text labels, captions"
+
+    if use_llm:
+        chat_config = _get_config_by_id(body.get("chat_config_id", "")) or _get_first_config("chat")
+        if not chat_config:
+            raise HTTPException(status_code=400, detail="开启视觉模型但未找到聊天/视觉配置")
+
+        chat_history = body.get("chat_history") or []
+        hist_text = ""
+        if chat_history:
+            lines = []
+            for m in chat_history[-8:]:
+                role = "用户" if (m.get("role") == "user") else "助手"
+                content = (m.get("content") or "").strip()
+                if content:
+                    lines.append(f"{role}: {content[:300]}")
+            if lines:
+                hist_text = "\n".join(lines)
+
+        images_for_llm = [{"b64": g_b64, "label": f"原版宫格大图（{rows}×{cols}，从左到右、从上到下编号 1~{n_cells}）"}]
+        images_for_llm.extend(ref_items)
+
+        system_prompt = f"""你是 AI 影视二创分镜提示词工程师。
+为一段 {rows}×{cols}={n_cells} 格的原版分镜宫格生成二创版本的英文图像提示词。
+最终图像模型会**一次性**画出整张 {rows}×{cols} 宫格大图（每个 cell 是一个独立镜头），所以你的 prompt 必须按格描述。
+
+【历史对话】
+{hist_text or '（首轮对话）'}
+【用户本轮消息】{user_message or '（仅参考图，无文字）'}
+
+要求：
+1. 输出恰好 {n_cells} 条 cell_prompts，索引 0..{n_cells - 1}（行优先：左上为 0）
+2. 每条 cell_prompts 输出：cell_index（整数）、prompt_en（10-30 词的英文单格提示词，保留原构图骨架）
+3. 输出 global_style_en：整体风格描述（光影、色调、画质），10-20 词
+4. 输出 message：给用户的中文回复（1-3 句话）
+
+只输出 JSON：{{"cell_prompts":[{{"cell_index":0,"prompt_en":"..."}}],"global_style_en":"...","message":"..."}}"""
+
+        try:
+            llm_result = await _retry_async(
+                lambda: _call_llm_vision_json(chat_config, system_prompt,
+                                              f"请为本段 {n_cells} 格分镜生成二创 prompt。",
+                                              images_for_llm, max_tokens=6000),
+                max_retries=int(body.get("max_retries", 1)),
+                label=f"remix-llm seg={seg_idx}",
+            )
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"二创 prompt 生成失败: {e}")
+
+        global_style = (llm_result.get("global_style_en") or "cinematic, consistent color grading").strip()
+        chat_message = (llm_result.get("message") or "已生成二创分镜").strip()
+
+        by_idx = {}
+        for cp in (llm_result.get("cell_prompts") or []):
+            try:
+                by_idx[int(cp.get("cell_index"))] = cp
+            except Exception:
+                continue
+        cell_prompts = [(by_idx.get(i, {}).get("prompt_en") or "").strip() for i in range(n_cells)]
+
+        cells_block = "\n".join(
+            f"- Cell {i+1} (row {i // cols + 1} col {i % cols + 1}): {cell_prompts[i] or 'continuation of the same scene'}"
+            for i in range(n_cells)
+        )
+        grid_prompt = (
+            f"A single {rows}x{cols} storyboard grid image composed of {n_cells} distinct cinematic shots arranged in {rows} rows and {cols} columns, "
+            f"in reading order (left to right, top to bottom). Each cell is a separate movie shot, hard-edged borders between cells, no overlap.\n"
+            f"Cells:\n{cells_block}\n"
+            f"Global style: {global_style}. All cells must share the same visual style, color palette, lighting and rendering quality."
+        )
+    else:
+        # 不走 LLM：直接把用户输入当作 prompt 喂给图像模型，原版图做 i2i 强约束
+        chat_message = "已基于原版分镜 + 你的描述重绘"
+        grid_prompt = (
+            f"A {rows}x{cols} storyboard grid keeping the exact same layout, composition and shot structure as the reference image, "
+            f"but restyled according to user instruction below. Hard-edged cell borders, no overlap.\n"
+            f"User instruction: {user_message or 'redraw in a fresh consistent cinematic style'}\n"
+            f"Keep all cells in the same visual style, color palette and lighting."
+        )
+
+    ref_for_image = [g_b64] + ref_b64_user
     try:
         gen_data = await _gen_image_via_internal(
             image_config_id, grid_prompt, ref_for_image,
@@ -2906,21 +2890,18 @@ async def gen_rc_storyboard_remix(body: dict):
         raise HTTPException(status_code=500, detail="二创宫格图生成失败：模型返回空")
 
     grid_image_url = save_workflow_image(wf_id, gen_data, prefix=f"remix_grid_s{seg_idx}")
-
-    # ── Step 3: 切片 → 单格 url 列表（前端单格编辑/替换功能依赖） ──
     sliced_urls = _slice_grid_image_to_cells(grid_image_url, rows, cols, wf_id, seg_idx) or cell_urls[:n_cells]
 
     from PIL import Image
-    p = _url_to_local_path(grid_image_url)
     final_w, final_h = (0, 0)
+    p = _url_to_local_path(grid_image_url)
     if p:
         with Image.open(p) as im:
             final_w, final_h = im.size
 
     grid_remix = {
         "url": grid_image_url,
-        "rows": rows,
-        "cols": cols,
+        "rows": rows, "cols": cols,
         "urls": sliced_urls,
         "width": final_w or out_w,
         "height": final_h or out_h,

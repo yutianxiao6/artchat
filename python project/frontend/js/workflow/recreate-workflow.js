@@ -1105,23 +1105,22 @@
       var origV = NR.getActiveVersion((seg.rcStoryboardOrigs || [])[0]);
       if (!origV || !origV.grid || !origV.grid.url) throw new Error("请先完成原版分镜");
       var nd = ctx.nodeData;
+      var useLlm = !!nd.useLlm;
 
-      var data = await callApi("/api/recreate/generate/rc-storyboard-remix", {
+      var payload = {
         workflow_id: wf.id,
-        chat_config_id: getConfigId("vision", "rcStoryboardRemix"),
         image_config_id: getConfigId("image", "rcStoryboardRemix"),
         segment_index: segIdx,
         origin_grid: origV.grid,
-        origin_segment_info: {
-          transitions: origV.transitions, theme: origV.theme,
-          start: origV.start, end: origV.end, duration: origV.duration,
-        },
-        direction: (wf.input && wf.input.direction) || "",
-        style: (wf.input && wf.input.style) || "",
         user_message: "",
-        chat_history: [],
         reference_images: (nd._pendingRefImages || []),
-      });
+        use_llm: useLlm,
+      };
+      if (useLlm) {
+        payload.chat_config_id = getConfigId("vision", "rcStoryboardRemix");
+        payload.chat_history = [];
+      }
+      var data = await callApi("/api/recreate/generate/rc-storyboard-remix", payload);
       return { grid: data.grid || null, chat_message: data.message || "" };
     },
     renderDetail: function (nd, wf, ctx) {
@@ -1166,8 +1165,11 @@
         + '<div class="wf-detail-label" style="color:#fbbf24;"><i class="fa fa-comments"></i> 二创对话 · 用 "图片1/2..." 引用</div>'
         + (history.length ? '<div style="max-height:260px;overflow-y:auto;padding:4px 0;">' + histHtml + '</div>' : '')
         + (refs.length ? '<div style="margin:6px 0;">' + refHtml + '</div>' : '')
-        + '<div style="display:flex;gap:6px;align-items:center;margin-top:4px;">'
+        + '<div style="display:flex;gap:6px;align-items:center;margin-top:4px;flex-wrap:wrap;">'
         + '<label class="wf-tb-btn" style="cursor:pointer;"><i class="fa fa-image"></i> 上传参考图<input type="file" accept="image/*" multiple data-rc-remix-ref-upload="' + ctx.segIndex + '" style="display:none;"></label>'
+        + '<label style="display:inline-flex;align-items:center;gap:4px;font-size:11px;color:#cbd5e1;cursor:pointer;user-select:none;" title="开启后用视觉模型分析原图为每格生成提示词，可能更准但更慢">'
+        +   '<input type="checkbox"' + (nd.useLlm ? ' checked' : '') + ' data-rc-remix-use-llm="' + ctx.segIndex + '" style="margin:0;"> 视觉模型增强'
+        + '</label>'
         + '</div>'
         + '<textarea class="wf-detail-textarea" id="wf-rc-remix-chat-input-' + ctx.segIndex + '" rows="3" placeholder="' + (isTyping ? 'AI 正在绘制分镜，请稍候...' : '描述想要的改编分镜，可用 "图片1" / "图片2" 引用参考图...') + '" style="margin-top:6px;"' + (isTyping ? ' disabled' : '') + '></textarea>'
         + '<div style="display:flex;gap:6px;margin-top:6px;">'
@@ -1970,6 +1972,22 @@
       }
     });
 
+    // 视觉模型增强 toggle
+    document.addEventListener("change", function (e) {
+      var el = e.target;
+      var segAttr = el.getAttribute && el.getAttribute("data-rc-remix-use-llm");
+      if (segAttr === null || segAttr === undefined) return;
+      var engine = window._wfEngine;
+      var wf = engine && engine.current();
+      if (!wf || wf.templateId !== "recreate-drama") return;
+      var segIdx = parseInt(segAttr);
+      var seg = (wf.segments || [])[segIdx];
+      var nd = seg && ((seg.rcStoryboardRemixs || [])[0]);
+      if (!nd) return;
+      nd.useLlm = !!el.checked;
+      engine.save();
+    });
+
     // 参考图上传
     document.addEventListener("change", async function (e) {
       var el = e.target;
@@ -2028,30 +2046,29 @@
     engine.save();
     if (window.WF_Renderer) window.WF_Renderer.render(engine);
 
-    // 把参考图转 b64 供视觉模型
+    // 把参考图转给后端（保持 url+label，后端按需读取）
     var refs = [];
     var refList = nd.refImages || [];
     for (var i = 0; i < refList.length; i++) {
       refs.push({ url: refList[i].url, label: "图片" + (i + 1) });
     }
+    var useLlm = !!nd.useLlm;
 
     try {
-      var data = await callApi("/api/recreate/generate/rc-storyboard-remix", {
+      var payload = {
         workflow_id: wf.id,
-        chat_config_id: getConfigId("vision", "rcStoryboardRemix"),
         image_config_id: getConfigId("image", "rcStoryboardRemix"),
         segment_index: segIdx,
         origin_grid: origV.grid,
-        origin_segment_info: {
-          transitions: origV.transitions, theme: origV.theme,
-          start: origV.start, end: origV.end, duration: origV.duration,
-        },
-        direction: (wf.input && wf.input.direction) || "",
-        style: (wf.input && wf.input.style) || "",
-        user_message: msg || "按参考图改编本段分镜",
-        chat_history: nd.chatHistory.filter(function (m) { return !m._typing; }).slice(0, -1),
+        user_message: msg || "",
         reference_images: refs,
-      });
+        use_llm: useLlm,
+      };
+      if (useLlm) {
+        payload.chat_config_id = getConfigId("vision", "rcStoryboardRemix");
+        payload.chat_history = nd.chatHistory.filter(function (m) { return !m._typing; }).slice(0, -1);
+      }
+      var data = await callApi("/api/recreate/generate/rc-storyboard-remix", payload);
       nd.chatHistory = nd.chatHistory.filter(function (m) { return !m._typing; });
       nd.chatHistory.push({ role: "assistant", content: data.message || "已生成二创分镜" });
       NR.addVersion(nd, { grid: data.grid || null, chat_message: data.message || "" });
