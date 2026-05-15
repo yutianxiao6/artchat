@@ -2793,9 +2793,6 @@ async def gen_rc_storyboard_remix(body: dict):
             ref_items.append({"b64": b, "label": (ri or {}).get("label") or f"参考图{i+1}"})
     ref_b64_user = [r["b64"] for r in ref_items]
 
-    out_w = _align16(int(origin_grid.get("width") or (origin_grid.get("cell_w", 1024) * cols)))
-    out_h = _align16(int(origin_grid.get("height") or (origin_grid.get("cell_h", 1024) * rows)))
-
     chat_message = ""
     grid_prompt = ""
     grid_neg = "blurry seams between cells, inconsistent style across cells, mismatched lighting, watermark, text labels, captions"
@@ -2879,15 +2876,27 @@ async def gen_rc_storyboard_remix(body: dict):
         )
 
     ref_for_image = [g_b64] + ref_b64_user
-    try:
-        gen_data = await _gen_image_via_internal(
-            image_config_id, grid_prompt, ref_for_image,
-            width=out_w, height=out_h, negative_prompt=grid_neg,
-        )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"二创宫格图生成失败: {e}")
+    # 4K (3840×2160) 优先，失败退 2K (1920×1080)；全 16:9
+    resolution_attempts = [(3840, 2160), (1920, 1080)]
+    gen_data = None
+    last_err = ""
+    used_w = used_h = 0
+    for try_w, try_h in resolution_attempts:
+        try:
+            gen_data = await _gen_image_via_internal(
+                image_config_id, grid_prompt, ref_for_image,
+                width=try_w, height=try_h, negative_prompt=grid_neg,
+            )
+            if gen_data:
+                used_w, used_h = try_w, try_h
+                break
+            last_err = "模型返回空"
+        except Exception as e:
+            last_err = str(e)
+            print(f"[二创][seg={seg_idx}] {try_w}x{try_h} 失败: {last_err}")
+            gen_data = None
     if not gen_data:
-        raise HTTPException(status_code=500, detail="二创宫格图生成失败：模型返回空")
+        raise HTTPException(status_code=500, detail=f"二创宫格图生成失败（4K/2K 均失败）: {last_err}")
 
     grid_image_url = save_workflow_image(wf_id, gen_data, prefix=f"remix_grid_s{seg_idx}")
     sliced_urls = _slice_grid_image_to_cells(grid_image_url, rows, cols, wf_id, seg_idx) or cell_urls[:n_cells]
@@ -2903,10 +2912,10 @@ async def gen_rc_storyboard_remix(body: dict):
         "url": grid_image_url,
         "rows": rows, "cols": cols,
         "urls": sliced_urls,
-        "width": final_w or out_w,
-        "height": final_h or out_h,
-        "cell_w": (final_w or out_w) // cols,
-        "cell_h": (final_h or out_h) // rows,
+        "width": final_w or used_w,
+        "height": final_h or used_h,
+        "cell_w": (final_w or used_w) // cols,
+        "cell_h": (final_h or used_h) // rows,
         "index": seg_idx,
     }
     return JSONResponse({"code": 0, "data": {"grid": grid_remix, "message": chat_message}})
