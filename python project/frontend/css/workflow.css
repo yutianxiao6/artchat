@@ -320,3 +320,12 @@
 .wf-rc-ref-img { transition: transform .15s; }
 .wf-rc-ref-img:hover { transform:scale(1.05); }
 .wf-rc-ref-img .wf-ref-del-btn { opacity:1; }
+
+.wf-rc-chat-retry {
+  background:transparent; border:1px solid rgba(148,163,184,.3); color:#94a3b8;
+  width:22px; height:22px; border-radius:50%; cursor:pointer; padding:0;
+  display:flex; align-items:center; justify-content:center; font-size:11px;
+  opacity:0; transition:opacity .15s, color .15s, border-color .15s; flex-shrink:0;
+}
+.wf-rc-chat-row:hover .wf-rc-chat-retry { opacity:1; }
+.wf-rc-chat-retry:hover { color:#60a5fa; border-color:#60a5fa; }

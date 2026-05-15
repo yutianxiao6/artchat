@@ -8,6 +8,39 @@
   var NR = window.WF_NodeRegistry;
   var esc = window.WF_escapeHtml;
 
+  // 通用对话气泡渲染 + 用户消息 hover 重试按钮
+  // opts: { history, typingText, userBg, userColor, retryInputId, retrySendSelector }
+  // retry：删除该 user 消息及其后所有消息 → 内容回填到 retryInputId → 触发 retrySendSelector
+  function _renderChatHistory(opts) {
+    var history = opts.history || [];
+    var typingText = opts.typingText || "AI 正在思考";
+    var userBg = opts.userBg || "rgba(59,130,246,.2)";
+    var userColor = opts.userColor || "#dbeafe";
+    var retryInputId = opts.retryInputId || "";
+    var retrySendSel = opts.retrySendSelector || "";
+    return history.map(function (m, idx) {
+      if (m._typing) {
+        return '<div style="display:flex;justify-content:flex-start;margin:4px 0;">'
+          + '<div class="wf-rc-chat-typing" style="padding:8px 12px;border-radius:8px;background:rgba(148,163,184,.12);color:#94a3b8;font-size:12px;display:inline-flex;align-items:center;gap:4px;">'
+          + '<span>' + esc(typingText) + '</span>'
+          + '<span class="wf-rc-typing-dot"></span><span class="wf-rc-typing-dot"></span><span class="wf-rc-typing-dot"></span>'
+          + '</div></div>';
+      }
+      var isUser = m.role === "user";
+      var retryBtn = (isUser && retryInputId && retrySendSel)
+        ? '<button class="wf-rc-chat-retry" data-rc-chat-retry="' + idx
+            + '" data-rc-chat-input="' + esc(retryInputId)
+            + '" data-rc-chat-send="' + esc(retrySendSel)
+            + '" title="重试这条消息"><i class="fa fa-refresh"></i></button>'
+        : "";
+      return '<div class="wf-rc-chat-row" style="display:flex;justify-content:' + (isUser ? 'flex-end' : 'flex-start') + ';margin:4px 0;align-items:center;gap:4px;">'
+        + (isUser ? retryBtn : "")
+        + '<div style="max-width:85%;padding:6px 10px;border-radius:8px;font-size:12px;line-height:1.4;white-space:pre-wrap;'
+        + (isUser ? 'background:' + userBg + ';color:' + userColor + ';' : 'background:rgba(148,163,184,.12);color:#e2e8f0;')
+        + '">' + esc(m.content || "") + '</div></div>';
+    }).join("");
+  }
+
   function _getNodeConfigs() {
     if (window._getGlobalNodeConfigs) return window._getGlobalNodeConfigs();
     try { return JSON.parse(localStorage.getItem("flowdraw:wfNodeConfigs") || "{}"); } catch (e) { return {}; }
@@ -633,20 +666,13 @@
       if (v && v.full_script) {
         var history = nd.chatHistory || [];
         var isTyping = history.length && history[history.length - 1]._typing;
-        var histHtml = history.map(function (m) {
-          var isUser = m.role === "user";
-          if (m._typing) {
-            return '<div style="display:flex;justify-content:flex-start;margin:4px 0;">'
-              + '<div class="wf-rc-chat-typing" style="padding:8px 12px;border-radius:8px;background:rgba(148,163,184,.12);color:#94a3b8;font-size:12px;display:inline-flex;align-items:center;gap:4px;">'
-              + '<span>AI 正在思考</span>'
-              + '<span class="wf-rc-typing-dot"></span><span class="wf-rc-typing-dot"></span><span class="wf-rc-typing-dot"></span>'
-              + '</div></div>';
-          }
-          return '<div style="display:flex;justify-content:' + (isUser ? 'flex-end' : 'flex-start') + ';margin:4px 0;">'
-            + '<div style="max-width:85%;padding:6px 10px;border-radius:8px;font-size:12px;line-height:1.4;white-space:pre-wrap;'
-            + (isUser ? 'background:rgba(59,130,246,.2);color:#dbeafe;' : 'background:rgba(148,163,184,.12);color:#e2e8f0;')
-            + '">' + esc(m.content || "") + '</div></div>';
-        }).join("");
+        var histHtml = _renderChatHistory({
+          history: history,
+          typingText: "AI 正在思考",
+          userBg: "rgba(59,130,246,.2)", userColor: "#dbeafe",
+          retryInputId: "wf-rc-rewrite-chat-input",
+          retrySendSelector: "[data-rc-rewrite-chat-send]",
+        });
         var inputDis = isTyping ? ' disabled' : '';
         html += '<div class="wf-detail-section" style="margin-top:12px;padding:8px;border:1px solid rgba(59,130,246,.2);border-radius:8px;">'
           + '<div class="wf-detail-label" style="color:#60a5fa;"><i class="fa fa-comments"></i> 对话修改</div>'
@@ -1119,20 +1145,13 @@
         html += '<div class="wf-detail-text" style="color:#64748b;">在下方对话框描述改编思路 + 上传参考图，点发送即可基于原版宫格生成二创分镜。</div>';
       }
       // 聊天区
-      var histHtml = history.map(function (m) {
-        var isUser = m.role === "user";
-        if (m._typing) {
-          return '<div style="display:flex;justify-content:flex-start;margin:4px 0;">'
-            + '<div class="wf-rc-chat-typing" style="padding:8px 12px;border-radius:8px;background:rgba(148,163,184,.12);color:#94a3b8;font-size:12px;display:inline-flex;align-items:center;gap:4px;">'
-            + '<span>AI 正在绘制二创分镜</span>'
-            + '<span class="wf-rc-typing-dot"></span><span class="wf-rc-typing-dot"></span><span class="wf-rc-typing-dot"></span>'
-            + '</div></div>';
-        }
-        return '<div style="display:flex;justify-content:' + (isUser ? 'flex-end' : 'flex-start') + ';margin:4px 0;">'
-          + '<div style="max-width:85%;padding:6px 10px;border-radius:8px;font-size:12px;line-height:1.4;white-space:pre-wrap;'
-          + (isUser ? 'background:rgba(245,158,11,.18);color:#fef3c7;' : 'background:rgba(148,163,184,.12);color:#e2e8f0;')
-          + '">' + esc(m.content || "") + '</div></div>';
-      }).join("");
+      var histHtml = _renderChatHistory({
+        history: history,
+        typingText: "AI 正在绘制二创分镜",
+        userBg: "rgba(245,158,11,.18)", userColor: "#fef3c7",
+        retryInputId: "wf-rc-remix-chat-input-" + ctx.segIndex,
+        retrySendSelector: '[data-rc-remix-send="' + ctx.segIndex + '"]',
+      });
 
       // 参考图展示
       var refHtml = refs.map(function (r, i) {
@@ -1413,6 +1432,31 @@
       if (!engine) return;
       var wf = engine.current();
       if (!wf || wf.templateId !== "recreate-drama") return;
+
+      // 对话气泡重试：删除该 user 消息及其后所有消息，
+      // 内容回填输入框并触发发送按钮（统一所有二创对话节点）
+      var retryBtn = e.target.closest && e.target.closest("[data-rc-chat-retry]");
+      if (retryBtn) {
+        var msgIdx = parseInt(retryBtn.getAttribute("data-rc-chat-retry"));
+        var inputId = retryBtn.getAttribute("data-rc-chat-input");
+        var sendSel = retryBtn.getAttribute("data-rc-chat-send");
+        var key = engine.selectedNodeKey;
+        if (!key || isNaN(msgIdx)) return;
+        var nd = window.WF_Renderer && window.WF_Renderer.getNodeDataByKey(engine, key);
+        if (!nd || !nd.chatHistory || msgIdx >= nd.chatHistory.length) return;
+        if (nd.chatHistory[msgIdx].role !== "user") return;
+        var content = nd.chatHistory[msgIdx].content || "";
+        nd.chatHistory = nd.chatHistory.slice(0, msgIdx);
+        engine.save();
+        if (window.WF_Renderer) window.WF_Renderer.render(engine);
+        setTimeout(function () {
+          var input = inputId && document.getElementById(inputId);
+          if (input) { input.value = content; input.focus(); }
+          var sendEl = sendSel && document.querySelector(sendSel);
+          if (sendEl && !sendEl.disabled) sendEl.click();
+        }, 30);
+        return;
+      }
 
       // 触发全局节点生成
       var genGlobal = e.target.closest("[data-gen-global]");
