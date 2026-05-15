@@ -2679,11 +2679,11 @@ async def gen_rc_storyboard(body: dict):
 # ═══════════════════════════════════════════════════
 #  二创分镜（rc-storyboard-remix）
 #  对话式：基于原版宫格 + 参考图 + 改编方向，生成同尺寸二创宫格
-#  流程：视觉 LLM 出每格 prompt → 逐格 i2i → 拼大图 → 整张重绘统一风格 → 切片
+#  流程：视觉 LLM 出每格 prompt → 拼成整张 grid prompt → 一次图像 API 直出 N×N 整图 → 切片
 # ═══════════════════════════════════════════════════
 
 def _slice_grid_image_to_cells(grid_url: str, rows: int, cols: int,
-                                workflow_id: str, segment_index: int, tag: str = "unified") -> list:
+                                workflow_id: str, segment_index: int, tag: str = "remix") -> list:
     """把一张已合成的宫格大图按 rows×cols 切成单格 URL 列表，落盘到 workflow 目录。"""
     from PIL import Image
     import uuid
@@ -2707,7 +2707,7 @@ def _slice_grid_image_to_cells(grid_url: str, rows: int, cols: int,
     return urls
 
 
-def _align16(v, lo=256, hi=2048):
+def _align16(v, lo=256, hi=4096):
     return (max(lo, min(hi, int(v))) // 16) * 16
 
 
@@ -2732,11 +2732,11 @@ async def _gen_image_via_internal(config_id: str, prompt: str, ref_b64_list: lis
 @router.post("/generate/rc-storyboard-remix")
 async def gen_rc_storyboard_remix(body: dict):
     """
-    二创分镜（对话式）：基于原版宫格大图 + 用户参考图 + 改编方向，生成同 rows×cols 的二创宫格。
+    二创分镜（对话式）：基于原版宫格大图 + 用户参考图 + 改编方向，一次性生成同 rows×cols 的二创宫格。
 
     body: {
       workflow_id, chat_config_id, image_config_id, segment_index,
-      origin_grid: {url, rows, cols, urls[]},
+      origin_grid: {url, rows, cols, urls[], cell_w?, cell_h?, width?, height?},
       origin_segment_info?: {transitions, theme, start, end, duration},
       direction?, style?,
       user_message?: 本轮用户文字,
@@ -2779,8 +2779,7 @@ async def gen_rc_storyboard_remix(body: dict):
     chat_history = body.get("chat_history") or []
     reference_images = body.get("reference_images") or []
 
-    # ── Step 1: 视觉 LLM 出每格 prompt + 整张统一风格 prompt ──
-    # 参考图一次性加载（后面 i2i 还要复用），保留 label 给 LLM
+    # ── Step 1: 视觉 LLM 给每格出 prompt + 中文回复 ──
     ref_items = []
     seen = set()
     for i, ri in enumerate(reference_images):
@@ -2798,6 +2797,9 @@ async def gen_rc_storyboard_remix(body: dict):
     if g_b64:
         images_for_llm.append({"b64": g_b64, "label": f"原版宫格大图（{rows}×{cols}，从左到右、从上到下编号 1~{n_cells}）"})
     images_for_llm.extend(ref_items)
+
+    # 给图像 API 做 i2i 的原版参考：强制压到长边 1024（避免请求体超大）
+    g_b64_for_image = _load_thumbnail_b64(grid_url, max_dim=1024, quality=82) or g_b64
 
     hist_text = ""
     if chat_history:
@@ -2820,6 +2822,7 @@ async def gen_rc_storyboard_remix(body: dict):
 
     system_prompt = f"""你是 AI 影视二创分镜提示词工程师。
 当前任务：为一段 {rows}×{cols}={n_cells} 格的原版分镜宫格生成二创版本的英文图像生成提示词。
+最终图像模型会**一次性**画出整张 {rows}×{cols} 宫格大图（每个 cell 是一个独立镜头），所以你的 prompt 必须按格描述。
 
 【二创方向】{direction or '（用户对话决定）'}
 【目标风格】{style or '（保持电影感，统一风格）'}
@@ -2832,22 +2835,22 @@ async def gen_rc_storyboard_remix(body: dict):
 1. 输出恰好 {n_cells} 条 cell_prompts，索引 0..{n_cells - 1}（行优先：左上为 0，向右递增；下一行从 cols 开始）
 2. 每条 cell_prompts 输出：
    - cell_index: 整数，对应原版宫格位置
-   - prompt_en: 英文 i2i 提示词，保留原构图骨架，融入二创方向 + 风格 + 参考图特征
+   - prompt_en: 英文单格提示词，10-30 词，描述该镜头画面（保留原构图骨架，融入二创方向+风格+参考图特征）
    - composition_notes: 构图说明（中文，简短）
-3. 同时输出 unified_prompt_en：一个适用于整张大图最终统一重绘的英文 prompt（强调风格/光影/色调一致性），不要描述具体构图
-4. 同时输出 message：给用户的中文回复（说明你的改编思路 + 关键变化点，1-3 句话）
+3. 输出 global_style_en：整体风格描述（光影、色调、画质、镜头语言），用于统一全图风格，10-20 词
+4. 输出 message：给用户的中文回复（说明改编思路 + 关键变化点，1-3 句话）
 
 只输出 JSON：
 {{
   "cell_prompts": [{{"cell_index": 0, "prompt_en": "...", "composition_notes": "..."}}],
-  "unified_prompt_en": "...",
+  "global_style_en": "...",
   "message": "..."
 }}"""
     user_text = f"请为本段 {n_cells} 格分镜生成二创 prompt。"
 
     try:
         llm_result = await _retry_async(
-            lambda: _call_llm_vision_json(chat_config, system_prompt, user_text, images_for_llm, max_tokens=8000),
+            lambda: _call_llm_vision_json(chat_config, system_prompt, user_text, images_for_llm, max_tokens=6000),
             max_retries=int(body.get("max_retries", 1)),
             label=f"remix-llm seg={seg_idx}",
         )
@@ -2855,7 +2858,7 @@ async def gen_rc_storyboard_remix(body: dict):
         raise HTTPException(status_code=500, detail=f"二创 prompt 生成失败: {e}")
 
     cell_prompts_raw = llm_result.get("cell_prompts") or []
-    unified_prompt = (llm_result.get("unified_prompt_en") or "").strip()
+    global_style = (llm_result.get("global_style_en") or "cinematic, consistent color grading, same lighting and style").strip()
     chat_message = (llm_result.get("message") or "已生成二创分镜").strip()
 
     by_idx = {}
@@ -2867,72 +2870,64 @@ async def gen_rc_storyboard_remix(body: dict):
         by_idx[ci] = cp
     cell_prompts = [(by_idx.get(i, {}).get("prompt_en") or "").strip() for i in range(n_cells)]
 
-    # ── Step 2: 逐格 i2i（每格用原格图 + 用户参考图作为多参考图） ──
-    cell_w = _align16(int(origin_grid.get("cell_w") or 1024))
-    cell_h = _align16(int(origin_grid.get("cell_h") or 1024))
+    # ── Step 2: 拼成整张宫格 prompt，单次图像 API 调用直出 N×N 大图 ──
+    # 位置描述：用 row-X col-Y 帮助模型理解空间布局
+    def _cell_position_label(i):
+        r, c = i // cols, i % cols
+        return f"row {r+1} col {c+1}"
 
-    async def _gen_one_cell(i: int):
-        prompt = cell_prompts[i] or unified_prompt or direction or "high quality cinematic frame"
-        orig_b64 = _load_ref_image_b64(cell_urls[i])
-        refs = ([orig_b64] if orig_b64 else []) + ref_b64_user
-        try:
-            data_url = await _gen_image_via_internal(
-                image_config_id, prompt, refs,
-                width=cell_w, height=cell_h,
-            )
-        except Exception:
-            return None
-        if not data_url:
-            return None
-        try:
-            return save_workflow_image(wf_id, data_url, prefix=f"remix_s{seg_idx}_c{i}")
-        except Exception:
-            return None
-
-    new_cell_urls = await asyncio.gather(*[_gen_one_cell(i) for i in range(n_cells)])
-    final_cell_urls = []
-    failed = []
-    for i, u in enumerate(new_cell_urls):
-        if u:
-            final_cell_urls.append(u)
-        else:
-            failed.append(i)
-            final_cell_urls.append(cell_urls[i])
-    if failed:
-        chat_message += f"\n（提示：第 {', '.join(str(f+1) for f in failed)} 格生成失败，已沿用原格）"
-
-    # ── Step 3: 拼大图 ──
-    grid_remix = _compose_grid_core(
-        wf_id, seg_idx, final_cell_urls, rows, cols,
-        out_subdir="grid_remix", filename_prefix="remix_seg",
+    cells_block = "\n".join(
+        f"- Cell {i+1} ({_cell_position_label(i)}): {cell_prompts[i] or 'continuation of the same scene'}"
+        for i in range(n_cells)
     )
+    grid_prompt = (
+        f"A single {rows}x{cols} storyboard grid image composed of {n_cells} distinct cinematic shots arranged in {rows} rows and {cols} columns, "
+        f"in reading order (left to right, top to bottom). Each cell is a separate movie shot, hard-edged borders between cells, no overlap.\n"
+        f"Cells:\n{cells_block}\n"
+        f"Global style: {global_style}. "
+        f"All cells must share the same visual style, color palette, lighting and rendering quality."
+    )
+    grid_neg = "blurry seams between cells, inconsistent style across cells, mismatched lighting, watermark, text labels, captions"
 
-    # ── Step 4: 整张大图再做一次统一风格重绘 + 切片回单格 ──
-    if unified_prompt:
-        try:
-            big_b64 = _load_ref_image_b64(grid_remix["url"], max_size=4 * 1024 * 1024)
-            refined = await _gen_image_via_internal(
-                image_config_id,
-                unified_prompt + ", consistent style and color grading across the whole grid, seamless, cinematic",
-                ([big_b64] if big_b64 else []) + ref_b64_user,
-                width=_align16(grid_remix["width"]), height=_align16(grid_remix["height"]),
-                negative_prompt="inconsistent style, mismatched lighting, seams, watermark",
-            )
-            if refined:
-                refined_url = save_workflow_image(wf_id, refined, prefix=f"remix_unified_s{seg_idx}")
-                sliced = _slice_grid_image_to_cells(refined_url, rows, cols, wf_id, seg_idx, tag="unified")
-                if sliced and len(sliced) == n_cells:
-                    grid_remix = _compose_grid_core(
-                        wf_id, seg_idx, sliced, rows, cols,
-                        out_subdir="grid_remix", filename_prefix="remix_unified_seg",
-                    )
-                else:
-                    grid_remix["url"] = refined_url
-                    grid_remix["urls"] = sliced or final_cell_urls
-        except Exception as e:
-            print(f"[二创][seg={seg_idx}] 整张统一重绘失败（保留逐格结果）: {e}")
+    # 输出尺寸：以原版宫格的整体尺寸为基准
+    out_w = _align16(int(origin_grid.get("width") or (origin_grid.get("cell_w", 1024) * cols)))
+    out_h = _align16(int(origin_grid.get("height") or (origin_grid.get("cell_h", 1024) * rows)))
 
-    grid_remix["index"] = seg_idx
+    # 把原版宫格大图（压缩版） + 用户参考图一起作为 i2i 多参考输入
+    ref_for_image = ([g_b64_for_image] if g_b64_for_image else []) + ref_b64_user
+    try:
+        gen_data = await _gen_image_via_internal(
+            image_config_id, grid_prompt, ref_for_image,
+            width=out_w, height=out_h, negative_prompt=grid_neg,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"二创宫格图生成失败: {e}")
+    if not gen_data:
+        raise HTTPException(status_code=500, detail="二创宫格图生成失败：模型返回空")
+
+    grid_image_url = save_workflow_image(wf_id, gen_data, prefix=f"remix_grid_s{seg_idx}")
+
+    # ── Step 3: 切片 → 单格 url 列表（前端单格编辑/替换功能依赖） ──
+    sliced_urls = _slice_grid_image_to_cells(grid_image_url, rows, cols, wf_id, seg_idx) or cell_urls[:n_cells]
+
+    from PIL import Image
+    p = _url_to_local_path(grid_image_url)
+    final_w, final_h = (0, 0)
+    if p:
+        with Image.open(p) as im:
+            final_w, final_h = im.size
+
+    grid_remix = {
+        "url": grid_image_url,
+        "rows": rows,
+        "cols": cols,
+        "urls": sliced_urls,
+        "width": final_w or out_w,
+        "height": final_h or out_h,
+        "cell_w": (final_w or out_w) // cols,
+        "cell_h": (final_h or out_h) // rows,
+        "index": seg_idx,
+    }
     return JSONResponse({"code": 0, "data": {"grid": grid_remix, "message": chat_message}})
 
 

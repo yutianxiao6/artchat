@@ -633,6 +633,7 @@
       var preview = def && def.getPreview ? def.getPreview(nd) : "";
       if (preview) html += '<div class="wf-card-text">' + esc(preview).slice(0, 200) + '</div>';
       if (v.imageUrl) html += '<img class="wf-card-img wf-preview-img" src="' + esc(v.imageUrl) + '" data-preview="' + esc(v.imageUrl) + '">';
+      if (v.grid && v.grid.url) html += '<img class="wf-card-img wf-preview-img" src="' + esc(v.grid.url) + '" data-preview="' + esc(v.grid.url) + '">';
       // 多张缩略图（如关键帧列表、人物/场景列表）
       if (v.frames && v.frames.length) {
         html += '<div class="wf-ref-images" style="flex-wrap:wrap;gap:3px;">';

@@ -762,7 +762,7 @@
         var g = v.grid;
         var gridHtml = (nd.editing && window.WF_GridEditor)
           ? window.WF_GridEditor.renderEditable({ grid: g, nodeKey: "rcStoryboardOrig", segIndex: ctx.segIndex, source: "frames" })
-          : '<img src="' + esc(g.url) + '" style="width:100%;max-width:560px;border-radius:8px;">';
+          : '<img class="wf-preview-img" src="' + esc(g.url) + '" data-preview="' + esc(g.url) + '" style="width:100%;max-width:560px;border-radius:8px;cursor:zoom-in;">';
         html += '<div class="wf-detail-section">' + gridHtml
           + '<div style="display:flex;gap:6px;margin-top:6px;">'
           + '<button class="wf-tb-btn" data-rc-sb-edit="rcStoryboardOrig" data-seg="' + ctx.segIndex + '"><i class="fa fa-' + (nd.editing ? "check" : "pencil") + '"></i> ' + (nd.editing ? "完成编辑" : "编辑宫格") + '</button>'
@@ -1110,7 +1110,7 @@
         var g = v.grid;
         var gridHtml = (nd.editing && window.WF_GridEditor)
           ? window.WF_GridEditor.renderEditable({ grid: g, nodeKey: "rcStoryboardRemix", segIndex: ctx.segIndex, source: "frames+upload" })
-          : '<img src="' + esc(g.url) + '" style="width:100%;max-width:560px;border-radius:8px;">';
+          : '<img class="wf-preview-img" src="' + esc(g.url) + '" data-preview="' + esc(g.url) + '" style="width:100%;max-width:560px;border-radius:8px;cursor:zoom-in;">';
         html += '<div class="wf-detail-section">' + gridHtml
           + '<div style="display:flex;gap:6px;margin-top:6px;">'
           + '<button class="wf-tb-btn" data-rc-sb-edit="rcStoryboardRemix" data-seg="' + ctx.segIndex + '"><i class="fa fa-' + (nd.editing ? "check" : "pencil") + '"></i> ' + (nd.editing ? "完成编辑" : "编辑宫格") + '</button>'
