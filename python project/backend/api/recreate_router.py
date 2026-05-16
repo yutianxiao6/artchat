@@ -196,6 +196,7 @@ def _load_ref_image_b64(image_url: str, max_size: int = 1500000) -> str:
     if not image_url or not image_url.startswith("/workflow-images/"):
         return ""
     rel = image_url.replace("/workflow-images/", "", 1)
+    rel = rel.split("?", 1)[0]
     path = os.path.join(WORKFLOW_ROOT, rel)
     if not os.path.isfile(path):
         return ""
@@ -224,6 +225,7 @@ def _load_thumbnail_b64(image_url: str, max_dim: int = 256, quality: int = 70) -
     if not image_url or not image_url.startswith("/workflow-images/"):
         return ""
     rel = image_url.replace("/workflow-images/", "", 1)
+    rel = rel.split("?", 1)[0]
     path = os.path.join(WORKFLOW_ROOT, rel)
     if not os.path.isfile(path):
         return ""
@@ -1567,6 +1569,7 @@ def _url_to_local_path(image_url: str) -> str:
     if not image_url or not image_url.startswith("/workflow-images/"):
         return ""
     rel = image_url.replace("/workflow-images/", "", 1)
+    rel = rel.split("?", 1)[0]
     path = os.path.join(WORKFLOW_ROOT, rel)
     return path if os.path.isfile(path) else ""
 
@@ -1629,25 +1632,45 @@ def _compose_grid_core(
     if abs((cell_w / cell_h) - aspect) > 0.02:
         cell_h = max(1, int(round(cell_w / aspect)))
 
-    # 初步画布尺寸
-    total_w = cell_w * cols
-    total_h = cell_h * rows
-
     # 缩放 cell 让长边落入目标范围
-    target_w, target_h = _clamp_long_edge((total_w, total_h), min_long_edge, max_long_edge)
-    if (target_w, target_h) != (total_w, total_h):
+    target_w, target_h = _clamp_long_edge((cell_w * cols, cell_h * rows), min_long_edge, max_long_edge)
+    if (target_w, target_h) != (cell_w * cols, cell_h * rows):
         cell_w = max(1, target_w // cols)
         cell_h = max(1, target_h // rows)
-        total_w = cell_w * cols
-        total_h = cell_h * rows
 
-    canvas = Image.new("RGB", (total_w, total_h), (0, 0, 0))
+    # 格子间加白色分隔线，同时控制整体宽高比在 0.6~2.3 之间
+    gap = max(4, min(cell_w, cell_h) // 40)  # 分隔线宽度：格子短边的 1/40，至少 4px
+    total_w = cell_w * cols + gap * (cols - 1)
+    total_h = cell_h * rows + gap * (rows - 1)
+
+    # 如果比例超出范围，调整 gap 大小来修正
+    ratio = total_w / total_h if total_h else 1.0
+    if ratio > 2.3 and rows > 1:
+        # 太宽，增大行间距
+        extra_h = int(total_w / 2.3) - total_h
+        row_gap = gap + extra_h // (rows - 1) if (rows - 1) else gap
+        total_h = cell_h * rows + row_gap * (rows - 1)
+        col_gap = gap
+    elif ratio < 0.6 and cols > 1:
+        # 太高，增大列间距
+        extra_w = int(total_h * 0.6) - total_w
+        col_gap = gap + extra_w // (cols - 1) if (cols - 1) else gap
+        total_w = cell_w * cols + col_gap * (cols - 1)
+        row_gap = gap
+    else:
+        row_gap = gap
+        col_gap = gap
+        total_w = cell_w * cols + col_gap * (cols - 1)
+        total_h = cell_h * rows + row_gap * (rows - 1)
+
+    canvas = Image.new("RGB", (total_w, total_h), (255, 255, 255))
     for i, im in enumerate(imgs):
         r = i // cols
         c = i % cols
-        # 同比例裁切 → 目标 cell 尺寸
         fitted = ImageOps.fit(im, (cell_w, cell_h), method=Image.LANCZOS, centering=(0.5, 0.5))
-        canvas.paste(fitted, (c * cell_w, r * cell_h))
+        x = c * (cell_w + col_gap)
+        y = r * (cell_h + row_gap)
+        canvas.paste(fitted, (x, y))
 
     # 落盘
     out_dir = os.path.join(get_workflow_dir(workflow_id), out_subdir)
@@ -3016,6 +3039,77 @@ async def gen_rc_storyboard_remix(body: dict):
     return JSONResponse({"code": 0, "data": {"grid": grid_remix, "message": chat_message}})
 
 
+@router.post("/generate/rc-remix-cell")
+async def gen_rc_remix_cell(body: dict):
+    """
+    生成二创分镜的单个格子。
+    body: {
+      workflow_id, image_config_id, segment_index, cell_index,
+      origin_cell_url: 原版对应格子 URL,
+      user_message: 该格提示词,
+      reference_images?: [{url, label}],
+      edit_remix?: bool,
+      remix_cell_url?: 已有二创格子 URL (edit_remix=true 时)
+    }
+    返回: {code:0, data:{url: "生成的单格图片URL"}}
+    """
+    image_config_id = body.get("image_config_id") or ""
+    if not _get_config_by_id(image_config_id):
+        first_img = _get_first_config("image")
+        if not first_img:
+            raise HTTPException(status_code=400, detail="未找到图像配置")
+        image_config_id = first_img["id"]
+
+    wf_id = body.get("workflow_id", "")
+    if not wf_id:
+        raise HTTPException(status_code=400, detail="缺少 workflow_id")
+    seg_idx = int(body.get("segment_index", 0))
+    cell_idx = int(body.get("cell_index", 0))
+
+    origin_cell_url = body.get("origin_cell_url") or ""
+    user_message = (body.get("user_message") or "").strip()
+    reference_images = body.get("reference_images") or []
+    edit_remix = bool(body.get("edit_remix"))
+    remix_cell_url = body.get("remix_cell_url") or ""
+
+    base_url = remix_cell_url if edit_remix and remix_cell_url else origin_cell_url
+    if not base_url:
+        raise HTTPException(status_code=400, detail="缺少参考格子 URL（origin_cell_url）")
+
+    base_b64 = _load_ref_image_b64(base_url, max_size=8 * 1024 * 1024)
+    if not base_b64:
+        raise HTTPException(status_code=400, detail=f"参考格子图读取失败: {base_url}")
+
+    ref_b64_user = []
+    for ri in reference_images:
+        ru = (ri or {}).get("url")
+        if not ru:
+            continue
+        b = _load_ref_image_b64(ru, max_size=8 * 1024 * 1024)
+        if b:
+            ref_b64_user.append(b)
+
+    if not user_message:
+        user_message = "cinematic shot, same composition as reference"
+    prefix = "Modify this movie shot per user instruction." if edit_remix else "Restyled movie shot keeping same composition as reference image."
+    prompt = f"{prefix} {user_message}. Clean image, no text, no subtitles, no captions, no logo, no watermark."
+    cell_neg = "watermark, text, captions, subtitles, chinese characters, english text, any text overlay, signature, logo"
+
+    refs = [base_b64] + ref_b64_user
+    try:
+        data_url = await _gen_image_via_internal(
+            image_config_id, prompt, refs,
+            width=1024, height=576, negative_prompt=cell_neg,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"单格生成失败: {e}")
+    if not data_url:
+        raise HTTPException(status_code=500, detail="图像模型未返回数据")
+
+    url = save_workflow_image(wf_id, data_url, prefix=f"remix_cell_s{seg_idx}_c{cell_idx}")
+    return JSONResponse({"code": 0, "data": {"url": url}})
+
+
 # ═══════════════════════════════════════════════════
 #  人物场景规划（自动挑帧提取人物清单 + 各段场景，供后续节点消费）
 # ═══════════════════════════════════════════════════
@@ -3246,6 +3340,7 @@ async def gen_rc_video_prompt(body: dict):
     # 整篇剧本（来自 rcPlotRewrite/rcScript/输入剧情，前端按优先级挑好后传入）
     full_script = (body.get("full_script") or "").strip()
     full_script_source = body.get("full_script_source") or ""  # rewrite/script/input
+    no_script = bool(body.get("no_script"))
     seg_start = float(segment.get("start") or 0.0)
     seg_end = float(segment.get("end") or (seg_start + duration))
     seg_text = segment.get("script") or segment.get("script_text") or segment.get("text") or segment.get("theme") or ""
@@ -3257,6 +3352,20 @@ async def gen_rc_video_prompt(body: dict):
     vision_images = []
     img_idx = 1
     seen = set()
+
+    # 二创分镜宫格（最重要的参考图，放在最前面）
+    remix_grid = body.get("remix_grid") or {}
+    remix_grid_url = remix_grid.get("url") or ""
+    remix_cell_urls = remix_grid.get("urls") or []
+    r_rows_grid = remix_grid.get("rows") or 2
+    r_cols_grid = remix_grid.get("cols") or 2
+    if remix_grid_url:
+        b = _load_ref_image_b64(remix_grid_url, max_size=8 * 1024 * 1024)
+        if b:
+            img_ref_lines.append(f"@图片{img_idx} 是本段二创分镜宫格（{r_rows_grid}×{r_cols_grid}格，从左到右从上到下编号1~{r_rows_grid*r_cols_grid}）")
+            vision_images.append({"b64": b, "label": f"二创分镜宫格 {r_rows_grid}×{r_cols_grid}"})
+            img_idx += 1
+
     for c in characters:
         url = c.get("imageUrl") or ""
         if not url or url in seen:
@@ -3336,12 +3445,55 @@ async def gen_rc_video_prompt(body: dict):
         cut_format = "格式：【起止时间 | 画面概述→动作变化 | 镜头运动方式】然后紧跟详细描述"
 
     example_cuts = (
-        "【0-3s | 分镜1 | 冷雨巷口特写→缓拉中景 | 固定→慢拉】固定镜头超特写雨水打在小明紧握的伞柄上...镜头以1.5m/s慢拉至中景，小明站在巷口路灯下..."
-        if n_shots > 0 else
+        "【0-3s | 第1行第1格 | 冷雨巷口特写→缓拉中景 | 固定→慢拉】固定镜头超特写雨水打在小明紧握的伞柄上...镜头以1.5m/s慢拉至中景，小明站在巷口路灯下..."
+        if n_shots > 0 or no_script else
         "【0-3s | 冷雨巷口特写→缓拉中景 | 固定→慢拉】固定镜头超特写雨水打在小明紧握的伞柄上..."
     )
 
-    system_prompt = f"""你是AI视频生成提示词专家。为这段二创短剧的第 {seg_idx+1}/{total_segments} 段写 {duration} 秒视频提示词。{"仔细观察每张参考图片的实际内容。" if has_any_ref else ""}
+    # 获取宫格行列信息用于格式说明
+    r_rows = (remix_grid.get("rows") or 3) if remix_grid else 3
+    r_cols = (remix_grid.get("cols") or 3) if remix_grid else 3
+    n_cells = r_rows * r_cols
+
+    if no_script:
+        # 纯看图模式：不参考剧情，只根据分镜图描述画面
+        cell_order_text = ""
+        cell_idx = 1
+        for row in range(r_rows):
+            for col in range(r_cols):
+                cell_order_text += f"  {cell_idx}. 第{row+1}行第{col+1}格\n"
+                cell_idx += 1
+
+        system_prompt = f"""你是AI视频生成提示词专家。仔细观察二创分镜宫格图（{r_rows}×{r_cols}={n_cells}格），纯粹根据图片内容为第 {seg_idx+1}/{total_segments} 段写 {duration} 秒视频提示词。
+
+不要参考任何剧本或文字剧情，完全根据你在分镜图中看到的画面内容来描述。
+
+风格：{style or '（未指定）'} | 类型：{vtype} | 二创方向：{direction or '（保持原有）'}
+
+【重要：宫格阅读顺序 = 剧情时间顺序】
+分镜宫格的阅读顺序是：先从左到右读完第一行，再从左到右读第二行，依此类推。
+这个顺序就是视频的时间顺序——第1行第1格是视频开头，最后一格是视频结尾。
+你必须严格按照以下顺序逐格描述，不可跳格、不可打乱：
+
+{cell_order_text}
+格式：【起止时间 | 第N行第M格 | 画面概述→动作变化 | 镜头运动方式】然后紧跟详细描述
+
+将 {duration} 秒按上述顺序均匀分配到 {n_cells} 格（每格约 {duration/n_cells:.1f} 秒），严格按编号 1→{n_cells} 的顺序输出。
+
+每个时间段的详细描述必须包含：
+1. 具体的镜头运动（推/拉/摇/移/跟/升/降/环绕/手持，含速度和距离）
+2. 人物的精确动作、表情、姿态变化（根据图片中看到的内容）
+3. 场景环境细节（光线方向、色调、氛围物体）
+4. 景别变化（特写→近景→中景→全景→远景）
+
+参考示例格式：
+{example_cuts}
+
+重要：full_text 总字数不得超过2000字，精炼描述，突出关键画面和动作。
+
+只输出JSON：{{"full_text": "完整提示词文本"}}"""
+    else:
+        system_prompt = f"""你是AI视频生成提示词专家。为这段二创短剧的第 {seg_idx+1}/{total_segments} 段写 {duration} 秒视频提示词。{"仔细观察每张参考图片的实际内容。" if has_any_ref else ""}
 
 风格：{style or '（未指定）'} | 类型：{vtype} | 二创方向：{direction or '（保持原有）'}
 
@@ -3349,7 +3501,11 @@ async def gen_rc_video_prompt(body: dict):
 
 {ref_section}
 
-{cut_format}
+【重要：宫格阅读顺序 = 剧情时间顺序】
+分镜宫格按从左到右、从上到下的顺序阅读，这就是视频的时间顺序。
+第1行第1格=视频开头，最后一格=视频结尾。严格按此顺序逐格输出。
+
+格式：【起止时间 | 第N行第M格 | 画面概述→动作变化 | 镜头运动方式】然后紧跟详细描述
 
 {shot_section}
 
@@ -3372,17 +3528,19 @@ async def gen_rc_video_prompt(body: dict):
 参考示例格式：
 {example_cuts}
 
-重要：full_text 总字数不得超过2000字，精炼描述，突出关键画面和动作。
+重要：full_text 总字数不得超过2000字，精炼描述，突出关键画面和动作。每段开头中括号内标注对应的宫格位置（第N行第M格）。
 
 只输出JSON：{{"full_text": "完整提示词文本"}}"""
 
     user_prompt_parts = []
-    if full_script:
+    if full_script and not no_script:
         src_label = {"rewrite": "改编新剧本", "script": "原视频剧本", "input": "用户输入的剧情梗概"}.get(full_script_source, "完整剧本参考")
         user_prompt_parts.append(f"【{src_label}（整片）】\n{full_script[:6000]}")
     user_prompt_parts.append(
-        f"【本段时间窗】{seg_start:.1f}s ~ {seg_end:.1f}s（共 {duration} 秒）。请只为这段时间窗内的画面写提示词，叙事内容请从整片剧本中按时间窗对应的部分提取。"
+        f"【本段时长】共 {duration} 秒（从 0s 开始到 {duration}s 结束）。请从 0s 开始写时间码，所有分镜时长之和 = {duration}s。"
     )
+    if no_script:
+        user_prompt_parts.append(f"纯看图模式：不参考任何剧本，完全根据分镜宫格图（{r_rows}×{r_cols}格）中的画面内容来描述每格对应的视频画面。")
     if seg_text:
         user_prompt_parts.append(f"【本段补充信息】{seg_text}")
     user_prompt = "\n\n".join(user_prompt_parts)

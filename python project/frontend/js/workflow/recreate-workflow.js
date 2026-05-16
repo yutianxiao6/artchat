@@ -1162,13 +1162,14 @@
       var history = nd.chatHistory || [];
       var isTyping = history.length && history[history.length - 1]._typing;
       var refs = nd.refImages || [];
+      var mode = nd.remixMode || "per_cell";
       var html = "";
+
       if (isPipeline) {
         html += '<div class="wf-detail-text" style="color:#94a3b8;font-size:11px;line-height:1.6;margin-bottom:8px;">'
           + '此处的参考图、对话内容、视觉模型/修改二创开关将在「全部段落生成」时广播到所有段，覆盖各段独立设置。'
           + '</div>';
       } else if (v && v.grid && v.grid.url) {
-        // 当前二创宫格（若已生成）
         var g = v.grid;
         var reorgActive = nd.editing && nd._reorgState;
         var gridHtml;
@@ -1184,55 +1185,123 @@
           + '<button class="wf-tb-btn" data-rc-sb-edit="rcStoryboardRemix" data-seg="' + ctx.segIndex + '"><i class="fa fa-' + (nd.editing ? "check" : "pencil") + '"></i> ' + (nd.editing ? "完成编辑" : "编辑宫格") + '</button>'
           + (nd.editing && !reorgActive ? '<button class="wf-tb-btn" data-rc-sb-reorg="rcStoryboardRemix" data-seg="' + ctx.segIndex + '"><i class="fa fa-th"></i> 重组</button>' : '')
           + (reorgActive ? '<button class="wf-tb-btn" data-rc-sb-reorg-cancel="rcStoryboardRemix" data-seg="' + ctx.segIndex + '"><i class="fa fa-times"></i> 取消重组</button>' : '')
+          + '<a class="wf-tb-btn" href="' + esc(g.url) + '" download style="text-decoration:none;"><i class="fa fa-download"></i> 下载整张</a>'
+          + '<button class="wf-tb-btn" data-rc-download-cells="' + ctx.segIndex + '"><i class="fa fa-files-o"></i> 下载单张</button>'
           + '</div></div>';
-      } else {
-        html += '<div class="wf-detail-text" style="color:#64748b;">在下方对话框描述改编思路 + 上传参考图，点发送即可基于原版宫格生成二创分镜。</div>';
       }
-      // 聊天区
-      var histHtml = _renderChatHistory({
-        history: history,
-        typingText: "AI 正在绘制二创分镜",
-        userBg: "rgba(245,158,11,.18)", userColor: "#fef3c7",
-        retryInputId: "wf-rc-remix-chat-input-" + ctx.segIndex,
-        retrySendSelector: '[data-rc-remix-send="' + ctx.segIndex + '"]',
-      });
 
-      // 参考图展示
-      var refHtml = refs.map(function (r, i) {
-        return '<div class="wf-rc-ref-img" style="position:relative;display:inline-block;margin:2px;">'
-          + '<img src="' + esc(r.url) + '" style="width:64px;height:64px;object-fit:cover;border-radius:6px;border:1px solid rgba(245,158,11,.4);">'
-          + '<div style="position:absolute;left:2px;top:2px;background:rgba(0,0,0,.7);color:#fde68a;font-size:9px;padding:1px 4px;border-radius:3px;">图' + (i + 1) + '</div>'
-          + '<button class="wf-ref-del-btn" data-del-rc-remix-ref="' + i + '" data-seg="' + ctx.segIndex + '" style="position:absolute;right:-4px;top:-4px;"><i class="fa fa-times"></i></button>'
-          + '</div>';
-      }).join("");
-
+      // 模式切换按钮
       html += '<div class="wf-detail-section" style="margin-top:12px;padding:8px;border:1px solid rgba(245,158,11,.2);border-radius:8px;">'
-        + '<div class="wf-detail-label" style="color:#fbbf24;"><i class="fa fa-comments"></i> 二创对话 · 用 "图片1/2..." 引用</div>'
-        + (history.length ? '<div style="max-height:260px;overflow-y:auto;padding:4px 0;">' + histHtml + '</div>' : '')
-        + (refs.length ? '<div style="margin:6px 0;">' + refHtml + '</div>' : '')
-        + '<div style="display:flex;gap:6px;align-items:center;margin-top:4px;flex-wrap:wrap;">'
-        + '<label class="wf-tb-btn" style="cursor:pointer;"><i class="fa fa-image"></i> 上传参考图<input type="file" accept="image/*" multiple data-rc-remix-ref-upload="' + ctx.segIndex + '" style="display:none;"></label>'
-        + '<div style="display:inline-flex;border:1px solid rgba(148,163,184,.3);border-radius:6px;overflow:hidden;font-size:11px;" title="生成模式：逐格单独 i2i 拼图（默认，质量高）/ 一次出整张 N×N 宫格（快）">'
-        +   '<button class="wf-rc-mode-btn' + ((nd.remixMode || "per_cell") === "per_cell" ? " active" : "") + '" data-rc-remix-mode="per_cell" data-seg="' + ctx.segIndex + '" type="button">逐格生成</button>'
-        +   '<button class="wf-rc-mode-btn' + ((nd.remixMode || "per_cell") === "single" ? " active" : "") + '" data-rc-remix-mode="single" data-seg="' + ctx.segIndex + '" type="button">整张生成</button>'
+        + '<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:8px;">'
+        + '<div class="wf-detail-label" style="color:#fbbf24;margin:0;"><i class="fa fa-magic"></i> 二创分镜</div>'
+        + '<div style="display:inline-flex;border:1px solid rgba(148,163,184,.3);border-radius:6px;overflow:hidden;font-size:11px;">'
+        +   '<button class="wf-rc-mode-btn' + (mode === "per_cell" ? " active" : "") + '" data-rc-remix-mode="per_cell" data-seg="' + ctx.segIndex + '" type="button">逐格生成</button>'
+        +   '<button class="wf-rc-mode-btn' + (mode === "single" ? " active" : "") + '" data-rc-remix-mode="single" data-seg="' + ctx.segIndex + '" type="button">整张生成</button>'
         + '</div>'
         + (v && v.grid && v.grid.url
-            ? '<label style="display:inline-flex;align-items:center;gap:4px;font-size:11px;color:#cbd5e1;cursor:pointer;user-select:none;" title="开启后在已生成的二创分镜基础上继续修改，否则从原版分镜重新生成">'
-              + '<input type="checkbox"' + (nd.editRemix ? ' checked' : '') + ' data-rc-remix-edit="' + ctx.segIndex + '" style="margin:0;"> 修改二创分镜'
+            ? '<label style="display:inline-flex;align-items:center;gap:4px;font-size:11px;color:#cbd5e1;cursor:pointer;user-select:none;" title="开启后在已生成的二创分镜基础上继续修改">'
+              + '<input type="checkbox"' + (nd.editRemix ? ' checked' : '') + ' data-rc-remix-edit="' + ctx.segIndex + '" style="margin:0;"> 修改二创'
               + '</label>'
             : "")
-        + '</div>'
-        + '<textarea class="wf-detail-textarea" id="wf-rc-remix-chat-input-' + ctx.segIndex + '" rows="3" placeholder="' + (isTyping ? 'AI 正在绘制分镜，请稍候...' : (isPipeline ? '在此输入广播文字（最后一条用户消息会作为 user_message 发给后端）' : '描述想要的改编分镜，可用 "图片1" / "图片2" 引用参考图...')) + '" style="margin-top:6px;"' + (isTyping ? ' disabled' : '') + '>' + esc(nd._draftMsg || "") + '</textarea>'
-        + '<div style="display:flex;gap:6px;margin-top:6px;">'
-        + (isPipeline
-            ? '<div style="font-size:11px;color:#64748b;align-self:center;">使用顶部「全部段落生成」按钮触发广播生成</div>'
-            : '<button class="wf-tb-btn primary" data-rc-remix-send="' + ctx.segIndex + '"' + (isTyping ? ' disabled' : dis) + '><i class="fa fa-paper-plane"></i> ' + (isTyping ? 'AI 正在绘制...' : '生成二创分镜') + '</button>'
-              + (history.length ? '<button class="wf-tb-btn" data-rc-remix-clear="' + ctx.segIndex + '"><i class="fa fa-trash-o"></i> 清空对话</button>' : ''))
-        + '</div>'
         + '</div>';
+
+      if (!isPipeline && mode === "per_cell") {
+        html += _renderPerCellUI(nd, wf, ctx, dis);
+      } else {
+        html += _renderSingleModeUI(nd, wf, ctx, isPipeline, dis, history, isTyping, refs);
+      }
+
+      html += '</div>';
       return html;
     },
   });
+
+  function _renderSingleModeUI(nd, wf, ctx, isPipeline, dis, history, isTyping, refs) {
+    var histHtml = _renderChatHistory({
+      history: history,
+      typingText: "AI 正在绘制二创分镜",
+      userBg: "rgba(245,158,11,.18)", userColor: "#fef3c7",
+      retryInputId: "wf-rc-remix-chat-input-" + ctx.segIndex,
+      retrySendSelector: '[data-rc-remix-send="' + ctx.segIndex + '"]',
+    });
+    var refHtml = refs.map(function (r, i) {
+      return '<div class="wf-rc-ref-img" style="position:relative;display:inline-block;margin:2px;">'
+        + '<img src="' + esc(r.url) + '" style="width:64px;height:64px;object-fit:cover;border-radius:6px;border:1px solid rgba(245,158,11,.4);">'
+        + '<div style="position:absolute;left:2px;top:2px;background:rgba(0,0,0,.7);color:#fde68a;font-size:9px;padding:1px 4px;border-radius:3px;">图' + (i + 1) + '</div>'
+        + '<button class="wf-ref-del-btn" data-del-rc-remix-ref="' + i + '" data-seg="' + ctx.segIndex + '" style="position:absolute;right:-4px;top:-4px;"><i class="fa fa-times"></i></button>'
+        + '</div>';
+    }).join("");
+    var html = '';
+    html += (history.length ? '<div style="max-height:260px;overflow-y:auto;padding:4px 0;">' + histHtml + '</div>' : '')
+      + (refs.length ? '<div style="margin:6px 0;">' + refHtml + '</div>' : '')
+      + '<div style="display:flex;gap:6px;align-items:center;margin-top:4px;flex-wrap:wrap;">'
+      + '<label class="wf-tb-btn" style="cursor:pointer;"><i class="fa fa-image"></i> 上传参考图<input type="file" accept="image/*" multiple data-rc-remix-ref-upload="' + ctx.segIndex + '" style="display:none;"></label>'
+      + '</div>'
+      + '<textarea class="wf-detail-textarea" id="wf-rc-remix-chat-input-' + ctx.segIndex + '" rows="3" placeholder="' + (isTyping ? 'AI 正在绘制分镜，请稍候...' : (isPipeline ? '在此输入广播文字' : '描述想要的改编分镜，可用 "图片1" / "图片2" 引用参考图...')) + '" style="margin-top:6px;"' + (isTyping ? ' disabled' : '') + '>' + esc(nd._draftMsg || "") + '</textarea>'
+      + '<div style="display:flex;gap:6px;margin-top:6px;">'
+      + (isPipeline
+          ? '<div style="font-size:11px;color:#64748b;align-self:center;">使用顶部「全部段落生成」按钮触发广播生成</div>'
+          : '<button class="wf-tb-btn primary" data-rc-remix-send="' + ctx.segIndex + '"' + (isTyping ? ' disabled' : dis) + '><i class="fa fa-paper-plane"></i> ' + (isTyping ? 'AI 正在绘制...' : '生成二创分镜') + '</button>'
+            + (history.length ? '<button class="wf-tb-btn" data-rc-remix-clear="' + ctx.segIndex + '"><i class="fa fa-trash-o"></i> 清空对话</button>' : ''))
+      + '</div>';
+    return html;
+  }
+
+  function _renderPerCellUI(nd, wf, ctx, dis) {
+    var seg = (wf.segments || [])[ctx.segIndex] || {};
+    var origV = NR.getActiveVersion((seg.rcStoryboardOrigs || [])[0]);
+    if (!origV || !origV.grid || !origV.grid.urls || !origV.grid.urls.length) {
+      return '<div class="wf-detail-text" style="color:#64748b;">请先完成原版分镜载入。</div>';
+    }
+    var origUrls = origV.grid.urls;
+    var nCells = origUrls.length;
+    var cellStates = nd.cellStates || [];
+    while (cellStates.length < nCells) cellStates.push({ prompt: "", refImages: [], resultUrl: "", busy: false });
+    nd.cellStates = cellStates;
+
+    var v = NR.getActiveVersion(nd);
+    var editRemix = !!nd.editRemix && v && v.grid && v.grid.urls;
+    var remixUrls = editRemix ? (v.grid.urls || []) : [];
+
+    var html = '<div style="font-size:11px;color:#94a3b8;margin-bottom:8px;">每格独立编辑提示词并生成（或上传替换），全部完成后点击底部「合成宫格」。</div>';
+    for (var i = 0; i < nCells; i++) {
+      var cs = cellStates[i];
+      var cellRefHtml = (cs.refImages || []).map(function (r, ri) {
+        return '<div style="position:relative;display:inline-block;margin:2px;">'
+          + '<img src="' + esc(r.url) + '" style="width:40px;height:40px;object-fit:cover;border-radius:4px;border:1px solid rgba(245,158,11,.4);">'
+          + '<button class="wf-ref-del-btn" data-rc-cell-ref-del="' + ri + '" data-seg="' + ctx.segIndex + '" data-cell="' + i + '" style="position:absolute;right:-3px;top:-3px;width:14px;height:14px;font-size:8px;"><i class="fa fa-times"></i></button>'
+          + '</div>';
+      }).join("");
+      var resultThumb = cs.resultUrl
+        ? '<img src="' + esc(cs.resultUrl) + '" style="width:80px;height:45px;object-fit:cover;border-radius:4px;border:1px solid #22c55e;margin-top:4px;cursor:zoom-in;" class="wf-preview-img" data-preview="' + esc(cs.resultUrl) + '">'
+        : '';
+      var busyAttr = cs.busy ? ' disabled' : '';
+      html += '<div style="display:flex;gap:10px;padding:10px;border:1px solid rgba(148,163,184,.2);border-radius:8px;margin-bottom:8px;background:rgba(148,163,184,.03);">'
+        + '<div style="flex-shrink:0;width:100px;">'
+        +   '<div style="font-size:10px;color:#fbbf24;margin-bottom:4px;">格 ' + (i + 1) + ' 原版</div>'
+        +   '<img src="' + esc(origUrls[i] || "") + '" style="width:100px;height:56px;object-fit:cover;border-radius:4px;border:1px solid rgba(148,163,184,.3);cursor:zoom-in;" class="wf-preview-img" data-preview="' + esc(origUrls[i] || "") + '">'
+        +   (editRemix && remixUrls[i] ? '<div style="font-size:10px;color:#60a5fa;margin-top:4px;">当前二创</div><img src="' + esc(remixUrls[i]) + '" style="width:100px;height:56px;object-fit:cover;border-radius:4px;border:1px solid rgba(96,165,250,.4);cursor:zoom-in;" class="wf-preview-img" data-preview="' + esc(remixUrls[i]) + '">' : '')
+        + '</div>'
+        + '<div style="flex:1;min-width:0;">'
+        +   '<textarea class="wf-detail-textarea" data-rc-cell-prompt="' + i + '" data-seg="' + ctx.segIndex + '" rows="2" placeholder="描述这格的改编效果..." style="font-size:12px;width:100%;box-sizing:border-box;">' + esc(cs.prompt || "") + '</textarea>'
+        +   '<div style="display:flex;gap:4px;align-items:center;margin-top:4px;flex-wrap:wrap;">'
+        +     '<label class="wf-tb-btn" style="cursor:pointer;font-size:11px;padding:2px 6px;"><i class="fa fa-image"></i> 参考图<input type="file" accept="image/*" data-rc-cell-ref-upload="' + i + '" data-seg="' + ctx.segIndex + '" style="display:none;"></label>'
+        +     '<label class="wf-tb-btn" style="cursor:pointer;font-size:11px;padding:2px 6px;"><i class="fa fa-upload"></i> 上传替换<input type="file" accept="image/*" data-rc-cell-upload-replace="' + i + '" data-seg="' + ctx.segIndex + '" style="display:none;"></label>'
+        +     '<button class="wf-tb-btn primary" data-rc-cell-gen="' + i + '" data-seg="' + ctx.segIndex + '" style="font-size:11px;padding:2px 8px;"' + busyAttr + dis + '><i class="fa fa-' + (cs.busy ? 'spinner fa-spin' : 'paint-brush') + '"></i> ' + (cs.busy ? '生成中...' : '生成') + '</button>'
+        +     (cs.resultUrl ? '<span style="font-size:10px;color:#22c55e;"><i class="fa fa-check"></i> 已完成</span>' : '')
+        +   '</div>'
+        +   (cellRefHtml ? '<div style="margin-top:4px;">' + cellRefHtml + '</div>' : '')
+        +   resultThumb
+        + '</div>'
+        + '</div>';
+    }
+    var allDone = cellStates.every(function (cs) { return !!cs.resultUrl; });
+    html += '<div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap;">'
+      + '<button class="wf-tb-btn primary" data-rc-cell-compose="' + ctx.segIndex + '"' + (allDone ? '' : ' disabled') + dis + '><i class="fa fa-th"></i> 合成宫格</button>'
+      + '<span style="font-size:11px;color:#94a3b8;align-self:center;">' + cellStates.filter(function (cs) { return !!cs.resultUrl; }).length + '/' + nCells + ' 格已完成</span>'
+      + '</div>';
+    return html;
+  }
 
   // ── Node: rcVideoPrompt（段级，终点：基于二创宫格 + 原版段信息生成视频提示词）─────
   NR.register({
@@ -1246,6 +1315,7 @@
     generate: async function (ctx) {
       var wf = ctx.workflow;
       var segIdx = ctx.segIndex;
+      var nd = ctx.nodeData;
       var seg = (wf.segments || [])[segIdx] || {};
       var origV = NR.getActiveVersion((seg.rcStoryboardOrigs || [])[0]);
       var remixV = NR.getActiveVersion((seg.rcStoryboardRemixs || [])[0]);
@@ -1280,8 +1350,9 @@
           transitions: origV.transitions, theme: origV.theme,
           start: origV.start, end: origV.end, duration: origV.duration,
         } : {},
-        full_script: fullScript,
-        full_script_source: fullScriptSource,
+        full_script: nd.noScript ? "" : fullScript,
+        full_script_source: nd.noScript ? "none" : fullScriptSource,
+        no_script: !!nd.noScript,
         segment: {
           start: ssSeg.start || 0,
           end: ssSeg.end || 0,
@@ -1308,7 +1379,13 @@
         if (prEnabled && prV && prV.full_script) srcLabel = "剧情重编排（整篇改编剧本）";
         else if (scEnabled && scV && scV.full_script) srcLabel = "剧本演绎（整篇原剧本）";
       }
-      var html = '<div class="wf-detail-section" style="font-size:11px;color:#94a3b8;padding:6px 10px;background:rgba(148,163,184,.06);border:1px solid rgba(148,163,184,.15);border-radius:8px;"><i class="fa fa-info-circle"></i> 剧本源：' + esc(srcLabel) + '</div>';
+      var noScript = !!nd.noScript;
+      var html = '<div class="wf-detail-section" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">'
+        + '<label style="display:inline-flex;align-items:center;gap:4px;font-size:11px;color:#cbd5e1;cursor:pointer;user-select:none;" title="关闭后仅根据分镜图生成提示词，不参考剧本内容">'
+        + '<input type="checkbox"' + (noScript ? ' checked' : '') + ' data-rc-vp-no-script="' + ctx.segIndex + '" style="margin:0;"> 不参考剧情'
+        + '</label>'
+        + (noScript ? '<span style="font-size:11px;color:#fbbf24;"><i class="fa fa-eye"></i> 仅看图出词</span>' : '<span style="font-size:11px;color:#94a3b8;"><i class="fa fa-info-circle"></i> 剧本源：' + esc(srcLabel) + '</span>')
+        + '</div>';
       if (v && v.full_text) {
         html += '<div class="wf-detail-section" style="padding:8px;border:1px solid rgba(244,63,94,.25);border-radius:8px;">'
           + '<div class="wf-detail-label" style="color:#fb7185;">视频生成提示词（共 ' + (v.full_text || "").length + ' 字）</div>'
@@ -2109,6 +2186,56 @@
         return;
       }
 
+      // 逐格生成：单格生成按钮
+      var cellGenBtn = e.target.closest && e.target.closest("[data-rc-cell-gen]");
+      if (cellGenBtn) {
+        var cgCell = parseInt(cellGenBtn.getAttribute("data-rc-cell-gen"));
+        var cgSeg = parseInt(cellGenBtn.getAttribute("data-seg"));
+        _rcRemixCellGen(engine, wf, cgSeg, cgCell);
+        return;
+      }
+      // 逐格生成：合成宫格按钮
+      var composeBtn = e.target.closest && e.target.closest("[data-rc-cell-compose]");
+      if (composeBtn) {
+        var cpSeg = parseInt(composeBtn.getAttribute("data-rc-cell-compose"));
+        _rcRemixCompose(engine, wf, cpSeg);
+        return;
+      }
+      // 逐格生成：删除单格参考图
+      var cellRefDel = e.target.closest && e.target.closest("[data-rc-cell-ref-del]");
+      if (cellRefDel) {
+        var crdIdx = parseInt(cellRefDel.getAttribute("data-rc-cell-ref-del"));
+        var crdSeg = parseInt(cellRefDel.getAttribute("data-seg"));
+        var crdCell = parseInt(cellRefDel.getAttribute("data-cell"));
+        var crdNd = _getRemixNd(wf, crdSeg);
+        if (crdNd && crdNd.cellStates && crdNd.cellStates[crdCell]) {
+          crdNd.cellStates[crdCell].refImages.splice(crdIdx, 1);
+          engine.save();
+          if (window.WF_Renderer) window.WF_Renderer.render(engine);
+        }
+        return;
+      }
+      // 下载单张（逐格下载所有 cell）
+      var dlCells = e.target.closest && e.target.closest("[data-rc-download-cells]");
+      if (dlCells) {
+        var dlSeg = parseInt(dlCells.getAttribute("data-rc-download-cells"));
+        var dlSegObj = (wf.segments || [])[dlSeg];
+        var dlNd = dlSegObj && ((dlSegObj.rcStoryboardRemixs || [])[0]);
+        var dlV = dlNd && NR.getActiveVersion(dlNd);
+        if (dlV && dlV.grid && dlV.grid.urls) {
+          dlV.grid.urls.forEach(function (u, idx) {
+            if (!u) return;
+            var a = document.createElement("a");
+            a.href = u;
+            a.download = "remix_seg" + dlSeg + "_cell" + (idx + 1) + ".jpg";
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+          });
+        }
+        return;
+      }
+
       // 二创对话：发送
       var remixSend = e.target.closest && e.target.closest("[data-rc-remix-send]");
       if (remixSend) {
@@ -2140,13 +2267,28 @@
     // textarea input → 暂存 nd._draftMsg，避免重渲染丢失文字
     document.addEventListener("input", function (e) {
       var el = e.target;
-      if (!el.id || el.id.indexOf("wf-rc-remix-chat-input-") !== 0) return;
-      var engine = window._wfEngine;
-      var wf = engine && engine.current();
-      if (!wf || wf.templateId !== "recreate-drama") return;
-      var segIdxRaw = el.id.slice("wf-rc-remix-chat-input-".length);
-      var nd = _getRemixNd(wf, segIdxRaw);
-      if (nd) nd._draftMsg = el.value;
+      if (el.id && el.id.indexOf("wf-rc-remix-chat-input-") === 0) {
+        var engine = window._wfEngine;
+        var wf = engine && engine.current();
+        if (!wf || wf.templateId !== "recreate-drama") return;
+        var segIdxRaw = el.id.slice("wf-rc-remix-chat-input-".length);
+        var nd = _getRemixNd(wf, segIdxRaw);
+        if (nd) nd._draftMsg = el.value;
+        return;
+      }
+      // 逐格 textarea → 暂存到 cellStates[i].prompt
+      var cellPromptAttr = el.getAttribute && el.getAttribute("data-rc-cell-prompt");
+      if (cellPromptAttr !== null && cellPromptAttr !== undefined) {
+        var engine = window._wfEngine;
+        var wf = engine && engine.current();
+        if (!wf || wf.templateId !== "recreate-drama") return;
+        var segAttr = el.getAttribute("data-seg");
+        var nd = _getRemixNd(wf, segAttr);
+        if (nd && nd.cellStates) {
+          var ci = parseInt(cellPromptAttr);
+          if (nd.cellStates[ci]) nd.cellStates[ci].prompt = el.value;
+        }
+      }
     });
 
     // 修改二创分镜 toggle
@@ -2161,6 +2303,23 @@
       if (!nd) return;
       nd.editRemix = !!el.checked;
       engine.save();
+    });
+
+    // 视频提示词：不参考剧情 toggle
+    document.addEventListener("change", function (e) {
+      var el = e.target;
+      var vpAttr = el.getAttribute && el.getAttribute("data-rc-vp-no-script");
+      if (vpAttr === null || vpAttr === undefined) return;
+      var engine = window._wfEngine;
+      var wf = engine && engine.current();
+      if (!wf || wf.templateId !== "recreate-drama") return;
+      var segIdx = parseInt(vpAttr);
+      var seg = (wf.segments || [])[segIdx];
+      var nd = seg && ((seg.rcVideoPrompts || [])[0]);
+      if (!nd) return;
+      nd.noScript = !!el.checked;
+      engine.save();
+      if (window.WF_Renderer) window.WF_Renderer.render(engine);
     });
 
     // 生成模式切换（逐格 / 整张）
@@ -2214,6 +2373,166 @@
       engine.save();
       if (window.WF_Renderer) window.WF_Renderer.render(engine);
     });
+
+    // 逐格参考图上传
+    document.addEventListener("change", async function (e) {
+      var el = e.target;
+      var cellAttr = el.getAttribute && el.getAttribute("data-rc-cell-ref-upload");
+      if (cellAttr === null || cellAttr === undefined) return;
+      var engine = window._wfEngine;
+      var wf = engine && engine.current();
+      if (!wf || wf.templateId !== "recreate-drama") return;
+      if (!el.files || !el.files.length) return;
+      var segAttr = el.getAttribute("data-seg");
+      var cellIdx = parseInt(cellAttr);
+      var nd = _getRemixNd(wf, segAttr);
+      if (!nd || !nd.cellStates || !nd.cellStates[cellIdx]) return;
+      var cs = nd.cellStates[cellIdx];
+      cs.refImages = cs.refImages || [];
+      var prefix = "remix_cellref_s" + segAttr + "_c" + cellIdx;
+      for (var i = 0; i < el.files.length; i++) {
+        var f = el.files[i];
+        try {
+          var dataUrl = await new Promise(function (resolve, reject) {
+            var r = new FileReader();
+            r.onload = function () { resolve(r.result); };
+            r.onerror = reject;
+            r.readAsDataURL(f);
+          });
+          var resp = await fetch("/api/recreate/upload-image/" + wf.id, {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ image_data: dataUrl, prefix: prefix }),
+          });
+          var j = await resp.json();
+          if (j.code !== 0) throw new Error(j.detail || j.message || "上传失败");
+          cs.refImages.push({ url: j.data && j.data.url, filename: f.name });
+        } catch (err) {
+          alert("上传参考图失败: " + (err.message || err));
+        }
+      }
+      el.value = "";
+      engine.save();
+      if (window.WF_Renderer) window.WF_Renderer.render(engine);
+    });
+
+    // 逐格上传替换（直接用上传图作为该格结果）
+    document.addEventListener("change", async function (e) {
+      var el = e.target;
+      var replAttr = el.getAttribute && el.getAttribute("data-rc-cell-upload-replace");
+      if (replAttr === null || replAttr === undefined) return;
+      var engine = window._wfEngine;
+      var wf = engine && engine.current();
+      if (!wf || wf.templateId !== "recreate-drama") return;
+      if (!el.files || !el.files.length) return;
+      var segAttr = el.getAttribute("data-seg");
+      var cellIdx = parseInt(replAttr);
+      var nd = _getRemixNd(wf, segAttr);
+      if (!nd || !nd.cellStates || !nd.cellStates[cellIdx]) return;
+      var cs = nd.cellStates[cellIdx];
+      var f = el.files[0];
+      try {
+        var dataUrl = await new Promise(function (resolve, reject) {
+          var r = new FileReader();
+          r.onload = function () { resolve(r.result); };
+          r.onerror = reject;
+          r.readAsDataURL(f);
+        });
+        var resp = await fetch("/api/recreate/upload-image/" + wf.id, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ image_data: dataUrl, prefix: "remix_replace_s" + segAttr + "_c" + cellIdx }),
+        });
+        var j = await resp.json();
+        if (j.code !== 0) throw new Error(j.detail || j.message || "上传失败");
+        cs.resultUrl = j.data && j.data.url;
+      } catch (err) {
+        alert("上传替换失败: " + (err.message || err));
+      }
+      el.value = "";
+      engine.save();
+      if (window.WF_Renderer) window.WF_Renderer.render(engine);
+    });
+  }
+  async function _rcRemixCellGen(engine, wf, segIdx, cellIdx) {
+    var seg = (wf.segments || [])[segIdx];
+    var nd = seg && ((seg.rcStoryboardRemixs || [])[0]);
+    if (!nd || !nd.cellStates || !nd.cellStates[cellIdx]) return;
+    var cs = nd.cellStates[cellIdx];
+    var origV = NR.getActiveVersion((seg.rcStoryboardOrigs || [])[0]);
+    if (!origV || !origV.grid || !origV.grid.urls) { alert("请先完成原版分镜"); return; }
+    var originCellUrl = origV.grid.urls[cellIdx];
+    if (!originCellUrl) { alert("原版分镜缺少第 " + (cellIdx + 1) + " 格"); return; }
+
+    cs.busy = true;
+    engine.save();
+    if (window.WF_Renderer) window.WF_Renderer.render(engine);
+
+    var v = NR.getActiveVersion(nd);
+    var editRemix = !!nd.editRemix && v && v.grid && v.grid.urls;
+    var remixCellUrl = editRemix ? (v.grid.urls[cellIdx] || "") : "";
+
+    var refs = (cs.refImages || []).map(function (r, i) {
+      return { url: r.url, label: "参考图" + (i + 1) };
+    });
+
+    try {
+      var data = await callApi("/api/recreate/generate/rc-remix-cell", {
+        workflow_id: wf.id,
+        image_config_id: getConfigId("image", "rcStoryboardRemix"),
+        segment_index: segIdx,
+        cell_index: cellIdx,
+        origin_cell_url: originCellUrl,
+        user_message: cs.prompt || "",
+        reference_images: refs,
+        edit_remix: !!editRemix,
+        remix_cell_url: remixCellUrl,
+      });
+      cs.resultUrl = data.url || "";
+    } catch (err) {
+      alert("格 " + (cellIdx + 1) + " 生成失败：" + (err.message || err));
+    }
+    cs.busy = false;
+    engine.save();
+    if (window.WF_Renderer) window.WF_Renderer.render(engine);
+  }
+
+  // ── 逐格生成：合成宫格 ──
+  async function _rcRemixCompose(engine, wf, segIdx) {
+    var seg = (wf.segments || [])[segIdx];
+    var nd = seg && ((seg.rcStoryboardRemixs || [])[0]);
+    if (!nd || !nd.cellStates) return;
+    var origV = NR.getActiveVersion((seg.rcStoryboardOrigs || [])[0]);
+    if (!origV || !origV.grid) { alert("请先完成原版分镜"); return; }
+    var rows = origV.grid.rows || 2, cols = origV.grid.cols || 2;
+    var cellUrls = nd.cellStates.map(function (cs) { return cs.resultUrl; });
+    if (cellUrls.some(function (u) { return !u; })) { alert("还有格子未生成，请先完成所有格子"); return; }
+
+    try {
+      var data = await callApi("/api/recreate/compose-grid/" + wf.id, {
+        segments: [{ index: segIdx, frame_urls: cellUrls, rows: rows, cols: cols }],
+        out_subdir: "grid_remix",
+        filename_prefix: "remix_per_cell_seg",
+      });
+      var segOut = (data.segments || [])[0];
+      if (!segOut || segOut.error) throw new Error(segOut && segOut.error || "compose-grid 返回为空");
+      if (!segOut.url) throw new Error("compose-grid 未返回 url");
+      var newGrid = {
+        url: segOut.url,
+        rows: segOut.rows, cols: segOut.cols,
+        urls: segOut.urls || cellUrls, width: segOut.width, height: segOut.height,
+        cell_w: segOut.cell_w, cell_h: segOut.cell_h,
+      };
+      var prev = NR.getActiveVersion(nd) || {};
+      var newData = {};
+      Object.keys(prev).forEach(function (k) {
+        if (k !== "id" && k !== "createdAt") newData[k] = prev[k];
+      });
+      newData.grid = newGrid;
+      NR.addVersion(nd, newData);
+      engine.save();
+      if (window.WF_Renderer) window.WF_Renderer.render(engine);
+    } catch (err) {
+      alert("合成宫格失败：" + (err.message || err));
+    }
   }
 
   // ── 二创对话发送：把文本 + 参考图 + 历史打包给后端，附加 typing 占位 ──
@@ -2233,17 +2552,18 @@
       });
       var segOut = (data.segments || [])[0];
       if (!segOut || !segOut.url) throw new Error("compose-grid 返回为空");
-      // 复制活跃版本除 id/createdAt 外的字段（如 theme/start/end），只替换 grid
+      var newGrid = {
+        url: segOut.url,
+        rows: segOut.rows, cols: segOut.cols,
+        urls: segOut.urls || picks, width: segOut.width, height: segOut.height,
+        cell_w: segOut.cell_w, cell_h: segOut.cell_h,
+      };
       var prev = NR.getActiveVersion(nd) || {};
       var newData = {};
       Object.keys(prev).forEach(function (k) {
         if (k !== "id" && k !== "createdAt") newData[k] = prev[k];
       });
-      newData.grid = {
-        url: segOut.url, rows: segOut.rows, cols: segOut.cols,
-        urls: segOut.urls || picks, width: segOut.width, height: segOut.height,
-        cell_w: segOut.cell_w, cell_h: segOut.cell_h,
-      };
+      newData.grid = newGrid;
       NR.addVersion(nd, newData);
       nd._reorgState = null;
       nd.editing = false;

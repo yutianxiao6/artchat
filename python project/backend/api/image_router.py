@@ -254,6 +254,61 @@ async def _poll_task_result(config: dict, headers: dict, task_id: str) -> list |
 
 
 # ═══════════════════════════════════════════════════
+#  局部重绘：/images/edits
+# ═══════════════════════════════════════════════════
+
+async def _try_inpaint_edit(config: dict, headers: dict, prompt: str,
+                            width: int, height: int, n: int,
+                            image_b64: str, mask_b64: str) -> list | None:
+    """调用 /images/edits 进行局部重绘。image 和 mask 都是 base64。"""
+    api_base = (config.get("api_base") or "").rstrip("/")
+    edit_url = f"{api_base}/images/edits"
+
+    # 构造纯 base64（去掉 data:image/...;base64, 前缀）
+    def to_pure(b):
+        return b.split(";base64,", 1)[1] if ";base64," in b else b
+
+    data = {
+        "model": config.get("model_name", ""),
+        "prompt": prompt,
+        "image": to_pure(image_b64),
+        "mask": to_pure(mask_b64),
+        "size": f"{width}x{height}" if width and height else "1024x1024",
+        "n": n if n and n > 0 else 1,
+    }
+
+    try:
+        print(f"[局部重绘] POST {edit_url} | prompt={prompt[:40]}...")
+        response = await async_http_request("POST", edit_url, headers, data, timeout=600)
+        if response.status_code != 200:
+            print(f"[局部重绘] 返回 {response.status_code}: {response.text[:300]}")
+            return None
+        result = response.json()
+        # 尝试解析响应（兼容多种格式）
+        resp_data = result.get("data") or []
+        if not resp_data:
+            print(f"[局部重绘] 响应无 data: {str(result)[:200]}")
+            return None
+        parsed = []
+        for item in resp_data:
+            if isinstance(item, dict) and item.get("b64_json"):
+                parsed.append(item)
+            elif isinstance(item, dict) and (item.get("url") or item.get("image_url")):
+                url = item.get("url") or item.get("image_url")
+                b64 = await _download_image_as_b64(url)
+                if b64:
+                    parsed.append({"b64_json": b64})
+        if parsed:
+            print(f"[局部重绘] 成功, {len(parsed)} 张图片")
+            return parsed
+        print(f"[局部重绘] 解析为空: {str(result)[:200]}")
+        return None
+    except Exception as e:
+        print(f"[局部重绘] 异常: {e}")
+        return None
+
+
+# ═══════════════════════════════════════════════════
 #  核心：尝试单个策略
 # ═══════════════════════════════════════════════════
 
@@ -346,11 +401,23 @@ async def generate_image(req: ImageGenerateRequest):
         if stripped:
             normalized_images = [stripped]
 
+    # 准备遮罩（局部重绘）
+    mask_image = ""
+    if req.mask_base64:
+        mask_image = _strip_image_base64(req.mask_base64) or ""
+
     width = req.width
     height = req.height
     n = req.n if req.n and req.n > 0 else 1
     prompt = req.prompt or ""
     negative_prompt = req.negative_prompt or ""
+
+    # ── 有 mask 时走 /images/edits 局部重绘路径 ──
+    if mask_image and normalized_images:
+        result = await _try_inpaint_edit(config, headers, prompt, width, height, n, normalized_images[0], mask_image)
+        if result is not None:
+            return {"code": 0, "data": result}
+        raise HTTPException(status_code=500, detail="局部重绘失败（edit 接口不可用）")
 
     # 1. 查缓存策略
     cached_sid = get_cached_strategy(req.config_id)

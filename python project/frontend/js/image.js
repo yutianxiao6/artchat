@@ -367,6 +367,16 @@
       .image-preview-panel{position:relative;z-index:1;max-width:min(92vw,1400px);max-height:92vh;}
       .image-preview-panel img{max-width:100%;max-height:92vh;display:block;border-radius:18px;box-shadow:0 20px 60px rgba(0,0,0,.45);}
       .image-preview-close{position:absolute;top:-14px;right:-14px;width:40px;height:40px;border:none;border-radius:999px;background:#111827;color:#fff;cursor:pointer;box-shadow:0 10px 30px rgba(0,0,0,.35);}
+      .inpaint-edit-btn{position:absolute;top:16px;right:16px;z-index:10;padding:8px 14px;border:none;border-radius:10px;background:rgba(15,23,42,.85);color:#e2e8f0;font-size:13px;cursor:pointer;backdrop-filter:blur(8px);border:1px solid rgba(96,165,250,.3);transition:background .15s;}
+      .inpaint-edit-btn:hover{background:rgba(59,130,246,.3);}
+      .inpaint-canvas{position:absolute;inset:0;border-radius:18px;cursor:crosshair;z-index:5;}
+      .inpaint-toolbar{position:absolute;bottom:20px;left:50%;transform:translateX(-50%);z-index:10;display:flex;gap:10px;align-items:center;padding:10px 16px;background:rgba(15,23,42,.92);border:1px solid rgba(96,165,250,.3);border-radius:12px;backdrop-filter:blur(8px);}
+      .inpaint-toolbar label{font-size:11px;color:#94a3b8;}
+      .inpaint-toolbar input[type=range]{width:80px;cursor:pointer;}
+      .inpaint-toolbar button{padding:6px 12px;border:none;border-radius:8px;font-size:12px;cursor:pointer;}
+      .inpaint-toolbar .inpaint-btn-done{background:#3b82f6;color:#fff;}
+      .inpaint-toolbar .inpaint-btn-clear{background:rgba(148,163,184,.2);color:#e2e8f0;}
+      .inpaint-toolbar .inpaint-btn-cancel{background:rgba(239,68,68,.2);color:#fca5a5;}
       .asset-library-modal.hidden{display:none;}
       .asset-library-modal{position:fixed;inset:0;z-index:1600;}
       .asset-library-backdrop{position:absolute;inset:0;background:rgba(2,6,23,.7);backdrop-filter:blur(4px);}
@@ -418,7 +428,7 @@
           <div class="canvas-board-wrap" id="canvas-board-wrap"><div class="canvas-board" id="canvas-board"><div class="canvas-world" id="canvas-world"><svg class="canvas-svg" id="canvas-svg"></svg><div id="edge-dom-layer" class="edge-dom-layer"></div><div id="canvas-node-layer" class="canvas-node-layer"></div></div><div class="canvas-empty" id="canvas-empty-tip">双击画布、右键画布或直接粘贴图片来创建节点</div><div class="canvas-selection-box" id="canvas-selection-box" style="display:none"></div></div><div id="canvas-context-menu-root"></div></div>
         </section>
       </div>
-      <div class="image-preview-modal hidden" id="image-preview-modal"><div class="image-preview-backdrop" data-close-preview="1"></div><div class="image-preview-panel"><button class="image-preview-close" type="button" data-close-preview="1">×</button><img id="image-preview-target" src="" alt="preview"></div></div>
+      <div class="image-preview-modal hidden" id="image-preview-modal"><div class="image-preview-backdrop" data-close-preview="1"></div><div class="image-preview-panel"><button class="image-preview-close" type="button" data-close-preview="1">×</button><button class="inpaint-edit-btn" id="inpaint-edit-btn" type="button"><i class="fa fa-paint-brush"></i> 图片编辑</button><img id="image-preview-target" src="" alt="preview"></div></div>
       <div class="asset-library-modal hidden" id="asset-library-modal"><div class="asset-library-backdrop" data-close-asset-library="1"></div><div class="asset-library-panel draggable" id="asset-library-panel"><aside class="asset-library-sidebar"><div class="asset-modal-header drag-handle" data-drag-asset-library="1"><div><div class="canvas-title" style="font-size:16px;">素材库</div></div></div><div class="canvas-library-toolbar"><select class="form-select" id="asset-category-filter-modal"></select><div style="display:flex;gap:8px;"><button class="btn btn-default" id="create-asset-category-btn-modal">新建分类</button><button class="btn btn-default" type="button" id="rename-current-asset-category-btn">重命名分类</button></div></div></aside><section class="asset-library-content"><div class="asset-modal-header"><div><div class="canvas-title" style="font-size:16px;">素材内容</div></div><div class="asset-modal-actions"><button class="btn btn-danger" type="button" id="delete-current-asset-category-btn">删除当前分类</button><button class="btn btn-default" type="button" data-close-asset-library="1">完成</button></div></div><div class="asset-grid custom-scrollbar" id="asset-library-grid"></div></section></div></div><div class="asset-library-modal hidden" id="asset-category-modal"><div class="asset-library-backdrop" data-close-category-modal="1"></div><div class="asset-library-panel" style="grid-template-columns:1fr;max-width:520px;height:auto;"><section class="asset-library-content"><div class="asset-modal-header"><div><div class="canvas-title" style="font-size:16px;" id="asset-category-modal-title">新建分类</div><div class="canvas-subtitle" id="asset-category-modal-subtitle">填写分类名称并确认。</div></div><button class="btn btn-default" type="button" data-close-category-modal="1">关闭</button></div><div class="canvas-library-toolbar" style="display:grid;gap:12px;"><input class="form-input" id="asset-category-modal-input" placeholder="输入分类名称"><select class="form-select" id="asset-category-modal-select"></select></div><div class="asset-modal-actions"><button class="btn btn-default" type="button" data-close-category-modal="1">取消</button><button class="btn btn-primary" type="button" id="confirm-asset-category-modal-btn">确认</button></div></section></div></div><div class="canvas-toast" id="canvas-toast"></div>`;
   }
 
@@ -468,6 +478,7 @@
       if (target.closest("[data-open-asset-library]")) return openAssetLibraryModal();
       if (target.closest("[data-close-asset-library]")) return closeAssetLibraryModal();
       if (target.closest("[data-close-preview]")) return closeImagePreview();
+      if (target.closest("#inpaint-edit-btn")) return _enterInpaintMode();
 
       const runGenerate = target.closest("[data-run-generate]");
       if (runGenerate) {
@@ -502,8 +513,14 @@
       if (actionRemoveRef) return removeReferenceImage(actionRemoveRef.getAttribute("data-remove-reference-image"));
       const actionClearOutput = target.closest("[data-clear-output-images]");
       if (actionClearOutput) return clearNodeOutputImages(actionClearOutput.getAttribute("data-clear-output-images"));
+      const actionClearMask = target.closest("[data-clear-inpaint-mask]");
+      if (actionClearMask) { const mn = getNode(actionClearMask.getAttribute("data-clear-inpaint-mask")); if (mn) { mn.inpaintMask = null; renderCanvas(); } return; }
       const actionPreview = target.closest("[data-image-preview]");
-      if (actionPreview) return openImagePreview(actionPreview.getAttribute("data-image-preview"));
+      if (actionPreview) {
+        const nodeEl = actionPreview.closest("[data-node-id]");
+        const previewNodeId = nodeEl ? nodeEl.getAttribute("data-node-id") : null;
+        return openImagePreview(actionPreview.getAttribute("data-image-preview"), previewNodeId);
+      }
       const actionSave = target.closest("[data-save-image-to-library]");
       if (actionSave) return saveImageUrlToLibrary(actionSave.getAttribute("data-save-image-to-library"), actionSave.getAttribute("data-image-title") || "图片素材");
 
@@ -1725,10 +1742,12 @@
       const totalCount = Math.max(1, Number(node.count || 1));
       const jobs = Array.from({ length: totalCount }).map(async (_, index) => {
         console.log("[生成] 发起请求到 /api/image/generate, config_id:", node.modelId, "prompt:", serializedPrompt.slice(0, 60), "job:", index + 1, "/", totalCount);
+        const reqBody = { config_id: node.modelId, prompt: serializedPrompt, negative_prompt: node.negativePrompt || DEFAULT_NEGATIVE_PROMPT, width, height, image_base64: refImages[0] || null, image_base64_list: refImages, n: 1 };
+        if (node.inpaintMask) reqBody.mask_base64 = node.inpaintMask;
         const res = await fetch("/api/image/generate", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ config_id: node.modelId, prompt: serializedPrompt, negative_prompt: node.negativePrompt || DEFAULT_NEGATIVE_PROMPT, width, height, image_base64: refImages[0] || null, image_base64_list: refImages, n: 1 }),
+          body: JSON.stringify(reqBody),
         });
         console.log("[生成] 响应状态:", res.status, "job:", index + 1);
         const result = await res.json();
@@ -1761,6 +1780,7 @@
         return imageUrl;
       });
       await Promise.all(jobs);
+      node.inpaintMask = null;
       persistCanvasState();
     } catch (error) {
       alert(error.message || "生成失败");
@@ -1848,7 +1868,8 @@
     // prompt 中的引用占位符也要进 signature：用户编辑/删除徽章后需要重渲染
     const refTokensKey = (node.prompt || "").match(/\{\{img:[^}]+\}\}/g)?.join(",") || "";
     // 节点显示尺寸只依赖 displayWidth/Height，不依赖用户设置的 width/height
-    return `img|${node.displayWidth || ''}x${node.displayHeight || ''}|${outputKey}|${imgKey}|${upstreamKey}|${upstreamIdsKey}|${refTokensKey}|${busy}|${node.modelId || ""}`;
+    const maskKey = node.inpaintMask ? "mask" : "";
+    return `img|${node.displayWidth || ''}x${node.displayHeight || ''}|${outputKey}|${imgKey}|${upstreamKey}|${upstreamIdsKey}|${refTokensKey}|${busy}|${node.modelId || ""}|${maskKey}`;
   }
 
   function applyNodeState(el, node) {
@@ -2175,8 +2196,12 @@ function downloadImage(imageUrl) {
           : `<div class="node-image-top-actions"><button class="btn btn-default" type="button" data-download-image="${displayImageUrl}"><i class="fa fa-download"></i></button><button class="btn btn-default" type="button" data-grid-crop="${node.id}" title="宫格裁剪"><i class="fa fa-th"></i></button></div>`))
       : "";
 
+    const maskOverlay = (hasImage && node.inpaintMask)
+      ? `<img src="${node.inpaintMask}" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover;opacity:0.4;pointer-events:none;border-radius:inherit;mix-blend-mode:screen;" alt="mask">`
+      : "";
+
     const previewHtml = hasImage
-      ? `<img src="${displayImageUrl}" alt="node-image" draggable="false" ondragstart="return false" data-context-image="${displayImageUrl}" data-image-title="${escapeHtml(imageTitle)}">${topActions}<div class="node-image-overlay"><div class="node-image-toolbar"><button class="btn btn-default" type="button" data-image-preview="${displayImageUrl}">预览</button><button class="btn btn-default" type="button" data-save-image-to-library="${displayImageUrl}" data-image-title="${escapeHtml(imageTitle)}">加入素材库</button></div></div>`
+      ? `<img src="${displayImageUrl}" alt="node-image" draggable="false" ondragstart="return false" data-context-image="${displayImageUrl}" data-image-title="${escapeHtml(imageTitle)}">${maskOverlay}${topActions}<div class="node-image-overlay"><div class="node-image-toolbar"><button class="btn btn-default" type="button" data-image-preview="${displayImageUrl}">预览</button><button class="btn btn-default" type="button" data-save-image-to-library="${displayImageUrl}" data-image-title="${escapeHtml(imageTitle)}">加入素材库</button></div></div>`
       : (hasUpstreamRef
         ? `<div class="node-image-empty node-upstream-only">
              <div class="node-upstream-icon"><i class="fa fa-link"></i></div>
@@ -2215,7 +2240,10 @@ function downloadImage(imageUrl) {
         const viewPanoBtn = (node.isPanorama && node.outputImages && node.outputImages[0])
           ? `<button class="btn btn-default" type="button" data-view-panorama="${node.outputImages[0]}" title="在全景查看器打开"><i class="fa fa-globe"></i> 查看全景</button>`
           : "";
-        return `<div class="node-actions"><button class="btn btn-primary" type="button" data-run-generate="${node.id}">${node.busy ? "生成中..." : "开始生成"}</button>${viewPanoBtn}</div>`;
+        const hasInpaintMask = Boolean(node.inpaintMask);
+        const genLabel = node.busy ? "生成中..." : (hasInpaintMask ? "重绘" : "开始生成");
+        const clearMaskBtn = hasInpaintMask ? `<button class="btn btn-default" type="button" data-clear-inpaint-mask="${node.id}" title="清除遮罩"><i class="fa fa-eraser"></i></button>` : "";
+        return `<div class="node-actions"><button class="btn btn-primary" type="button" data-run-generate="${node.id}">${genLabel}</button>${clearMaskBtn}${viewPanoBtn}</div>`;
       })()}
     </div></div>`;
 
@@ -2718,8 +2746,158 @@ function downloadImage(imageUrl) {
   }
 
   function applyZoom(nextZoom, clientX, clientY) { const oldZoom = STATE.zoom; const rect = getBoardRect(); const anchorX = clientX ?? (rect.left + rect.width / 2); const anchorY = clientY ?? (rect.top + rect.height / 2); const worldX = (anchorX - rect.left - STATE.panX) / oldZoom; const worldY = (anchorY - rect.top - STATE.panY) / oldZoom; STATE.zoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, Number(nextZoom.toFixed(2)))); STATE.panX = anchorX - rect.left - worldX * STATE.zoom; STATE.panY = anchorY - rect.top - worldY * STATE.zoom; persistCurrentHistory(); renderCanvas(); }
-  function openImagePreview(url) { if (!url) return; STATE.previewImageUrl = url; const modal = document.getElementById("image-preview-modal"), target = document.getElementById("image-preview-target"); if (modal && target) { target.src = url; modal.classList.remove("hidden"); hideContextMenu(false); } }
-  function closeImagePreview() { STATE.previewImageUrl = ""; const modal = document.getElementById("image-preview-modal"), target = document.getElementById("image-preview-target"); if (modal && target) { modal.classList.add("hidden"); target.src = ""; } }
+  function openImagePreview(url, nodeId) {
+    if (!url) return;
+    STATE.previewImageUrl = url;
+    STATE.inpaintEditNodeId = nodeId || _findNodeByImageUrl(url);
+    const modal = document.getElementById("image-preview-modal"), target = document.getElementById("image-preview-target");
+    if (modal && target) { target.src = url; modal.classList.remove("hidden"); hideContextMenu(false); }
+    const editBtn = document.getElementById("inpaint-edit-btn");
+    if (editBtn) editBtn.style.display = STATE.inpaintEditNodeId ? "" : "none";
+    // 显示已有遮罩
+    _showPreviewMaskOverlay();
+  }
+  function _showPreviewMaskOverlay() {
+    const existing = document.getElementById("inpaint-preview-mask");
+    if (existing) existing.remove();
+    if (!STATE.inpaintEditNodeId) return;
+    const node = getNode(STATE.inpaintEditNodeId);
+    if (!node || !node.inpaintMask) return;
+    const panel = document.querySelector(".image-preview-panel");
+    if (!panel) return;
+    const overlay = document.createElement("img");
+    overlay.id = "inpaint-preview-mask";
+    overlay.src = node.inpaintMask;
+    overlay.style.cssText = "position:absolute;inset:0;width:100%;height:100%;object-fit:contain;opacity:0.45;pointer-events:none;border-radius:18px;mix-blend-mode:screen;z-index:2;";
+    panel.appendChild(overlay);
+  }
+  function closeImagePreview() {
+    _exitInpaintMode(false);
+    const maskOvl = document.getElementById("inpaint-preview-mask");
+    if (maskOvl) maskOvl.remove();
+    STATE.previewImageUrl = "";
+    STATE.inpaintEditNodeId = null;
+    const modal = document.getElementById("image-preview-modal"), target = document.getElementById("image-preview-target");
+    if (modal && target) { modal.classList.add("hidden"); target.src = ""; }
+  }
+  function _findNodeByImageUrl(url) {
+    if (!url) return null;
+    for (const n of STATE.nodes) {
+      if ((n.outputImages && n.outputImages[0] === url) || n.imageUrl === url) return n.id;
+    }
+    // 后备：base64 URL 可能因 HTML 属性编码产生差异，用当前选中节点
+    if (STATE.selectedNodeId) {
+      const sel = getNode(STATE.selectedNodeId);
+      if (sel) {
+        const selImg = (sel.outputImages && sel.outputImages[0]) || sel.imageUrl || "";
+        if (selImg && url.slice(0, 50) === selImg.slice(0, 50)) return sel.id;
+        if (selImg) return sel.id;
+      }
+    }
+    return null;
+  }
+
+  // ── Inpaint 涂抹编辑 ──
+  let _inpaintActive = false, _inpaintDrawing = false, _inpaintCtx = null, _inpaintBrushSize = 30;
+  function _enterInpaintMode() {
+    const panel = document.querySelector(".image-preview-panel");
+    const img = document.getElementById("image-preview-target");
+    if (!panel || !img || !img.naturalWidth) return;
+    _inpaintActive = true;
+    const editBtn = document.getElementById("inpaint-edit-btn");
+    if (editBtn) editBtn.style.display = "none";
+    const closeBtn = panel.querySelector(".image-preview-close");
+    if (closeBtn) closeBtn.style.display = "none";
+    const canvas = document.createElement("canvas");
+    canvas.id = "inpaint-canvas";
+    canvas.className = "inpaint-canvas";
+    canvas.width = img.clientWidth;
+    canvas.height = img.clientHeight;
+    canvas.style.width = img.clientWidth + "px";
+    canvas.style.height = img.clientHeight + "px";
+    panel.appendChild(canvas);
+    _inpaintCtx = canvas.getContext("2d");
+    _inpaintCtx.lineCap = "round";
+    _inpaintCtx.lineJoin = "round";
+    canvas.addEventListener("pointerdown", _inpaintPointerDown);
+    canvas.addEventListener("pointermove", _inpaintPointerMove);
+    canvas.addEventListener("pointerup", _inpaintPointerUp);
+    canvas.addEventListener("pointerleave", _inpaintPointerUp);
+    const toolbar = document.createElement("div");
+    toolbar.className = "inpaint-toolbar";
+    toolbar.id = "inpaint-toolbar";
+    toolbar.innerHTML = '<label>画笔 <input type="range" min="5" max="80" value="' + _inpaintBrushSize + '" id="inpaint-brush-size"></label>'
+      + '<button class="inpaint-btn-clear" id="inpaint-clear">清除</button>'
+      + '<button class="inpaint-btn-cancel" id="inpaint-cancel">取消</button>'
+      + '<button class="inpaint-btn-done" id="inpaint-done">完成</button>';
+    panel.appendChild(toolbar);
+    document.getElementById("inpaint-brush-size").addEventListener("input", function (e) { _inpaintBrushSize = parseInt(e.target.value); });
+    document.getElementById("inpaint-clear").addEventListener("click", function () { _inpaintCtx.clearRect(0, 0, canvas.width, canvas.height); });
+    document.getElementById("inpaint-cancel").addEventListener("click", function () { _exitInpaintMode(false); });
+    document.getElementById("inpaint-done").addEventListener("click", _inpaintFinish);
+  }
+  function _exitInpaintMode(keepMask) {
+    if (!_inpaintActive) return;
+    _inpaintActive = false;
+    _inpaintDrawing = false;
+    _inpaintCtx = null;
+    const panel = document.querySelector(".image-preview-panel");
+    if (!panel) return;
+    const canvas = document.getElementById("inpaint-canvas");
+    if (canvas) canvas.remove();
+    const toolbar = document.getElementById("inpaint-toolbar");
+    if (toolbar) toolbar.remove();
+    const editBtn = document.getElementById("inpaint-edit-btn");
+    if (editBtn) editBtn.style.display = "";
+    const closeBtn = panel.querySelector(".image-preview-close");
+    if (closeBtn) closeBtn.style.display = "";
+  }
+  function _inpaintPointerDown(e) {
+    _inpaintDrawing = true;
+    _inpaintCtx.strokeStyle = "rgba(239,68,68,.5)";
+    _inpaintCtx.lineWidth = _inpaintBrushSize;
+    _inpaintCtx.beginPath();
+    const r = e.target.getBoundingClientRect();
+    _inpaintCtx.moveTo(e.clientX - r.left, e.clientY - r.top);
+    e.target.setPointerCapture(e.pointerId);
+  }
+  function _inpaintPointerMove(e) {
+    if (!_inpaintDrawing) return;
+    const r = e.target.getBoundingClientRect();
+    _inpaintCtx.lineTo(e.clientX - r.left, e.clientY - r.top);
+    _inpaintCtx.stroke();
+    _inpaintCtx.beginPath();
+    _inpaintCtx.moveTo(e.clientX - r.left, e.clientY - r.top);
+  }
+  function _inpaintPointerUp() { _inpaintDrawing = false; }
+  function _inpaintFinish() {
+    const canvas = document.getElementById("inpaint-canvas");
+    const img = document.getElementById("image-preview-target");
+    if (!canvas || !img) return;
+    const maskCanvas = document.createElement("canvas");
+    maskCanvas.width = img.naturalWidth;
+    maskCanvas.height = img.naturalHeight;
+    const mCtx = maskCanvas.getContext("2d");
+    mCtx.fillStyle = "#000";
+    mCtx.fillRect(0, 0, maskCanvas.width, maskCanvas.height);
+    mCtx.drawImage(canvas, 0, 0, canvas.width, canvas.height, 0, 0, maskCanvas.width, maskCanvas.height);
+    const data = mCtx.getImageData(0, 0, maskCanvas.width, maskCanvas.height);
+    for (let i = 0; i < data.data.length; i += 4) {
+      const hasColor = data.data[i] > 30 || data.data[i + 1] > 30 || data.data[i + 2] > 30;
+      data.data[i] = data.data[i + 1] = data.data[i + 2] = hasColor ? 255 : 0;
+      data.data[i + 3] = 255;
+    }
+    mCtx.putImageData(data, 0, 0);
+    const maskB64 = maskCanvas.toDataURL("image/png");
+    const nodeId = STATE.inpaintEditNodeId || _findNodeByImageUrl(STATE.previewImageUrl);
+    if (nodeId) {
+      const node = getNode(nodeId);
+      if (node) { node.inpaintMask = maskB64; }
+    }
+    _exitInpaintMode(true);
+    closeImagePreview();
+    if (nodeId) renderCanvas();
+  }
   function getBoardRect() { return document.getElementById("canvas-board-wrap")?.getBoundingClientRect() || { left: 0, top: 0, width: 0, height: 0 }; }
   function clientToCanvasPoint(clientX, clientY) { const rect = getBoardRect(); return { x: (clientX - rect.left - STATE.panX) / STATE.zoom, y: (clientY - rect.top - STATE.panY) / STATE.zoom }; }
   function showContextMenu(clientX, clientY) { const rect = getBoardRect(); STATE.contextMenu = { visible: true, x: clientX - rect.left, y: clientY - rect.top, canvasPoint: clientToCanvasPoint(clientX, clientY), scope: "board", payload: null }; renderCanvas(); }

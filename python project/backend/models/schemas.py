@@ -67,6 +67,7 @@ class ImageGenerateRequest(BaseModel):
     cfg_scale: Optional[float] = 7.0
     image_base64: Optional[str] = None  # 图生图用
     image_base64_list: List[str] = []
+    mask_base64: Optional[str] = None  # 局部重绘遮罩
     n: int = 1
 
 
