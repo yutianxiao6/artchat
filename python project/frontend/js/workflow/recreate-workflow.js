@@ -230,13 +230,20 @@
         var frames = v.frames || [];
         var rej = v.rejected || [];
         var sceneCuts = v.scene_cuts || [];
+        var selMode = !!nd._selectMode;
+        var selSet = nd._selectedFrames || {};
+        var selCount = Object.keys(selSet).length;
         html += '<div class="wf-detail-section" style="background:rgba(6,182,212,.08);border:1px solid rgba(6,182,212,.25);border-radius:10px;padding:10px 12px;">'
-          + '<div style="display:flex;gap:18px;flex-wrap:wrap;font-size:12px;">'
+          + '<div style="display:flex;gap:18px;flex-wrap:wrap;font-size:12px;align-items:center;">'
           + '<div><span style="color:#94a3b8;">场景切点</span>: <b>' + sceneCuts.length + '</b></div>'
           + '<div><span style="color:#94a3b8;">候选</span>: <b>' + (stats.candidates || frames.length + rej.length) + '</b></div>'
           + '<div><span style="color:#22c55e;">保留</span>: <b>' + frames.length + '</b></div>'
           + '<div><span style="color:#ef4444;">过滤</span>: <b>' + rej.length + '</b></div>'
           + (v.duration ? '<div><span style="color:#94a3b8;">时长</span>: <b>' + _formatDuration(v.duration) + '</b></div>' : '')
+          + '<div style="margin-left:auto;display:flex;gap:6px;">'
+          + '<button class="wf-tb-btn" data-rc-select-toggle="keyframes" style="font-size:11px;"><i class="fa fa-' + (selMode ? 'check-square-o' : 'square-o') + '"></i> ' + (selMode ? '退出选择' : '选择') + '</button>'
+          + (selMode ? '<button class="wf-tb-btn" data-rc-download-selected="keyframes" style="font-size:11px;"' + (selCount ? '' : ' disabled') + '><i class="fa fa-download"></i> 下载' + (selCount ? '(' + selCount + ')' : '') + '</button>' : '')
+          + '</div>'
           + '</div></div>';
 
         // 按 scene_group 分组
@@ -261,11 +268,13 @@
             var tsLabel = ts >= 60 ? Math.floor(ts/60) + ":" + String(Math.floor(ts%60)).padStart(2,"0") : ts.toFixed(1) + "s";
             var badge = f.is_supplement ? '<div style="position:absolute;top:2px;right:22px;background:rgba(245,158,11,.9);color:#fff;font-size:9px;padding:1px 4px;border-radius:3px;">补</div>' : '';
             var sharp = (f.sharpness !== undefined && f.sharpness >= 0) ? ('<div style="position:absolute;bottom:2px;left:2px;background:rgba(0,0,0,.7);color:#fff;font-size:9px;padding:1px 4px;border-radius:3px;">' + f.sharpness.toFixed(0) + '</div>') : '';
-            html += '<div style="position:relative;">'
+            var checked = selSet[f.index] ? ' checked' : '';
+            var selOverlay = selMode ? '<label style="position:absolute;top:2px;right:2px;z-index:2;cursor:pointer;"><input type="checkbox" data-rc-frame-check="' + f.index + '" data-rc-check-type="keyframes"' + checked + ' style="width:16px;height:16px;cursor:pointer;"></label>' : '';
+            html += '<div style="position:relative;' + (selMode && selSet[f.index] ? 'box-shadow:0 0 0 2px #06b6d4;border-radius:6px;' : '') + '">'
               + '<img class="wf-preview-img" src="' + esc(f.url) + '" style="width:100%;border-radius:6px;">'
               + '<div style="position:absolute;top:2px;left:2px;background:rgba(0,0,0,.7);color:#fff;font-size:10px;padding:1px 4px;border-radius:3px;">#' + f.index + ' · ' + tsLabel + '</div>'
-              + badge + sharp
-              + '<button class="wf-ref-del-btn" data-del-rc-frame="' + f.index + '" style="position:absolute;top:2px;right:2px;"><i class="fa fa-times"></i></button>'
+              + badge + sharp + selOverlay
+              + (selMode ? '' : '<button class="wf-ref-del-btn" data-del-rc-frame="' + f.index + '" style="position:absolute;top:2px;right:2px;"><i class="fa fa-times"></i></button>')
               + '</div>';
           });
           html += '</div></div>';
@@ -596,10 +605,17 @@
 
       var gc = getConcurrency(wf, null);
       var hasOverride = nd.maxConcurrentOverride !== undefined && nd.maxConcurrentOverride !== null && nd.maxConcurrentOverride !== "";
+      var selMode = !!nd._selectMode;
+      var selSet = nd._selectedFrames || {};
+      var selCount = Object.keys(selSet).length;
       var html = '<div class="wf-detail-section" style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;">'
         + '<div style="font-size:11px;color:#94a3b8;">并发 = ' + gc + (hasOverride ? ' (本节点)' : ' (来自顶部)') + '</div>'
         + '<label style="font-size:11px;color:#94a3b8;cursor:pointer;"><input type="checkbox" data-rc-toggle-override' + (hasOverride ? ' checked' : '') + '> 本节点覆盖</label>'
         + (hasOverride ? '<input class="wf-detail-input wf-editable" data-edit-field="maxConcurrentOverride" type="number" min="1" max="10" value="' + nd.maxConcurrentOverride + '" style="width:60px;">' : '')
+        + '<div style="margin-left:auto;display:flex;gap:6px;">'
+        + '<button class="wf-tb-btn" data-rc-select-toggle="repframes" style="font-size:11px;"><i class="fa fa-' + (selMode ? 'check-square-o' : 'square-o') + '"></i> ' + (selMode ? '退出选择' : '选择') + '</button>'
+        + (selMode ? '<button class="wf-tb-btn" data-rc-download-selected="repframes" style="font-size:11px;"' + (selCount ? '' : ' disabled') + '><i class="fa fa-download"></i> 下载' + (selCount ? '(' + selCount + ')' : '') + '</button>' : '')
+        + '</div>'
         + '</div>';
 
       if (v && v.segments && v.segments.length) {
@@ -615,9 +631,12 @@
             var kf = kfMap[fi];
             if (!kf) return;
             var picked = pickedSet[fi];
-            html += '<div style="position:relative;' + (picked ? '' : 'opacity:.35;filter:grayscale(60%);') + '">'
+            var checked = selSet[fi] ? ' checked' : '';
+            var selOverlay = selMode ? '<label style="position:absolute;top:1px;right:1px;z-index:2;cursor:pointer;"><input type="checkbox" data-rc-frame-check="' + fi + '" data-rc-check-type="repframes"' + checked + ' style="width:14px;height:14px;cursor:pointer;"></label>' : '';
+            html += '<div style="position:relative;' + (picked ? '' : 'opacity:.35;filter:grayscale(60%);') + (selMode && selSet[fi] ? 'box-shadow:0 0 0 2px #f97316;border-radius:4px;' : '') + '">'
               + '<img src="' + esc(kf.url) + '" style="width:100%;border-radius:4px;' + (picked ? 'box-shadow:0 0 0 2px #f97316;' : '') + '">'
               + '<div style="position:absolute;bottom:1px;left:1px;background:rgba(0,0,0,.7);color:#fff;font-size:9px;padding:1px 3px;border-radius:2px;">#' + fi + '</div>'
+              + selOverlay
               + '</div>';
           });
           html += '</div></div>';
@@ -815,6 +834,8 @@
           + '<button class="wf-tb-btn" data-rc-sb-edit="rcStoryboardOrig" data-seg="' + ctx.segIndex + '"><i class="fa fa-' + (nd.editing ? "check" : "pencil") + '"></i> ' + (nd.editing ? "完成编辑" : "编辑宫格") + '</button>'
           + (nd.editing && !reorgActive ? '<button class="wf-tb-btn" data-rc-sb-reorg="rcStoryboardOrig" data-seg="' + ctx.segIndex + '"><i class="fa fa-th"></i> 重组</button>' : '')
           + (reorgActive ? '<button class="wf-tb-btn" data-rc-sb-reorg-cancel="rcStoryboardOrig" data-seg="' + ctx.segIndex + '"><i class="fa fa-times"></i> 取消重组</button>' : '')
+          + '<a class="wf-tb-btn" href="' + esc(g.url) + '" download style="text-decoration:none;"><i class="fa fa-download"></i> 下载整张</a>'
+          + (g.urls && g.urls.length ? '<button class="wf-tb-btn" data-rc-download-orig-cells="' + ctx.segIndex + '"><i class="fa fa-files-o"></i> 下载单张</button>' : '')
           + '</div></div>';
         html += '<div class="wf-detail-section" style="font-size:12px;line-height:1.6;">'
           + (v.theme ? '<div><span style="color:#94a3b8;">主题：</span>' + esc(v.theme) + '</div>' : '')
@@ -1698,6 +1719,82 @@
           kfV2.frames.sort(function (a, b) { return a.timestamp - b.timestamp; });
           engine.save();
           if (window.WF_Renderer) window.WF_Renderer.render(engine);
+        }
+        return;
+      }
+
+      // 选择模式切换（关键帧/代表帧）
+      var selToggle = e.target.closest("[data-rc-select-toggle]");
+      if (selToggle) {
+        var selType = selToggle.getAttribute("data-rc-select-toggle");
+        var targetNd = selType === "keyframes" ? (wf.rcKeyframess || [])[0] : (wf.rcRepFramess || [])[0];
+        if (targetNd) {
+          targetNd._selectMode = !targetNd._selectMode;
+          if (!targetNd._selectMode) targetNd._selectedFrames = {};
+          engine.save();
+          if (window.WF_Renderer) window.WF_Renderer.render(engine);
+        }
+        return;
+      }
+
+      // 帧 checkbox 勾选
+      var frameCheck = e.target.closest("[data-rc-frame-check]");
+      if (frameCheck) {
+        var chkInput = frameCheck.querySelector("input") || e.target;
+        var chkIdx = parseInt(chkInput.getAttribute("data-rc-frame-check") || frameCheck.getAttribute("data-rc-frame-check"));
+        var chkType = chkInput.getAttribute("data-rc-check-type") || frameCheck.getAttribute("data-rc-check-type");
+        var chkNd = chkType === "keyframes" ? (wf.rcKeyframess || [])[0] : (wf.rcRepFramess || [])[0];
+        if (chkNd) {
+          if (!chkNd._selectedFrames) chkNd._selectedFrames = {};
+          if (chkNd._selectedFrames[chkIdx]) { delete chkNd._selectedFrames[chkIdx]; }
+          else { chkNd._selectedFrames[chkIdx] = true; }
+          engine.save();
+          if (window.WF_Renderer) window.WF_Renderer.render(engine);
+        }
+        return;
+      }
+
+      // 下载选中帧
+      var dlSelected = e.target.closest("[data-rc-download-selected]");
+      if (dlSelected) {
+        var dlType = dlSelected.getAttribute("data-rc-download-selected");
+        var dlNdSel = dlType === "keyframes" ? (wf.rcKeyframess || [])[0] : (wf.rcRepFramess || [])[0];
+        if (dlNdSel && dlNdSel._selectedFrames) {
+          var kfVDl = NR.getActiveVersion((wf.rcKeyframess || [])[0]);
+          var kfFramesDl = (kfVDl && kfVDl.frames) || [];
+          var kfMapDl = {}; kfFramesDl.forEach(function (f) { kfMapDl[f.index] = f; });
+          Object.keys(dlNdSel._selectedFrames).forEach(function (idx) {
+            var frame = kfMapDl[parseInt(idx)];
+            if (frame && frame.url) {
+              var a = document.createElement("a");
+              a.href = frame.url;
+              a.download = "frame_" + idx + ".jpg";
+              document.body.appendChild(a);
+              a.click();
+              document.body.removeChild(a);
+            }
+          });
+        }
+        return;
+      }
+
+      // 下载原版分镜单格
+      var dlOrigCells = e.target.closest("[data-rc-download-orig-cells]");
+      if (dlOrigCells) {
+        var dlOrigSeg = parseInt(dlOrigCells.getAttribute("data-rc-download-orig-cells"));
+        var dlOrigSegObj = (wf.segments || [])[dlOrigSeg];
+        var dlOrigNd = dlOrigSegObj && ((dlOrigSegObj.rcStoryboardOrigs || [])[0]);
+        var dlOrigV = dlOrigNd && NR.getActiveVersion(dlOrigNd);
+        if (dlOrigV && dlOrigV.grid && dlOrigV.grid.urls) {
+          dlOrigV.grid.urls.forEach(function (u, idx) {
+            if (!u) return;
+            var a = document.createElement("a");
+            a.href = u;
+            a.download = "orig_seg" + dlOrigSeg + "_cell" + (idx + 1) + ".jpg";
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+          });
         }
         return;
       }

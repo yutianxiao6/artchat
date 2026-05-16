@@ -81,7 +81,7 @@
   const NODE_WIDTH = NODE_DEFAULT_W; // 旧变量保留以兼容引用
   const PORT_RADIUS = 14;
   const SNAP_DISTANCE = 120;
-  const MIN_ZOOM = 0.45;
+  const MIN_ZOOM = 0.15;
   const MAX_ZOOM = 1.8;
   const DEFAULT_ASSET_CATEGORY = "未分类";
 
@@ -89,6 +89,7 @@
     initialized: false,
     nodes: [],
     edges: [],
+    groups: [],
     selectedNodeId: null,
     expandedNodeId: null,
     resizingNode: null,
@@ -324,7 +325,10 @@
       /* ── 画布外层布局 ── */
       #image{height:calc(100vh - 64px);overflow:hidden;position:relative;}
       .canvas-shell{display:flex;flex-direction:row;height:100%;background:#0b1020;color:#e5e7eb;position:relative;}
-      .canvas-left{width:320px;border-right:1px solid rgba(148,163,184,.18);background:#0f172a;padding:16px;display:flex;flex-direction:column;gap:14px;overflow:hidden;flex-shrink:0;}
+      .canvas-left{width:320px;border-right:1px solid rgba(148,163,184,.18);background:#0f172a;padding:16px;display:flex;flex-direction:column;gap:14px;overflow:hidden;flex-shrink:0;transition:width .2s ease,padding .2s ease,opacity .2s ease;}
+      .canvas-left.collapsed{width:0;padding:0;border-right:none;opacity:0;pointer-events:none;}
+      .canvas-left-toggle{position:absolute;top:50%;left:0;z-index:40;transform:translateY(-50%);width:20px;height:48px;background:rgba(15,23,42,.9);border:1px solid rgba(148,163,184,.2);border-left:none;border-radius:0 8px 8px 0;cursor:pointer;display:flex;align-items:center;justify-content:center;color:#94a3b8;font-size:12px;transition:left .2s ease;}
+      .canvas-left-toggle:hover{background:rgba(30,41,59,.95);color:#e2e8f0;}
       .canvas-title{font-size:18px;font-weight:800;color:#fff;}
       .canvas-subtitle{font-size:12px;color:#94a3b8;line-height:1.6;}
       .canvas-panel{border:1px solid rgba(148,163,184,.12);background:rgba(15,23,42,.78);border-radius:16px;padding:14px;min-height:0;display:flex;flex-direction:column;}
@@ -347,7 +351,7 @@
       .canvas-topbar{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 18px;background:#111827;border-bottom:1px solid rgba(148,163,184,.14);flex-shrink:0;}
       .canvas-topbar .left,.canvas-topbar .right{display:flex;gap:10px;align-items:center;flex-wrap:wrap;}
       .canvas-topbar .badge{font-size:12px;padding:6px 10px;border-radius:999px;background:rgba(59,130,246,.16);color:#bfdbfe;border:1px solid rgba(96,165,250,.22);}
-      .canvas-board-wrap{position:relative;flex:1;overflow:hidden;background:radial-gradient(circle at 1px 1px,rgba(148,163,184,.16) 1px,transparent 0) 0 0/24px 24px,linear-gradient(180deg,#0b1020,#0a0f1b);}
+      .canvas-board-wrap{position:relative;flex:1;overflow:hidden;background:#080c14;}
       .canvas-board{position:absolute;inset:0;overflow:hidden;cursor:grab;user-select:none;}
       .canvas-board.panning{cursor:grabbing;}
       .canvas-world{position:absolute;left:0;top:0;transform-origin:0 0;width:5000px;height:3600px;will-change:transform;}
@@ -361,6 +365,13 @@
       .canvas-context-menu button:hover{background:rgba(30,41,59,.95);}
       .canvas-toast{position:fixed;top:84px;right:20px;z-index:2000;padding:10px 14px;border-radius:12px;background:rgba(15,23,42,.96);color:#fff;border:1px solid rgba(96,165,250,.28);box-shadow:0 16px 36px rgba(0,0,0,.28);font-size:13px;opacity:0;transform:translateY(-8px);pointer-events:none;transition:opacity .18s ease,transform .18s ease;}
       .canvas-toast.show{opacity:1;transform:translateY(0);}
+      .canvas-multi-toolbar{position:fixed;z-index:100;display:flex;gap:6px;padding:6px 10px;background:rgba(15,23,42,.92);border:1px solid rgba(96,165,250,.35);border-radius:10px;backdrop-filter:blur(8px);box-shadow:0 8px 24px rgba(0,0,0,.3);}
+      .canvas-multi-toolbar button{border:none;background:rgba(148,163,184,.12);color:#e2e8f0;font-size:11px;padding:5px 10px;border-radius:6px;cursor:pointer;white-space:nowrap;transition:background .12s;}
+      .canvas-multi-toolbar button:hover{background:rgba(96,165,250,.25);}
+      .canvas-multi-toolbar .layout-submenu{position:absolute;top:100%;left:0;margin-top:4px;display:flex;flex-direction:column;gap:2px;padding:6px;background:rgba(15,23,42,.95);border:1px solid rgba(96,165,250,.3);border-radius:8px;box-shadow:0 8px 20px rgba(0,0,0,.3);min-width:100px;}
+      .canvas-group-box{position:absolute;border:2px dashed rgba(96,165,250,.5);border-radius:14px;pointer-events:auto;cursor:pointer;transition:border-color .15s;}
+      .canvas-group-box:hover{border-color:rgba(96,165,250,.8);}
+      .canvas-group-box .group-label{position:absolute;top:-10px;left:12px;background:rgba(15,23,42,.9);color:#94a3b8;font-size:10px;padding:1px 8px;border-radius:4px;pointer-events:none;}
       .image-preview-modal{position:fixed;inset:0;background:rgba(2,6,23,.82);display:flex;align-items:center;justify-content:center;z-index:9999;padding:24px;}
       .image-preview-modal.hidden{display:none;}
       .image-preview-backdrop{position:absolute;inset:0;}
@@ -418,12 +429,13 @@
     if (!tab) return;
     tab.innerHTML = `
       <div class="canvas-shell">
-        <aside class="canvas-left">
+        <aside class="canvas-left collapsed" id="canvas-left-panel">
           <div><div class="canvas-title">无限画布</div></div>
           <section class="canvas-panel" style="flex:1.1;"><div class="canvas-panel-header"><div class="canvas-panel-title"><i class="fa fa-folder-open-o"></i> 素材库</div></div><div class="canvas-library-list custom-scrollbar" id="canvas-library-list"></div></section>
           <section class="canvas-panel" style="flex:0.9;"><div class="canvas-panel-header"><div class="canvas-panel-title"><i class="fa fa-history"></i> 历史会话记录</div><button class="btn btn-default" id="new-canvas-session-btn">新建</button></div><div class="canvas-panel-subtitle">所有画布记录都会保存到本地文件。</div><div class="canvas-history-list custom-scrollbar" id="canvas-history-list"></div></section>
         </aside>
-        <section class="canvas-main">
+        <section class="canvas-main" style="position:relative;">
+          <div class="canvas-left-toggle" id="canvas-left-toggle"><i class="fa fa-chevron-right"></i></div>
           <div class="canvas-topbar"><div class="left"><span class="badge">双击创建节点</span><span class="badge">滚轮缩放</span><span class="badge">Ctrl+C / Ctrl+V / Ctrl+Z / Delete</span></div><div class="right"><button class="btn btn-default" id="open-panorama-viewer-btn"><i class="fa fa-globe"></i> 全景查看器</button><button class="btn btn-default" id="quick-add-node-btn">新建节点</button><span class="badge" id="canvas-zoom-badge">100%</span><button class="btn btn-default" id="reset-canvas-btn">清空画布</button></div></div>
           <div class="canvas-board-wrap" id="canvas-board-wrap"><div class="canvas-board" id="canvas-board"><div class="canvas-world" id="canvas-world"><svg class="canvas-svg" id="canvas-svg"></svg><div id="edge-dom-layer" class="edge-dom-layer"></div><div id="canvas-node-layer" class="canvas-node-layer"></div></div><div class="canvas-empty" id="canvas-empty-tip">双击画布、右键画布或直接粘贴图片来创建节点</div><div class="canvas-selection-box" id="canvas-selection-box" style="display:none"></div></div><div id="canvas-context-menu-root"></div></div>
         </section>
@@ -464,6 +476,16 @@
         document.body.classList.toggle("debug-canvas-hit");
         const badge = document.getElementById("canvas-debug-badge");
         if (badge) badge.style.display = document.body.classList.contains("debug-canvas-hit") ? "inline-flex" : "none";
+        return;
+      }
+      if (target.closest("#canvas-left-toggle")) {
+        const panel = document.getElementById("canvas-left-panel");
+        const btn = document.getElementById("canvas-left-toggle");
+        if (panel) {
+          panel.classList.toggle("collapsed");
+          const collapsed = panel.classList.contains("collapsed");
+          if (btn) btn.innerHTML = collapsed ? '<i class="fa fa-chevron-right"></i>' : '<i class="fa fa-chevron-left"></i>';
+        }
         return;
       }
       if (target.closest("#reset-canvas-btn")) return resetCanvas();
@@ -596,6 +618,13 @@
       if (target.closest("#delete-current-asset-category-btn")) return deleteCurrentCategory();
       const openHistoryBtn = target.closest("[data-open-history]");
       if (openHistoryBtn) return openHistorySession(openHistoryBtn.getAttribute("data-open-history"));
+      // ── 多选工具栏按钮 ──
+      if (target.closest("[data-multi-save-library]")) { _multiSaveToLibrary(); return; }
+      if (target.closest("[data-multi-group]")) { _createGroup(); return; }
+      if (target.closest("[data-multi-ungroup]")) { _disbandGroup(); return; }
+      if (target.closest("[data-multi-layout-toggle]")) { _showLayoutMenu(target.closest("[data-multi-layout-toggle]")); return; }
+      if (target.closest("[data-layout-action]")) { _applyLayout(target.closest("[data-layout-action]").getAttribute("data-layout-action")); return; }
+
       const createFromContext = target.closest("[data-context-create-node]");
       if (createFromContext) return createNodeFromContextMenu();
       const openGridDialog = target.closest("[data-context-open-grid-dialog]");
@@ -886,7 +915,6 @@
         STATE.dragMoved = false;
         STATE.dragOffsetX = point.x - node.x;
         STATE.dragOffsetY = point.y - node.y;
-        // 记录节点的初始 x/y，作为 transform 位移的基准
         __dragBaseX = node.x;
         __dragBaseY = node.y;
         __cachedDragEl = nodeEl;
@@ -894,16 +922,26 @@
         nodeEl.style.willChange = 'transform';
         document.body.classList.add('node-dragging');
         nodeEl.classList.add('is-dragging');
-        // 立即更新 state + class（视觉即时反馈，不等 mouseup）
-        const prevSelectedId = STATE.selectedNodeId;
-        STATE.selectedNodeId = node.id;
-        STATE.selectedNodeIds = [node.id];
-        STATE.selectedEdgeId = null;
-        if (prevSelectedId && prevSelectedId !== node.id) {
-          const prevEl = document.querySelector(`.node[data-node-id="${prevSelectedId}"]`);
-          if (prevEl) prevEl.classList.remove('selected', 'is-selected', 'multi-selected');
+
+        // 判断是否属于多选拖动
+        const alreadyInMulti = STATE.selectedNodeIds.length > 1 && STATE.selectedNodeIds.includes(node.id);
+        if (alreadyInMulti) {
+          // 保持当前多选
+        } else {
+          const prevSelectedId = STATE.selectedNodeId;
+          STATE.selectedNodeIds = [node.id];
+          if (prevSelectedId && prevSelectedId !== node.id) {
+            const prevEl = document.querySelector(`.node[data-node-id="${prevSelectedId}"]`);
+            if (prevEl) prevEl.classList.remove('selected', 'is-selected', 'multi-selected');
+          }
         }
-        // 拖动开始：折叠所有 expanded 节点（包括当前），避免拖动时表单还在展开
+        STATE.selectedNodeId = node.id;
+        STATE.selectedEdgeId = null;
+
+        // 记录所有参与拖动的节点初始位置
+        STATE._multiDragStarts = {};
+        STATE.selectedNodeIds.forEach(id => { const n = getNode(id); if (n) STATE._multiDragStarts[id] = { x: n.x, y: n.y }; });
+
         if (STATE.expandedNodeId) {
           const expEl = document.querySelector(`.node[data-node-id="${STATE.expandedNodeId}"]`);
           if (expEl) expEl.classList.remove('is-expanded');
@@ -912,6 +950,45 @@
         nodeEl.classList.add('selected', 'is-selected');
         hideContextMenu(false);
         return;
+      }
+      // 点击组边框 → 选中整组并启动拖动
+      const groupBox = target.closest(".canvas-group-box");
+      if (groupBox && event.button === 0) {
+        const gid = groupBox.getAttribute("data-group-id");
+        const group = STATE.groups.find(g => g.id === gid);
+        if (group) {
+          event.preventDefault();
+          const ids = group.nodeIds.filter(id => getNode(id));
+          STATE.selectedNodeIds = ids;
+          STATE.selectedNodeId = ids[0] || null;
+          STATE.selectedEdgeId = null;
+          hideContextMenu(false);
+          // 启动组拖动
+          const point = clientToCanvasPoint(event.clientX, event.clientY);
+          const firstNode = getNode(ids[0]);
+          if (firstNode) {
+            STATE.draggingNodeId = firstNode.id;
+            STATE.dragMoved = false;
+            STATE.dragOffsetX = point.x - firstNode.x;
+            STATE.dragOffsetY = point.y - firstNode.y;
+            __dragBaseX = firstNode.x;
+            __dragBaseY = firstNode.y;
+            const firstEl = document.querySelector(`.node[data-node-id="${firstNode.id}"]`);
+            __cachedDragEl = firstEl;
+            __cachedDragElId = firstNode.id;
+            if (firstEl) firstEl.style.willChange = 'transform';
+            document.body.classList.add('node-dragging');
+            STATE._multiDragStarts = {};
+            ids.forEach(id => { const n = getNode(id); if (n) STATE._multiDragStarts[id] = { x: n.x, y: n.y }; });
+          }
+          if (STATE.expandedNodeId) {
+            const expEl = document.querySelector(`.node[data-node-id="${STATE.expandedNodeId}"]`);
+            if (expEl) expEl.classList.remove('is-expanded');
+            STATE.expandedNodeId = null;
+          }
+          renderCanvas();
+          return;
+        }
       }
       const board = target.closest("#canvas-board");
       if (board && event.button === 1) {
@@ -951,8 +1028,21 @@
           const el = document.querySelector(`.node[data-node-id="${r.id}"]`);
           if (el) {
             el.style.width = `${newW}px`;
-            const wrap = el.querySelector('.node-image-wrap, .grid-cells');
-            if (wrap) { wrap.style.width = `${newW}px`; wrap.style.height = `${newH}px`; }
+            if (n.type === 'grid') {
+              const gridN = Math.max(2, Math.min(5, Number(n.grid) || 3));
+              const cellW = Math.floor((newW - 24 - (gridN - 1) * 4) / gridN);
+              const ratio = (Number(n.cellWidth) || 512) / (Number(n.cellHeight) || 512);
+              const cellH = Math.floor(cellW / ratio);
+              const wrap = el.querySelector('.grid-cells');
+              if (wrap) {
+                wrap.style.gridTemplateColumns = `repeat(${gridN},${cellW}px)`;
+                wrap.style.gridTemplateRows = `repeat(${gridN},${cellH}px)`;
+                wrap.querySelectorAll('.grid-cell').forEach(c => { c.style.width = `${cellW}px`; c.style.height = `${cellH}px`; });
+              }
+            } else {
+              const wrap = el.querySelector('.node-image-wrap');
+              if (wrap) { wrap.style.width = `${newW}px`; wrap.style.height = `${newH}px`; }
+            }
           }
           requestCanvasOverlayRefresh();
         }
@@ -983,10 +1073,42 @@
           const dx = Math.abs(nx - node.x), dy = Math.abs(ny - node.y);
           if (dx + dy > 3) STATE.dragMoved = true;
         }
+        const deltaX = nx - node.x;
+        const deltaY = ny - node.y;
         node.x = nx;
         node.y = ny;
+        // 多选拖动：移动所有其他选中节点
+        if (STATE.selectedNodeIds.length > 1 && STATE._multiDragStarts) {
+          STATE.selectedNodeIds.forEach(id => {
+            if (id === STATE.draggingNodeId) return;
+            const n = getNode(id);
+            if (n) { n.x += deltaX; n.y += deltaY; }
+          });
+          // 批量更新 DOM 位置
+          STATE.selectedNodeIds.forEach(id => {
+            if (id === STATE.draggingNodeId) return;
+            const el = document.querySelector(`.node[data-node-id="${id}"]`);
+            const n = getNode(id);
+            if (el && n) { el.style.left = `${n.x}px`; el.style.top = `${n.y}px`; }
+          });
+        }
         updateDraggedNodePosition(node);
         requestCanvasOverlayRefresh();
+        // 工具栏和组框跟随移动
+        if (STATE.selectedNodeIds.length > 1) {
+          const tb = document.getElementById('canvas-multi-toolbar');
+          if (tb) {
+            const sdx = deltaX * STATE.zoom;
+            const sdy = deltaY * STATE.zoom;
+            tb.style.left = `${parseFloat(tb.style.left || 0) + sdx}px`;
+            tb.style.top = `${parseFloat(tb.style.top || 0) + sdy}px`;
+          }
+          // 组框跟随
+          document.querySelectorAll('.canvas-group-box').forEach(box => {
+            box.style.left = `${parseFloat(box.style.left || 0) + deltaX}px`;
+            box.style.top = `${parseFloat(box.style.top || 0) + deltaY}px`;
+          });
+        }
         // 拖动时检测是否悬停在宫格 cell 上，高亮它
         updateGridCellHoverHighlight(STATE.draggingNodeId, event.clientX, event.clientY);
         return;
@@ -1019,7 +1141,12 @@
         renderCanvas();
         return;
       }
-      if (__gridDragFromCell) { handleGridCellMouseUp(event); return; }
+      if (__gridDragFromCell) {
+        const wasSpawned = __gridDragFromCell.spawned;
+        handleGridCellMouseUp(event);
+        if (!wasSpawned) return;
+        // spawned 后继续走节点拖拽 mouseup 逻辑
+      }
       if (STATE.assetLibraryDrag.active) {
         STATE.assetLibraryDrag.active = false;
         return;
@@ -1293,21 +1420,27 @@
   }
   function resetCanvas() { pushUndoSnapshot(); STATE.nodes = []; STATE.edges = []; STATE.selectedNodeId = null; STATE.selectedEdgeId = null; persistCanvasState(); renderCanvas(); renderLeftPanel(); }
   function addNodeAt(x, y) { pushUndoSnapshot(); const node = createNode(x, y); STATE.nodes.push(node); STATE.selectedNodeId = node.id; STATE.selectedEdgeId = null; persistCanvasStateDebounced(); renderCanvas(); renderLeftPanel(); }
+  function _getLastUsedConfig() {
+    // 从当前选中节点或最近的节点继承模型和分辨率
+    const ref = getNode(STATE.selectedNodeId) || STATE.nodes.filter(n => n.type === "image").slice(-1)[0];
+    if (ref) return { modelId: ref.modelId || "", width: ref.width || 1024, height: ref.height || 1024 };
+    return { modelId: String(getDefaultImageConfigId() || ""), width: 1024, height: 1024 };
+  }
   function createNode(x, y) {
+    const cfg = _getLastUsedConfig();
     return {
       id: makeId(), type: "image",
       x: Math.round(x), y: Math.round(y),
       prompt: "", negativePrompt: DEFAULT_NEGATIVE_PROMPT,
-      width: 1024, height: 1024,
+      width: cfg.width, height: cfg.height,
       count: 1,
-      modelId: String(getDefaultImageConfigId() || ""),
+      modelId: String(cfg.modelId || getDefaultImageConfigId() || ""),
       imageUrl: "", imageBase64: "", assetId: "",
       outputImages: [], busy: false,
     };
   }
   function createResultNodeFromSource(sourceNode, imageUrl, index, total) {
     const node = createNode(sourceNode.x + 460, sourceNode.y + (index * 80));
-    // 结果节点没有上游连接，把源节点的 prompt 序列化为纯文本（"图片N" 已展开）
     node.prompt = serializePromptForApi(sourceNode.prompt || "", sourceNode.id);
     node.negativePrompt = sourceNode.negativePrompt || DEFAULT_NEGATIVE_PROMPT;
     node.width = Number(sourceNode.width) || 1024;
@@ -1316,6 +1449,12 @@
     node.outputImages = imageUrl ? [imageUrl] : [];
     node.imageUrl = "";
     node.imageBase64 = "";
+    // 继承组
+    if (sourceNode.groupId) {
+      node.groupId = sourceNode.groupId;
+      const group = STATE.groups.find(g => g.id === sourceNode.groupId);
+      if (group) group.nodeIds.push(node.id);
+    }
     return node;
   }
   function migrateNode(node) {
@@ -1371,9 +1510,9 @@
   }
   function commitDraggedNodePosition() {
     if (!__cachedDragEl) return;
-    // 把 transform 的位移合并到 left/top，清除 transform
     __cachedDragEl.style.transform = '';
     __cachedDragEl.style.willChange = '';
+    __cachedDragEl.style.transformOrigin = '';
     const node = getNode(__cachedDragElId);
     if (node && __cachedDragEl) {
       __cachedDragEl.style.left = `${node.x}px`;
@@ -1402,8 +1541,9 @@
       const edgeDomLayer = document.getElementById("edge-dom-layer");
       if (!svg || !edgeDomLayer) return;
       const dragId = STATE.draggingNodeId;
-      const affectedEdges = dragId
-        ? STATE.edges.filter((e) => e.from === dragId || e.to === dragId)
+      const movingIds = (STATE.selectedNodeIds.length > 1) ? new Set(STATE.selectedNodeIds) : (dragId ? new Set([dragId]) : null);
+      const affectedEdges = movingIds
+        ? STATE.edges.filter((e) => movingIds.has(e.from) || movingIds.has(e.to))
         : STATE.edges;
       let needsSvgRebuild = false;
       for (const edge of affectedEdges) {
@@ -1479,7 +1619,6 @@
   function deleteSelectedNodes() {
     const ids = new Set(STATE.selectedNodeIds);
     if (!ids.size) return;
-    // 视觉立即：从 DOM 移除
     ids.forEach((id) => {
       const el = document.querySelector(`.node[data-node-id="${id}"]`);
       if (el) el.remove();
@@ -1487,6 +1626,9 @@
     pushUndoSnapshot();
     STATE.nodes = STATE.nodes.filter((node) => !ids.has(node.id));
     STATE.edges = STATE.edges.filter((edge) => !ids.has(edge.from) && !ids.has(edge.to));
+    // 从组中移除被删节点
+    STATE.groups.forEach(g => { g.nodeIds = g.nodeIds.filter(id => !ids.has(id)); });
+    STATE.groups = STATE.groups.filter(g => g.nodeIds.length >= 2);
     STATE.selectedNodeIds = [];
     STATE.selectedNodeId = null;
     if (STATE.expandedNodeId && ids.has(STATE.expandedNodeId)) STATE.expandedNodeId = null;
@@ -1494,6 +1636,110 @@
     renderCanvas();
     renderLeftPanel();
   }
+
+  // ── 多选工具栏功能 ──
+  async function _multiSaveToLibrary() {
+    const ids = STATE.selectedNodeIds.slice();
+    for (const id of ids) {
+      const n = getNode(id);
+      if (!n) continue;
+      const url = (n.outputImages && n.outputImages[0]) || n.imageUrl || "";
+      if (url) await saveImageUrlToLibrary(url, "批量保存");
+    }
+  }
+
+  function _createGroup() {
+    if (STATE.selectedNodeIds.length < 2) return;
+    pushUndoSnapshot();
+    const gid = makeId();
+    const nodeIds = STATE.selectedNodeIds.slice();
+    // 如果某些节点已在其他组中，先移出
+    nodeIds.forEach(id => {
+      const n = getNode(id);
+      if (n && n.groupId) {
+        const oldG = STATE.groups.find(g => g.id === n.groupId);
+        if (oldG) oldG.nodeIds = oldG.nodeIds.filter(x => x !== id);
+      }
+      if (n) n.groupId = gid;
+    });
+    STATE.groups = STATE.groups.filter(g => g.nodeIds.length >= 2);
+    STATE.groups.push({ id: gid, nodeIds });
+    persistCanvasStateDebounced();
+    renderCanvas();
+  }
+
+  function _disbandGroup() {
+    const firstNode = getNode(STATE.selectedNodeIds[0]);
+    if (!firstNode || !firstNode.groupId) return;
+    pushUndoSnapshot();
+    const gid = firstNode.groupId;
+    STATE.nodes.forEach(n => { if (n.groupId === gid) delete n.groupId; });
+    STATE.groups = STATE.groups.filter(g => g.id !== gid);
+    STATE.selectedNodeIds = [];
+    persistCanvasStateDebounced();
+    renderCanvas();
+  }
+
+  let __layoutMenuVisible = false;
+  function _showLayoutMenu(btn) {
+    const toolbar = document.getElementById('canvas-multi-toolbar');
+    if (!toolbar) return;
+    const existing = toolbar.querySelector('.layout-submenu');
+    if (existing) { existing.remove(); __layoutMenuVisible = false; return; }
+    __layoutMenuVisible = true;
+    const menu = document.createElement('div');
+    menu.className = 'layout-submenu';
+    menu.innerHTML = '<button data-layout-action="horizontal"><i class="fa fa-arrows-h"></i> 水平排列</button>'
+      + '<button data-layout-action="vertical"><i class="fa fa-arrows-v"></i> 垂直排列</button>'
+      + '<button data-layout-action="grid"><i class="fa fa-th"></i> 宫格排列</button>';
+    toolbar.appendChild(menu);
+  }
+
+  function _applyLayout(mode) {
+    if (STATE.selectedNodeIds.length < 2) return;
+    pushUndoSnapshot();
+    const nodes = STATE.selectedNodeIds.map(id => getNode(id)).filter(Boolean);
+    // 屏幕上 6px 间隙，换算到世界坐标
+    const GAP = Math.round(6 / STATE.zoom);
+    if (mode === "horizontal") {
+      nodes.sort((a, b) => a.x - b.x);
+      let cx = nodes[0].x;
+      const baseY = nodes[0].y;
+      nodes.forEach(n => {
+        const d = getNodeDisplaySize(n);
+        n.x = Math.round(cx);
+        n.y = baseY;
+        cx += d.width + GAP;
+      });
+    } else if (mode === "vertical") {
+      nodes.sort((a, b) => a.y - b.y);
+      let cy = nodes[0].y;
+      const baseX = nodes[0].x;
+      nodes.forEach(n => {
+        const d = getNodeDisplaySize(n);
+        n.y = Math.round(cy);
+        n.x = baseX;
+        cy += d.height + GAP;
+      });
+    } else if (mode === "grid") {
+      const cols = Math.ceil(Math.sqrt(nodes.length));
+      nodes.sort((a, b) => a.y - b.y || a.x - b.x);
+      const startX = nodes[0].x, startY = nodes[0].y;
+      const d0 = getNodeDisplaySize(nodes[0]);
+      const cellW = d0.width + GAP;
+      const cellH = d0.height + GAP;
+      nodes.forEach((n, i) => {
+        const col = i % cols;
+        const row = Math.floor(i / cols);
+        n.x = Math.round(startX + col * cellW);
+        n.y = Math.round(startY + row * cellH);
+      });
+    }
+    __layoutMenuVisible = false;
+    persistCanvasStateDebounced();
+    renderCanvas();
+  }
+
   function updateNodeField(nodeId, field, value, options = {}) {
     const node = getNode(nodeId);
     if (!node) return;
@@ -1812,6 +2058,90 @@
     edgeDomLayer.innerHTML = STATE.edges.map(renderEdgeDomHit).join("");
     menuRoot.innerHTML = renderContextMenu();
     requestAnimationFrame(syncMeasuredPorts);
+    _renderGroupBoxes(nodeLayer);
+    _renderMultiSelectToolbar();
+  }
+
+  function _getNodeBounds(nodeId) {
+    const n = getNode(nodeId);
+    if (!n) return null;
+    const d = getNodeDisplaySize(n);
+    return { x: n.x, y: n.y, w: d.width, h: d.height };
+  }
+  function _getGroupBounds(nodeIds) {
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    nodeIds.forEach(id => {
+      const b = _getNodeBounds(id);
+      if (!b) return;
+      minX = Math.min(minX, b.x);
+      minY = Math.min(minY, b.y);
+      maxX = Math.max(maxX, b.x + b.w);
+      maxY = Math.max(maxY, b.y + b.h);
+    });
+    if (minX === Infinity) return null;
+    return { x: minX - 4, y: minY - 4, w: maxX - minX + 8, h: maxY - minY + 8 };
+  }
+
+  function _renderGroupBoxes(nodeLayer) {
+    // 清除旧的组框
+    nodeLayer.querySelectorAll('.canvas-group-box').forEach(el => el.remove());
+    STATE.groups.forEach(group => {
+      const validIds = group.nodeIds.filter(id => getNode(id));
+      if (validIds.length < 2) return;
+      const bounds = _getGroupBounds(validIds);
+      if (!bounds) return;
+      const div = document.createElement('div');
+      div.className = 'canvas-group-box';
+      div.setAttribute('data-group-id', group.id);
+      div.style.cssText = `left:${bounds.x}px;top:${bounds.y}px;width:${bounds.w}px;height:${bounds.h}px;`;
+      div.innerHTML = '<div class="group-label"><i class="fa fa-object-group"></i> 组</div>';
+      nodeLayer.insertBefore(div, nodeLayer.firstChild);
+    });
+  }
+
+  function _renderMultiSelectToolbar() {
+    let toolbar = document.getElementById('canvas-multi-toolbar');
+    if (STATE.selectedNodeIds.length < 2) {
+      if (toolbar) toolbar.remove();
+      return;
+    }
+    // 用 DOM 元素的实际屏幕位置来定位工具栏
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    STATE.selectedNodeIds.forEach(id => {
+      const el = document.querySelector(`.node[data-node-id="${id}"]`);
+      if (!el) return;
+      const r = el.getBoundingClientRect();
+      minX = Math.min(minX, r.left);
+      minY = Math.min(minY, r.top);
+      maxX = Math.max(maxX, r.right);
+      maxY = Math.max(maxY, r.bottom);
+    });
+    if (minX === Infinity) { if (toolbar) toolbar.remove(); return; }
+
+    const firstNode = getNode(STATE.selectedNodeIds[0]);
+    const isGroupSelected = firstNode && firstNode.groupId && STATE.groups.some(g => g.id === firstNode.groupId && g.nodeIds.length === STATE.selectedNodeIds.length);
+
+    if (!toolbar) {
+      toolbar = document.createElement('div');
+      toolbar.id = 'canvas-multi-toolbar';
+      toolbar.className = 'canvas-multi-toolbar';
+      const root = document.getElementById('image');
+      (root || document.body).appendChild(toolbar);
+    }
+    // 定位在选区右上角
+    const toolX = Math.min(maxX + 8, window.innerWidth - 300);
+    const toolY = Math.max(minY, 8);
+    toolbar.style.left = `${toolX}px`;
+    toolbar.style.top = `${toolY}px`;
+
+    let btns = '<button data-multi-save-library><i class="fa fa-folder-open-o"></i> 全部加入素材库</button>';
+    if (isGroupSelected) {
+      btns += '<button data-multi-ungroup><i class="fa fa-chain-broken"></i> 解散组</button>';
+    } else {
+      btns += '<button data-multi-group><i class="fa fa-object-group"></i> 打组</button>';
+    }
+    btns += '<button data-multi-layout-toggle><i class="fa fa-th-large"></i> 布局</button>';
+    toolbar.innerHTML = btns;
   }
 
   function patchNodeLayer(nodeLayer) {
@@ -2110,8 +2440,9 @@ function downloadImage(imageUrl) {
       const cellW = Number(node.cellWidth) || 512;
       const cellH = Number(node.cellHeight) || 512;
       const ratio = cellW / cellH;
-      // 最长边封顶
-      const maxBound = NODE_DISPLAY_MAX_W - 24; // 减去 padding
+      // 如果用户手动 resize 了宫格节点，用 displayWidth 计算
+      const userW = Number(node.displayWidth);
+      const maxBound = userW ? (userW - 24) : (NODE_DISPLAY_MAX_W - 24);
       let cellDisplayW, cellDisplayH;
       if (ratio >= 1) {
         cellDisplayW = Math.floor(maxBound / n);
@@ -2593,8 +2924,22 @@ function downloadImage(imageUrl) {
     if (__hoveredGridCellEl && __hoveredGridCellEl !== cellEl) {
       __hoveredGridCellEl.classList.remove('drag-over');
     }
+    // 悬浮在 cell 上时缩放节点预览放入效果，离开时恢复
+    if (nodeEl) {
+      if (cellEl) {
+        const cellRect = cellEl.getBoundingClientRect();
+        const nodeW = nodeEl.offsetWidth || NODE_DEFAULT_W;
+        const scaleFactor = Math.min((cellRect.width * 0.9) / (nodeW * STATE.zoom), 1);
+        const n = getNode(nodeId);
+        const dx = n ? (n.x - __dragBaseX) : 0;
+        const dy = n ? (n.y - __dragBaseY) : 0;
+        nodeEl.style.transform = `translate(${dx}px, ${dy}px) scale(${scaleFactor.toFixed(3)})`;
+        nodeEl.style.transformOrigin = 'center center';
+      } else {
+        nodeEl.style.transformOrigin = '';
+      }
+    }
     if (cellEl && cellEl !== __hoveredGridCellEl) {
-      // 只在 grid.editMode 才高亮
       const gid = cellEl.getAttribute('data-grid-node');
       const g = getNode(gid);
       if (g && g.editMode) {
@@ -2645,12 +2990,6 @@ function downloadImage(imageUrl) {
     if (!cell) return;
     const img = await loadImageElement(imgUrl);
     if (!img) { showToast('图片加载失败'); return; }
-    const targetRatio = grid.cellWidth / grid.cellHeight;
-    const fileRatio = img.naturalWidth / img.naturalHeight;
-    if (Math.abs(fileRatio - targetRatio) / targetRatio > 0.02) {
-      showToast(`比例不符 · 需要 ${grid.cellWidth}:${grid.cellHeight}`);
-      return;
-    }
     pushUndoSnapshot();
     cell.imageUrl = imgUrl;
     cell.imageBase64 = extractBase64(imgUrl) || sourceNode.imageBase64 || '';
@@ -3340,7 +3679,7 @@ function downloadImage(imageUrl) {
       if (clone.outputImages && clone.outputImages.length) clone.outputImages = clone.outputImages.map((img) => String(img).length > 2000 ? img : img);
       return clone;
     });
-    return { nodes, edges: STATE.edges.map((e) => ({ ...e })), panX: STATE.panX, panY: STATE.panY, zoom: STATE.zoom };
+    return { nodes, edges: STATE.edges.map((e) => ({ ...e })), groups: STATE.groups.map(g => ({ ...g, nodeIds: g.nodeIds.slice() })), panX: STATE.panX, panY: STATE.panY, zoom: STATE.zoom };
   }
   function focusNodesInView() {
     if (!STATE.nodes.length) return;
@@ -3357,7 +3696,7 @@ function downloadImage(imageUrl) {
     STATE.panX = Math.round((rect.width - contentW * STATE.zoom) / 2 - minX * STATE.zoom);
     STATE.panY = Math.round((rect.height - contentH * STATE.zoom) / 2 - minY * STATE.zoom);
   }
-  function restoreSnapshot(snapshot, options = {}) { STATE.nodes = JSON.parse(JSON.stringify(snapshot?.nodes || [])); STATE.edges = JSON.parse(JSON.stringify(snapshot?.edges || [])); STATE.panX = Number(snapshot?.panX || 0); STATE.panY = Number(snapshot?.panY || 0); STATE.zoom = Number(snapshot?.zoom || 1); migrateAllNodes(); if (options.focus !== false && STATE.nodes.length) focusNodesInView(); }
+  function restoreSnapshot(snapshot, options = {}) { STATE.nodes = JSON.parse(JSON.stringify(snapshot?.nodes || [])); STATE.edges = JSON.parse(JSON.stringify(snapshot?.edges || [])); STATE.groups = JSON.parse(JSON.stringify(snapshot?.groups || [])); STATE.panX = Number(snapshot?.panX || 0); STATE.panY = Number(snapshot?.panY || 0); STATE.zoom = Number(snapshot?.zoom || 1); migrateAllNodes(); if (options.focus !== false && STATE.nodes.length) focusNodesInView(); }
   function mergeAssetIntoLibrary(asset) { STATE.assetLibrary = [normalizeAsset(asset), ...STATE.assetLibrary.filter((item) => item.id !== asset.id)].slice(0, 120); }
   async function insertAssetAsNode(assetId) {
     const asset = STATE.assetLibrary.find((item) => item.id === assetId);
