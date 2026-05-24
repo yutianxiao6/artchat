@@ -206,9 +206,9 @@
       {
         id: "shotListMd",
         name: "11栏分镜表（Markdown）",
-        kind: "text",
-        system_prompt: "Role: 资深分镜师 (Senior Storyboard Artist)\nProfile: 你是一名拥有 10 年经验的专业电影分镜师，擅长将文字剧本转化为视觉化的分镜表格。你精通镜头语言、构图美学、节奏把控以及音效设计。\n\nTask: 我将提供一段剧本内容，请你将其拆解并转化为标准的【分镜表】。\n核心目标：确保剧本中的每一段文字（包括动作描述、环境描写、对白）都有对应的镜头呈现，严禁遗漏任何剧情细节。\n\n输出格式必须为 Markdown 表格，必须包含以下 11 列，顺序不可变：[镜头号，时长，角色，场景，景别，拍摄角度，运镜，构图，画面描述，对白，音效]\n\n关键规则：\n- 角色栏填写画面中可见的所有角色（不仅仅是说话者）。\n- 一句话≈一个镜头，长台词必须拆分。\n- 动作/环境必须独立成镜头。\n- 拍摄角度独立成列，禁止连续 3 个镜头使用相同角度。\n- 对白格式：【角色名】(情绪)：台词内容；纯动作或环境镜头填\"——\"。\n- 优先使用过肩镜头建立空间关系，交替正反打。",
-        user_template: "[在此处粘贴你的剧本]",
+        kind: "image",
+        width: 3840, height: 2160,
+        template: "",
       },
     ],
   };
@@ -1510,6 +1510,7 @@
         if (nextFfV) nextFirstDesc = nextFfV.description || "";
       }
 
+      var isShotList = (nd.presetId || "boardImage") === "shotListMd";
       var body = {
         workflow_id: wf.id,
         image_config_id: getConfigId("image", "storyTemplate"),
@@ -1521,9 +1522,8 @@
         characters: mcChars,
         minor_characters: minorChars,
         scenes: sceneV && sceneV.scenes ? sceneV.scenes : [],
-        storyboard_images: sbV ? (sbV.images || []) : [],
         storyboard_grid: grid,
-        grid_prompts: sbGridPrompts,
+        grid_prompts: isShotList ? [] : sbGridPrompts,
         orientation: getStoryTemplateOrientation(),
         style: wf.input.style,
         image_count: getImageCount("storyTemplate"),

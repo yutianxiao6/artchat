@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException
 from backend.models.schemas import ModelConfig, ConfigTestRequest
 from backend.core.config_handler import load_configs, save_configs, set_cached_strategy, clear_cached_strategy
-from backend.core.request_client import async_http_request, build_endpoint_url
+from backend.core.request_client import async_http_request, build_endpoint_url, is_chat_as_image_host
 
 router = APIRouter(prefix="/api/configs", tags=["配置管理"])
 
@@ -63,6 +63,24 @@ async def test_config_connection(req: ConfigTestRequest):
     }
 
     try:
+        # 白名单 host：所有模型都走 /chat/completions，用 GET /models 做轻量探活
+        if is_chat_as_image_host(req.api_base):
+            print("[测试连接] 白名单 host，使用 /models 探活...")
+            models_url = build_endpoint_url(req.api_base, "/models")
+            try:
+                response = await async_http_request("GET", models_url, headers, None, timeout=60.0)
+                if response.status_code == 200:
+                    print("[测试连接] /models 探活成功")
+                    if req.id and any(c.get("id") == req.id for c in config_list):
+                        set_cached_strategy(req.id, "chat_as_image")
+                    return {"code": 0, "message": "连接测试成功，配置可用（chat-as-image 网关）"}
+                else:
+                    print(f"[测试连接] /models 返回 {response.status_code}")
+                    return {"code": -1, "message": f"连接失败（/models 返回 {response.status_code}），请检查API地址和Key"}
+            except Exception as e:
+                print(f"[测试连接] /models 探活异常: {e}")
+                return {"code": -1, "message": f"连接超时或网络不可达，请检查API地址: {str(e)[:100]}"}
+
         # 1. 先测试聊天模型（如果是聊天或通用）
         if req.config_type in ["chat", "both"]:
             print("[测试连接] 正在测试聊天接口...")

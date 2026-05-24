@@ -202,7 +202,7 @@
       var def = NR.get(step.nodeType);
       if (!def) return;
       if (wf[step.nodeType + "Skip"]) return;
-      var isInputLike = (step.nodeType === "input" || step.nodeType === "fpInput" || step.nodeType === "rcInput");
+      var isInputLike = (step.nodeType === "input" || step.nodeType === "fpInput" || step.nodeType === "rcInput" || step.nodeType === "vrInput");
       html += '<div class="wf-gcol" data-col="' + step.nodeType + '">'
         + '<div class="wf-col-header">' + def.label + '</div>'
         + '<div class="wf-col-body">';
@@ -627,6 +627,14 @@
         html += '<div class="wf-card-text">已生成</div>';
       }
       if (isRunning) html += '<div class="wf-card-loading"><i class="fa fa-spinner fa-spin"></i> 生成中...</div>';
+    } else if (nodeType === "vrVideoPromptReverse") {
+      if (v.full_text) {
+        html += '<div class="wf-card-text" style="font-size:11px;line-height:1.5;white-space:pre-wrap;">' + esc(v.full_text).slice(0, 600) + (v.full_text.length > 600 ? '…' : '') + '</div>';
+        html += '<div class="wf-card-tag">' + v.full_text.length + ' 字 · ' + (v.duration || 0) + 's</div>';
+        html += '<button class="wf-copy-btn" data-copy-vp="' + key + '"><i class="fa fa-copy"></i> 复制全部</button>';
+      } else {
+        html += '<div class="wf-card-empty">未生成</div>';
+      }
     } else if (nodeType.indexOf("rc") === 0) {
       // 二创工作流节点：用节点定义的 getPreview + 通用图片预览
       var def = NR.get(nodeType);
@@ -762,7 +770,7 @@
       "rcStoryboardRemix"
     ].indexOf(nodeType) >= 0;
     // 视觉模型（帧标注、段内选帧、分段审核、二创分镜对话 都需要视觉 LLM）
-    var needsVision = ["rcFrameLabel", "rcRepFrames", "rcSmartSegment", "rcStoryboardOrig", "rcStoryboardRemix", "rcVideoPrompt"].indexOf(nodeType) >= 0;
+    var needsVision = ["rcFrameLabel", "rcRepFrames", "rcSmartSegment", "rcStoryboardOrig", "rcStoryboardRemix", "rcVideoPrompt", "vrVideoPromptReverse"].indexOf(nodeType) >= 0;
     var dirty = false;
     var html = '';
     if (needsVision) {

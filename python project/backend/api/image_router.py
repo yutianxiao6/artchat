@@ -7,7 +7,7 @@ import httpx
 from fastapi import APIRouter, HTTPException, UploadFile, File
 from backend.models.schemas import ImageGenerateRequest, PanoramaGenerateRequest
 from backend.api.config_router import get_config_list
-from backend.core.request_client import async_http_request, split_api_base, base_has_version, build_endpoint_url
+from backend.core.request_client import async_http_request, split_api_base, base_has_version, build_endpoint_url, is_chat_as_image_host
 from backend.core.config_handler import (
     get_cached_strategy, set_cached_strategy, clear_cached_strategy
 )
@@ -82,6 +82,26 @@ STRATEGY_MAP = {s["id"]: s for s in STRATEGIES}
 
 
 # ═══════════════════════════════════════════════════
+#  白名单：所有模型（含图像）都走 /chat/completions，
+#  图片以 markdown ![](url) 形式塞在 choices[0].message.content 里
+# ═══════════════════════════════════════════════════
+
+CHAT_AS_IMAGE_HOSTS = {
+    "aiapi.up.railway.app",
+}
+
+CHAT_AS_IMAGE_STRATEGY = {
+    "id": "chat_as_image",
+    "url_suffix": "/chat/completions",
+    "request_format": "chat_multimodal",
+    "response_format_field": None,
+    "response_type": "chat_markdown",
+    "async_poll": False,
+}
+STRATEGY_MAP["chat_as_image"] = CHAT_AS_IMAGE_STRATEGY
+
+
+# ═══════════════════════════════════════════════════
 #  工具函数
 # ═══════════════════════════════════════════════════
 
@@ -103,11 +123,14 @@ def _strip_image_base64(value: str) -> str:
 
 def _get_applicable_strategies(api_base: str) -> list:
     """根据 api_base 形态决定策略尝试顺序。
+    - 白名单 host（chat-as-image 网关）→ 只返回 [{"id": "chat_as_image", ...}] 哨兵
     - 用户填了完整 endpoint（以 /images/generations 等结尾）→ 只试 standard 策略
     - 用户填了 /vN 结尾 → 只试 standard 策略
     - 其他（裸 host 或自定义路径）→ custom 优先、standard 降级
     standard 策略用 build_endpoint_url 自动补 /v1。
     """
+    if is_chat_as_image_host(api_base):
+        return [CHAT_AS_IMAGE_STRATEGY]
     base, trailing = split_api_base(api_base)
     if trailing or base_has_version(base):
         return [s for s in STRATEGIES if s["url_suffix"]]
@@ -128,7 +151,7 @@ def _build_url(api_base: str, strategy: dict) -> str:
 
 
 def _build_request_data(strategy: dict, model: str, prompt: str, width: int, height: int, n: int,
-                        negative_prompt: str, normalized_images: list) -> dict:
+                        negative_prompt: str, normalized_images: list, quality: str = None) -> dict:
     req_fmt = strategy["request_format"]
     data = {
         "model": model,
@@ -136,6 +159,8 @@ def _build_request_data(strategy: dict, model: str, prompt: str, width: int, hei
         "size": f"{width}x{height}" if width and height else "1024x1024",
         "n": n if n and n > 0 else 1,
     }
+    if quality:
+        data["quality"] = quality
     if strategy["response_format_field"]:
         data["response_format"] = strategy["response_format_field"]
     if negative_prompt:
@@ -322,18 +347,151 @@ async def _try_inpaint_edit(config: dict, headers: dict, prompt: str,
 
 # PLACEHOLDER_TRY_STRATEGY
 
+# ═══════════════════════════════════════════════════
+#  chat-as-image：把 /chat/completions 当图像接口
+#  响应 content 里是 markdown ![](url)，提取 URL 下载为 b64
+# ═══════════════════════════════════════════════════
+
+_MD_IMAGE_RE = re.compile(r"!\[[^\]]*\]\((https?://[^\s)]+)\)")
+_BARE_URL_RE = re.compile(r"https?://[^\s)\"'<>]+\.(?:png|jpe?g|webp|gif|bmp)(?:\?[^\s)\"'<>]*)?", re.IGNORECASE)
+_DATA_URL_RE = re.compile(r"data:image/[a-zA-Z]+;base64,[A-Za-z0-9+/=]+")
+
+
+async def _extract_images_from_chat_content(content: str) -> list:
+    """从 chat content 字符串里提取图片，返回 [{"b64_json": "..."}]"""
+    if not content:
+        return []
+    out = []
+
+    for m in _DATA_URL_RE.findall(content):
+        pure = m.split(";base64,", 1)[1]
+        out.append({"b64_json": pure})
+
+    seen_urls = set()
+    for url in _MD_IMAGE_RE.findall(content):
+        if url not in seen_urls:
+            seen_urls.add(url)
+            b64 = await _download_image_as_b64(url)
+            if b64:
+                out.append({"b64_json": b64})
+
+    if not out:
+        for url in _BARE_URL_RE.findall(content):
+            if url not in seen_urls:
+                seen_urls.add(url)
+                b64 = await _download_image_as_b64(url)
+                if b64:
+                    out.append({"b64_json": b64})
+
+    return out
+
+
+async def _try_chat_as_image(config: dict, headers: dict, prompt: str,
+                             width: int, height: int, n: int,
+                             normalized_images: list) -> list | None:
+    """把 chat/completions 当图像接口调用。失败返回 None；成功返回 [{"b64_json": ...}]"""
+    chat_url = build_endpoint_url(config["api_base"], "/chat/completions")
+    model = config.get("model_name", "")
+
+    text_prompt = prompt or ""
+    if width and height and (width != 1024 or height != 1024):
+        text_prompt = f"{text_prompt} (size: {width}x{height})"
+
+    if normalized_images:
+        user_content = [{"type": "text", "text": text_prompt}]
+        for img in normalized_images[:10]:
+            user_content.append({"type": "image_url", "image_url": {"url": img}})
+        messages = [{"role": "user", "content": user_content}]
+    else:
+        messages = [{"role": "user", "content": text_prompt}]
+
+    request_data = {"model": model, "messages": messages}
+    if n and n > 1:
+        request_data["n"] = n
+
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            print(f"[图片生成] POST {chat_url} | 策略=chat_as_image | prompt={text_prompt[:40]}... (第{attempt+1}次)")
+            response = await async_http_request("POST", chat_url, headers, request_data, timeout=600)
+
+            if response.status_code != 200:
+                print(f"[图片生成] chat_as_image 返回 {response.status_code}: {response.text[:300]}")
+                return None
+
+            try:
+                result = response.json()
+            except Exception:
+                print(f"[图片生成] chat_as_image 响应非JSON")
+                return None
+
+            choices = result.get("choices") or []
+            if not choices:
+                print(f"[图片生成] chat_as_image 无 choices: {str(result)[:200]}")
+                return None
+
+            all_images = []
+            for choice in choices:
+                content = (choice.get("message") or {}).get("content") or ""
+                imgs = await _extract_images_from_chat_content(content)
+                all_images.extend(imgs)
+
+            if not all_images:
+                first_content = (choices[0].get("message") or {}).get("content") or ""
+                print(f"[图片生成] chat_as_image 未提取到图片，content预览: {first_content[:200]}")
+                return None
+
+            print(f"[图片生成] chat_as_image 成功, {len(all_images)} 张图片")
+            return all_images
+        except Exception as e:
+            print(f"[图片生成] chat_as_image 第{attempt+1}次异常: {e}")
+            if attempt < max_retries - 1:
+                wait = 3 * (attempt + 1)
+                print(f"[图片生成] {wait}秒后重试...")
+                await asyncio.sleep(wait)
+            else:
+                traceback.print_exc()
+                return None
+
+
 async def _try_strategy(strategy: dict, config: dict, headers: dict, prompt: str,
                         width: int, height: int, n: int, negative_prompt: str,
                         normalized_images: list) -> list | None:
     """尝试一个策略。每次调用完全独立，不共享任何状态。"""
+    if strategy.get("id") == "chat_as_image":
+        return await _try_chat_as_image(config, headers, prompt, width, height, n, normalized_images)
+
+    model = config.get("model_name", "")
+    is_gpt_image_2 = "gpt-image" in model.lower()
+
+    # gpt-image-2 专属：先 high，失败降 medium
+    quality_attempts = ["high", "medium"] if is_gpt_image_2 else [None]
+
+    for quality in quality_attempts:
+        result = await _try_strategy_once(strategy, config, headers, prompt, width, height, n,
+                                          negative_prompt, normalized_images, quality)
+        if result is not None:
+            return result
+        if is_gpt_image_2 and quality == "high":
+            print(f"[图片生成] gpt-image-2 quality=high 失败，降级为 medium 重试")
+    return None
+
+
+async def _try_strategy_once(strategy: dict, config: dict, headers: dict, prompt: str,
+                             width: int, height: int, n: int, negative_prompt: str,
+                             normalized_images: list, quality: str = None) -> list | None:
+    """单次尝试一个策略+quality组合。"""
+    if strategy.get("id") == "chat_as_image":
+        return await _try_chat_as_image(config, headers, prompt, width, height, n, normalized_images)
     try:
         image_url = _build_url(config["api_base"], strategy)
         request_data = _build_request_data(
             strategy, config["model_name"], prompt, width, height, n,
-            negative_prompt, normalized_images
+            negative_prompt, normalized_images, quality
         )
 
-        print(f"[图片生成] POST {image_url} | 策略={strategy['id']} | prompt={prompt[:40]}...")
+        quality_tag = f" quality={quality}" if quality else ""
+        print(f"[图片生成] POST {image_url} | 策略={strategy['id']}{quality_tag} | prompt={prompt[:40]}...")
         response = await async_http_request("POST", image_url, headers, request_data, timeout=600)
 
         if response.status_code != 200:
@@ -420,12 +578,19 @@ async def generate_image(req: ImageGenerateRequest):
     prompt = req.prompt or ""
     negative_prompt = req.negative_prompt or ""
 
-    # ── 有 mask 时走 /images/edits 局部重绘路径 ──
-    if mask_image and normalized_images:
+    # ── 有 mask 时走 /images/edits 局部重绘路径（白名单 host 不支持） ──
+    if mask_image and normalized_images and not is_chat_as_image_host(config["api_base"]):
         result = await _try_inpaint_edit(config, headers, prompt, width, height, n, normalized_images[0], mask_image)
         if result is not None:
             return {"code": 0, "data": result}
         raise HTTPException(status_code=500, detail="局部重绘失败（edit 接口不可用）")
+
+    # ── 白名单 host 强制走 chat_as_image，跳过缓存和探测 ──
+    if is_chat_as_image_host(config["api_base"]):
+        result = await _try_chat_as_image(config, headers, prompt, width, height, n, normalized_images)
+        if result is not None:
+            return {"code": 0, "data": result}
+        raise HTTPException(status_code=500, detail="图片生成失败（chat-as-image 网关不可用）")
 
     # 1. 查缓存策略
     cached_sid = get_cached_strategy(req.config_id)

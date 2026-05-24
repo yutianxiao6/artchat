@@ -1,6 +1,25 @@
 import re
 import httpx
 from typing import Dict, Any, Tuple
+from urllib.parse import urlparse
+
+
+# ══════════════════════════════════════════════════════════════
+#  白名单：所有模型（含图像）都走 /chat/completions，
+#  图片以 markdown ![](url) 形式塞在 choices[0].message.content 里
+# ══════════════════════════════════════════════════════════════
+
+CHAT_AS_IMAGE_HOSTS = {
+    "aiapi.up.railway.app",
+}
+
+
+def _host_of(api_base: str) -> str:
+    return (urlparse((api_base or "").strip()).netloc or "").lower()
+
+
+def is_chat_as_image_host(api_base: str) -> bool:
+    return _host_of(api_base) in CHAT_AS_IMAGE_HOSTS
 
 
 # ══════════════════════════════════════════════════════════════

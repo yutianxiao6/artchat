@@ -159,10 +159,12 @@ def _batch_dump_by_select(
     video_path: str,
     frame_numbers: List[int],
     output_pattern: str,
+    crop_bottom: float = 0.0,
 ) -> bool:
     """
     一次 ffmpeg 调用，用 select='eq(n,f1)+eq(n,f2)+...' 批量提取指定帧。
     frame_numbers 超过 120 个时返回 False 让调用方降级（filter 过长会超 ffmpeg 限制）。
+    crop_bottom: 裁切底部比例（0=不裁，0.15=裁掉底部15%，用于去字幕水印）
     成功返回 True。
     """
     if not frame_numbers:
@@ -170,7 +172,12 @@ def _batch_dump_by_select(
     if len(frame_numbers) > 120:
         return False
     expr = "+".join(f"eq(n\\,{n})" for n in frame_numbers)
-    vf = f"select='{expr}'"
+    sel = f"select='{expr}'"
+    if crop_bottom > 0:
+        keep = 1.0 - crop_bottom
+        vf = f"crop=iw:ih*{keep:.3f}:0:0,{sel}"
+    else:
+        vf = sel
     cmd = [
         "ffmpeg", "-hide_banner", "-loglevel", "error",
         "-i", video_path,
@@ -187,9 +194,11 @@ def _fallback_dump_by_seek(
     timestamps: List[float],
     output_dir: str,
     naming: str,
+    crop_bottom: float = 0.0,
 ) -> List[int]:
     """
     降级方案：逐个时间戳用双阶段 seek（-ss 粗 + -ss 精）。返回成功写出的 timestamp 索引列表。
+    crop_bottom: 裁切底部比例（0=不裁，0.15=裁掉底部15%）
     """
     ok_idx = []
     for i, ts in enumerate(timestamps):
@@ -201,8 +210,11 @@ def _fallback_dump_by_seek(
             "-ss", f"{pre:.3f}", "-i", video_path,
             "-ss", f"{fine:.3f}",
             "-frames:v", "1", "-q:v", "2",
-            out_path, "-y",
         ]
+        if crop_bottom > 0:
+            keep = 1.0 - crop_bottom
+            cmd.extend(["-vf", f"crop=iw:ih*{keep:.3f}:0:0"])
+        cmd.extend([out_path, "-y"])
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
         if r.returncode == 0 and os.path.isfile(out_path):
             ok_idx.append(i)

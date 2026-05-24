@@ -342,6 +342,7 @@
         chat_config_id: getConfigId("vision", "rcFrameLabel"),
         frames: kfV.frames,
         plot: (wf.input && wf.input.plot) || "",
+        reference: (wf.input && wf.input.reference) || "",
         batch_size: getBatchSize(nd, 6),
         max_concurrent: getConcurrency(wf, nd),
       });
@@ -370,6 +371,8 @@
         var ov = v.overview;
         html += '<div class="wf-detail-section" style="background:rgba(99,102,241,.08);border:1px solid rgba(99,102,241,.25);border-radius:10px;padding:10px 12px;">'
           + '<div class="wf-detail-label" style="color:#818cf8;">全局清单</div>';
+        if (ov.visual_style) html += '<div style="font-size:11px;color:#f9a8d4;margin-bottom:6px;"><b>视觉风格:</b> ' + esc(ov.visual_style) + '</div>';
+        if (ov.plot_outline) html += '<div style="font-size:11px;color:#fbbf24;margin-bottom:6px;"><b>剧情脉络:</b> ' + esc(ov.plot_outline) + '</div>';
         if (ov.narrative) html += '<div style="font-size:12px;margin-bottom:6px;">' + esc(ov.narrative) + '</div>';
         (ov.characters || []).forEach(function (c, ci) {
           html += '<div style="font-size:11px;margin-bottom:2px;"><b>' + esc(c.name || ("人物" + (ci+1))) + '</b>: ' + esc(c.features || "") + '</div>';
@@ -397,6 +400,10 @@
             + errBadge + '</div>'
             + '<div style="font-size:12px;color:#e2e8f0;margin-top:4px;">' + esc(f.content || "") + '</div>'
             + (f.subtitle ? '<div style="font-size:11px;color:#fbbf24;margin-top:2px;">字幕: ' + esc(f.subtitle) + '</div>' : '')
+            + (f.characters_in_frame && f.characters_in_frame.length ? '<div style="font-size:10px;color:#c084fc;margin-top:1px;">人物: ' + esc(Array.isArray(f.characters_in_frame) ? f.characters_in_frame.join(', ') : f.characters_in_frame) + '</div>' : '')
+            + (f.scene_id ? '<div style="font-size:10px;color:#67e8f9;margin-top:1px;">场景: ' + esc(f.scene_id) + '</div>' : '')
+            + (f.style_cue ? '<div style="font-size:10px;color:#f9a8d4;margin-top:1px;">风格: ' + esc(f.style_cue) + '</div>' : '')
+            + (f.emotion ? '<div style="font-size:10px;color:#86efac;margin-top:1px;">情绪: ' + esc(f.emotion) + '</div>' : '')
             + '</div><div style="clear:both;"></div></div>';
         });
         html += '</div>';
@@ -1586,7 +1593,7 @@
       if (!btn) return;
       var engine = window._wfEngine;
       var wf = engine && engine.current();
-      if (!wf || wf.templateId !== "recreate-drama") return;
+      if (!wf || (wf.templateId !== "recreate-drama" && wf.templateId !== "viral-recreate")) return;
       if (!wf.segments || !wf.segments.length) return;
 
       var topNd = (wf.rcStoryboardRemixs || [])[0];
@@ -1623,7 +1630,7 @@
       var engine = window._wfEngine;
       if (!engine) return;
       var wf = engine.current();
-      if (!wf || wf.templateId !== "recreate-drama") return;
+      if (!wf || (wf.templateId !== "recreate-drama" && wf.templateId !== "viral-recreate")) return;
 
       // 对话气泡重试：删除该 user 消息及其后所有消息，
       // 内容回填输入框并触发发送按钮（统一所有二创对话节点）
@@ -1964,7 +1971,7 @@
     document.addEventListener("click", async function (e) {
       var engine = window._wfEngine;
       var wf = engine && engine.current();
-      if (!wf || wf.templateId !== "recreate-drama") return;
+      if (!wf || (wf.templateId !== "recreate-drama" && wf.templateId !== "viral-recreate")) return;
 
       if (e.target.closest && e.target.closest("[data-rc-rewrite-chat-clear]")) {
         var prNode0 = (wf.rcPlotRewrites || [])[0];
@@ -2034,7 +2041,7 @@
       if (e.target && e.target.id === "wf-rc-global-concurrency") {
         var engine = window._wfEngine;
         var wf = engine && engine.current();
-        if (!wf || wf.templateId !== "recreate-drama") return;
+        if (!wf || (wf.templateId !== "recreate-drama" && wf.templateId !== "viral-recreate")) return;
         var val = parseInt(e.target.value);
         if (!isNaN(val) && val > 0) {
           wf.globalConcurrency = Math.min(10, Math.max(1, val));
@@ -2052,7 +2059,7 @@
       if (!e.target.files || !e.target.files[0]) return;
       var engine = window._wfEngine;
       var wf = engine && engine.current();
-      if (!wf || wf.templateId !== "recreate-drama") return;
+      if (!wf || (wf.templateId !== "recreate-drama" && wf.templateId !== "viral-recreate")) return;
 
       var file = e.target.files[0];
       var dataUrl = await new Promise(function (resolve, reject) {
@@ -2106,7 +2113,7 @@
       var file = e.target.files[0];
       var engine = window._wfEngine;
       var wf = engine && engine.current();
-      if (!wf || wf.templateId !== "recreate-drama") return;
+      if (!wf || (wf.templateId !== "recreate-drama" && wf.templateId !== "viral-recreate")) return;
 
       var progEl = document.getElementById("wf-rc-upload-progress");
       var barEl = document.getElementById("wf-rc-upload-bar");
@@ -2176,7 +2183,7 @@
     document.addEventListener("click", async function (e) {
       var engine = window._wfEngine;
       var wf = engine && engine.current();
-      if (!wf || wf.templateId !== "recreate-drama") return;
+      if (!wf || (wf.templateId !== "recreate-drama" && wf.templateId !== "viral-recreate")) return;
 
       // 切换"编辑宫格"状态
       var edBtn = e.target.closest && e.target.closest("[data-rc-sb-edit]");
@@ -2367,7 +2374,7 @@
       if (el.id && el.id.indexOf("wf-rc-remix-chat-input-") === 0) {
         var engine = window._wfEngine;
         var wf = engine && engine.current();
-        if (!wf || wf.templateId !== "recreate-drama") return;
+        if (!wf || (wf.templateId !== "recreate-drama" && wf.templateId !== "viral-recreate")) return;
         var segIdxRaw = el.id.slice("wf-rc-remix-chat-input-".length);
         var nd = _getRemixNd(wf, segIdxRaw);
         if (nd) nd._draftMsg = el.value;
@@ -2378,7 +2385,7 @@
       if (cellPromptAttr !== null && cellPromptAttr !== undefined) {
         var engine = window._wfEngine;
         var wf = engine && engine.current();
-        if (!wf || wf.templateId !== "recreate-drama") return;
+        if (!wf || (wf.templateId !== "recreate-drama" && wf.templateId !== "viral-recreate")) return;
         var segAttr = el.getAttribute("data-seg");
         var nd = _getRemixNd(wf, segAttr);
         if (nd && nd.cellStates) {
@@ -2395,7 +2402,7 @@
       if (editAttr === null) return;
       var engine = window._wfEngine;
       var wf = engine && engine.current();
-      if (!wf || wf.templateId !== "recreate-drama") return;
+      if (!wf || (wf.templateId !== "recreate-drama" && wf.templateId !== "viral-recreate")) return;
       var nd = _getRemixNd(wf, editAttr);
       if (!nd) return;
       nd.editRemix = !!el.checked;
@@ -2409,7 +2416,7 @@
       if (vpAttr === null || vpAttr === undefined) return;
       var engine = window._wfEngine;
       var wf = engine && engine.current();
-      if (!wf || wf.templateId !== "recreate-drama") return;
+      if (!wf || (wf.templateId !== "recreate-drama" && wf.templateId !== "viral-recreate")) return;
       var segIdx = parseInt(vpAttr);
       var seg = (wf.segments || [])[segIdx];
       var nd = seg && ((seg.rcVideoPrompts || [])[0]);
@@ -2425,7 +2432,7 @@
       if (!btn) return;
       var engine = window._wfEngine;
       var wf = engine && engine.current();
-      if (!wf || wf.templateId !== "recreate-drama") return;
+      if (!wf || (wf.templateId !== "recreate-drama" && wf.templateId !== "viral-recreate")) return;
       var nd = _getRemixNd(wf, btn.getAttribute("data-seg"));
       if (!nd) return;
       nd.remixMode = btn.getAttribute("data-rc-remix-mode");
@@ -2440,7 +2447,7 @@
       if (segAttr === null || segAttr === undefined) return;
       var engine = window._wfEngine;
       var wf = engine && engine.current();
-      if (!wf || wf.templateId !== "recreate-drama") return;
+      if (!wf || (wf.templateId !== "recreate-drama" && wf.templateId !== "viral-recreate")) return;
       if (!el.files || !el.files.length) return;
       var nd = _getRemixNd(wf, segAttr);
       if (!nd) return;
@@ -2478,7 +2485,7 @@
       if (cellAttr === null || cellAttr === undefined) return;
       var engine = window._wfEngine;
       var wf = engine && engine.current();
-      if (!wf || wf.templateId !== "recreate-drama") return;
+      if (!wf || (wf.templateId !== "recreate-drama" && wf.templateId !== "viral-recreate")) return;
       if (!el.files || !el.files.length) return;
       var segAttr = el.getAttribute("data-seg");
       var cellIdx = parseInt(cellAttr);
@@ -2519,7 +2526,7 @@
       if (replAttr === null || replAttr === undefined) return;
       var engine = window._wfEngine;
       var wf = engine && engine.current();
-      if (!wf || wf.templateId !== "recreate-drama") return;
+      if (!wf || (wf.templateId !== "recreate-drama" && wf.templateId !== "viral-recreate")) return;
       if (!el.files || !el.files.length) return;
       var segAttr = el.getAttribute("data-seg");
       var cellIdx = parseInt(replAttr);

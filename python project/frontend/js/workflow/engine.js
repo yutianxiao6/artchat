@@ -141,7 +141,7 @@
     };
     var self = this;
     tplPipeline.forEach(function (step) {
-      if (step.nodeType === "input" || step.nodeType === "fpInput" || step.nodeType === "rcInput") return;
+      if (step.nodeType === "input" || step.nodeType === "fpInput" || step.nodeType === "rcInput" || step.nodeType === "vrInput") return;
       if (step.category === "global") {
         wf[step.nodeType + "Count"] = 1;
         wf[step.nodeType + "s"] = [NR.createNodeData()];
@@ -684,6 +684,10 @@
         && (nodeType === "rcFrameLabel" || nodeType === "rcScript" || nodeType === "rcPlotRewrite")) {
       return true;
     }
+    // 爆款复刻工作流：rcFrameLabel 强制启用（反推质量高度依赖逐帧标注），不允许跳过
+    if (wf.templateId === "viral-recreate" && nodeType === "rcFrameLabel") {
+      return false;
+    }
     return false;
   };
 
@@ -718,6 +722,10 @@
     if (nodeType === "rcInput") {
       // 二创输入：需要视频 + 剧情都就位
       return !!(wf.input && wf.input.videoUrl && wf.input.plot);
+    }
+    if (nodeType === "vrInput") {
+      // 爆款复刻输入：只需要视频
+      return !!(wf.input && wf.input.videoUrl);
     }
     if (nodeType === "output" || nodeType === "rcOutput") return true;
     // episodePlan：集数 <= 1 时自动通过（单集不需要拆分），此时直接把 input.plot 作为本集 plot
@@ -759,10 +767,13 @@
     }
 
     switch (nodeType) {
-      case "input": case "fpInput": case "rcInput": break;
+      case "input": case "fpInput": case "rcInput": case "vrInput": break;
       case "episodePlan": addDep("input", null); break;
       case "script": addDep("episodePlan", null); break;
-      case "planCharactersScenes": addDep("script", null); break;
+      case "planCharactersScenes":
+        if (wf.templateId === "viral-recreate") addDep("vrVideoPromptReverse", null);
+        else addDep("script", null);
+        break;
       case "mainCharacters": addDep("planCharactersScenes", null); break;
       case "minorCharacters": addDep("planCharactersScenes", null); break;
       case "scene":
@@ -789,8 +800,18 @@
         break;
       case "videoPrompt":
       case "storyTemplate":
-        addDep("script", null);
-        addDep("planCharactersScenes", null);
+        if (wf.templateId === "viral-recreate") {
+          addDep("vrVideoPromptReverse", null);
+          addDep("planCharactersScenes", null);
+          addDep("mainCharacters", null);
+          if (segIdx !== null && segIdx !== undefined) {
+            addDep("scene", segIdx);
+            addDep("planFrames", segIdx);
+          }
+        } else {
+          addDep("script", null);
+          addDep("planCharactersScenes", null);
+        }
         // storyTemplate 的文本预设（shotListMd）不需要图片类依赖
         var stTextMode = false;
         if (nodeType === "storyTemplate" && segIdx !== null && segIdx !== undefined) {
@@ -801,7 +822,7 @@
             if (stPreset && stPreset.kind === "text") stTextMode = true;
           }
         }
-        if (!stTextMode) {
+        if (!stTextMode && wf.templateId !== "viral-recreate") {
           addDep("mainCharacters", null);
           if (segIdx !== null && segIdx !== undefined) {
             var segNodeTypes = ["minorCharacters", "scene", "planFrames", "firstFrame", "storyboard", "lastFrame"];
@@ -813,9 +834,13 @@
         break;
       // ── 二创工作流 ──
       case "rcKeyframes":
-        addDep("rcInput", null);
+        if (wf.templateId === "viral-recreate") addDep("vrInput", null);
+        else addDep("rcInput", null);
         break;
       case "rcFrameLabel":
+        addDep("rcKeyframes", null);
+        break;
+      case "vrVideoPromptReverse":
         addDep("rcKeyframes", null);
         break;
       case "rcScript":

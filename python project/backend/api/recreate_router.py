@@ -404,17 +404,17 @@ async def extract_keyframes_api(workflow_id: str, body: dict):
     if not video_path:
         raise HTTPException(status_code=400, detail="未找到已上传的视频文件")
 
-    # 算法参数（全部可选）
+    # 算法参数（全部可选，默认值已放宽以减少过滤，保留更多帧）
     params = {
-        "min_scene_threshold": float(body.get("min_scene_threshold", 0.10)),
-        "long_shot_max_gap": float(body.get("long_shot_max_gap", 4.0)),
-        "merge_min_dt": float(body.get("merge_min_dt", 0.4)),
-        "sharpness_min": float(body.get("sharpness_min", 80.0)),
-        "hamming_dedup_threshold": int(body.get("hamming_dedup_threshold", 8)),
-        "luma_lo": float(body.get("luma_lo", 10.0)),
-        "luma_hi": float(body.get("luma_hi", 245.0)),
-        "edge_density_min": float(body.get("edge_density_min", 0.02)),
-        "max_candidates": int(body.get("max_candidates", 300)),
+        "min_scene_threshold": float(body.get("min_scene_threshold", 0.04)),
+        "long_shot_max_gap": float(body.get("long_shot_max_gap", 1.5)),
+        "merge_min_dt": float(body.get("merge_min_dt", 0.2)),
+        "sharpness_min": float(body.get("sharpness_min", 30.0)),
+        "hamming_dedup_threshold": int(body.get("hamming_dedup_threshold", 2)),
+        "luma_lo": float(body.get("luma_lo", 3.0)),
+        "luma_hi": float(body.get("luma_hi", 252.0)),
+        "edge_density_min": float(body.get("edge_density_min", 0.005)),
+        "max_candidates": int(body.get("max_candidates", 1200)),
     }
 
     frames_dir = os.path.join(wf_dir, "keyframes")
@@ -594,63 +594,93 @@ _SHOT_TYPES = ["wide", "medium", "close-up", "over-the-shoulder", "extreme-close
 _TRANSITION_HINTS = ["cut", "fade_in", "fade_out", "cross_dissolve", "match_cut", "none"]
 
 
-async def llm_label_overview(config: dict, representative_images: list, plot: str = "") -> dict:
-    """全局纲要：人物清单 + 场景清单 + 一句话叙事。representative_images 里每个元素是 {b64,label}。"""
+async def llm_label_overview(config: dict, representative_images: list, plot: str = "", reference: str = "") -> dict:
+    """全局纲要：人物清单 + 场景清单 + 视觉风格 + 剧情脉络 + 一句话叙事。representative_images 里每个元素是 {b64,label}。"""
     plot_block = f"\n【原始剧情参考】\n{plot[:1500]}\n" if plot else ""
-    system_prompt = f"""你是一位专业影视分析师，请基于提供的代表帧做一次全局扫描，提取：
-1. characters: 出现的所有人物，每人一条（id/name/features）。features 用稳定外貌描述（发型、服装、体态、年龄、饰物等），避免"红衣男子"这种位置依赖描述
-2. scenes: 所有独立场景地点（id/name/features）
-3. narrative: 整体叙事一句话概括（不超过 60 字）
-{plot_block}
+    reference_block = f"\n【用户参考信息（优先级最高！以下信息以用户描述为准，如有与画面冲突之处以参考信息为准）】\n{reference[:2000]}\n" if reference else ""
+    system_prompt = f"""你是一位专业影视分析师，请基于提供的代表帧做一次全局扫描，提取以下五项：
+
+⚠️ 重要：画面中可能出现的字幕、水印、台标、LOGO 等叠加文字不属于视频内容本身，请完全忽略它们。不要在 features/plot_outline 等任何描述中提及字幕或水印内容。
+
+1. characters（人物清单）：出现的所有人物，每人一条
+   - id: char_1/char_2...
+   - name: 角色名（有剧情参考则用剧中名字，否则用外貌特征概括命名）
+   - features: 详细稳定外貌描述，必须包含：发型+发色、服装颜色+款式+材质、配饰（眼镜/项链/耳环等）、体态（高矮胖瘦）、年龄范围（少年/青年/中年/老年）、妆容浓淡。**禁止使用位置依赖描述**（如"左边的人""穿红衣的"）
+
+2. scenes（场景清单）：所有独立场景地点，每条
+   - id: scene_1/scene_2...
+   - name: 场景名称
+   - features: 详细环境特征，必须包含：空间类型（室内/室外/具体场所）、光线方向与色调（暖/冷/自然光）、关键环境物体（家具/道具/地标）、时间（白天/夜晚/黄昏/黎明）、年代感（现代/复古/古代/未来）
+
+3. visual_style（视觉风格）：整体视觉风格描述，必须包含色调倾向、光影质感（柔和/硬朗/高对比）、画幅比例感知（宽银幕/方形/竖屏）、胶片感或数字感、参考风格流派（如：日系清新/港式霓虹/欧美好莱坞/纪实感），≤80字
+
+4. plot_outline（剧情脉络）：按时间顺序描述剧情发展，包含关键情节转折点和人物关系变化，≤200字
+
+5. narrative（一句话叙事）：≤60字
+{plot_block}{reference_block}
 如果提供了原始剧情参考，人物命名应尽量采用剧情中出现的名字。
 
 只输出 JSON：
 {{
-  "characters": [{{"id":"char_1","name":"角色名","features":"稳定外貌描述"}}],
-  "scenes": [{{"id":"scene_1","name":"场景名","features":"环境特征"}}],
-  "narrative": "一句话叙事"
+  "characters": [{{"id":"char_1","name":"角色名","features":"发型+发色+服装+配饰+体态+年龄+妆容"}}],
+  "scenes": [{{"id":"scene_1","name":"场景名","features":"空间类型+光线+色调+关键物体+时间+年代感"}}],
+  "visual_style": "整体视觉风格描述(≤80字)",
+  "plot_outline": "剧情发展脉络(≤200字)",
+  "narrative": "一句话叙事(≤60字)"
 }}"""
     user_text = f"共 {len(representative_images)} 张代表帧，请生成全局清单。"
-    return await _call_llm_vision_json(config, system_prompt, user_text, representative_images, max_tokens=6000)
+    return await _call_llm_vision_json(config, system_prompt, user_text, representative_images, max_tokens=8000)
 
 
-async def llm_label_batch(config: dict, batch: list, overview: dict, plot: str = "") -> dict:
+async def llm_label_batch(config: dict, batch: list, overview: dict, plot: str = "", reference: str = "") -> dict:
     """单批帧标注。batch 每项 {b64,label,index,timestamp}。
-    返回：{frames:[...], camera_summary:"本批运镜摘要", script_fragment:"本批剧情片段"}
+    返回：{frames:[...], camera_summary, script_fragment}
     """
     overview_text = json.dumps(overview, ensure_ascii=False, indent=2)
     plot_block = f"\n【原始剧情参考（用于理解画面语境）】\n{plot[:1500]}\n" if plot else ""
-    system_prompt = f"""你是一位专业影视分析师。全局清单如下（标注务必对齐）：
+    reference_block = f"\n【用户参考信息（优先级最高！以下信息以用户描述为准，如有与画面冲突之处以参考信息为准——例如用户说某角色是丧尸/机器人/非人类，则以用户说的为准进行标注）】\n{reference[:2000]}\n" if reference else ""
+    system_prompt = f"""你是一位专业影视分析师。全局清单如下（标注务必对齐，特别是人物 ID 和场景 ID）：
 
 【全局清单】
 {overview_text}
-{plot_block}
-请处理本批连续的 {len(batch)} 张关键帧。输出两部分：
+{plot_block}{reference_block}
+⚠️ 重要：画面中可能出现的字幕、水印、台标、LOGO 等叠加文字不属于视频内容本身，请完全忽略它们。content 字段描述的是画面内容，不要描述字幕/水印文字。subtitle 字段仅记录画面中角色的对话文本（不含字幕本身的位置/样式描述），无对话则留空。
 
-1) frames：逐帧结构化标注
+请处理本批连续的 {len(batch)} 张关键帧。输出三部分：
+
+1) frames：逐帧结构化标注，每帧包含以下字段：
    - shot_type：{"|".join(_SHOT_TYPES)}
    - transition_hint：{"|".join(_TRANSITION_HINTS)}（只在画面有明显转场才用非 none 值）
    - quality：clear | motion_blur | uncertain
-   - content：一句话画面描述（≤40 字，主体 + 动作 + 情绪）
-   - subtitle：画面中字幕或推测对白（无则空串 ""）
+   - content：详细画面描述（≤120 字），必须精确描述空间位置与构图：前景/中景/后景各有什么物体、主体在画面位置（左/右/中央/偏上/偏下）、焦点对准什么（特写/清晰）、什么被虚化（景深效果）、各物体的空间关系（前后遮挡/并列/远近）、光源方向与色调、角色姿势体态，加上主体人物（姓名对应 overview）+ 动作 + 表情 + 场景环境
+   - subtitle：画面中字幕或推测对白，格式为「角色名」"台词内容"（语气：平静/激动/悲伤/愤怒/喜悦等）。无对话则空串 ""
+   - characters_in_frame：该帧出现的人物 ID 数组（对应 overview 的 characters，如 ["char_1","char_2"]），无人物则空数组 []
+   - scene_id：该帧对应的场景 ID（对应 overview 的 scenes，如 "scene_1"）
+   - style_cue：该帧视觉风格关键词（光线方向+色调+质感，如"暖黄侧光+胶片颗粒感""冷蓝顶光+数字高清"），≤25字
+   - emotion：该帧整体情绪/氛围（如"紧张不安""温馨甜蜜""悬疑压抑""轻松欢快"），≤20字
 
 2) camera_summary：综合本批连续帧判断的运镜摘要（≤60 字），描述镜头运动与切换。
-   例："起幅中景切特写，镜头缓慢推近人物面部；末尾切到对角线角度中景"；
    涉及运镜动作：推/拉/摇/移/跟/升降/变焦/静止，镜头切换：cut/dissolve/fade 等。
 
-3) script_fragment：本批对应的剧情片段（连贯叙事，50~120 字），整合画面动作+字幕对白+情绪，为后续"剧本演绎"节点提供原料。
+3) script_fragment：本批对应的剧情片段（连贯叙事，80~200 字），必须整合：人物动作 + 对白内容 + 情绪变化 + 场景切换，为后续"剧本演绎"提供完整原料。
 
 特别说明：送入的图片顺序与下方"原始 index 列表"顺序**严格一致**。请**严格按照图片顺序**输出 frames，**不要改变顺序**，index 字段也按此顺序回填原始视频帧序号。
 
 只输出 JSON：
 {{
-  "frames":[{{"index":0,"shot_type":"medium","transition_hint":"none","content":"...","subtitle":"","quality":"clear"}}],
-  "camera_summary":"本批运镜综述",
-  "script_fragment":"本批剧情叙事片段"
+  "frames":[{{
+    "index":0,"shot_type":"medium","transition_hint":"none","quality":"clear",
+    "content":"≤80字详细画面描述",
+    "subtitle":"「角色名」\\"台词\\"（语气）",
+    "characters_in_frame":["char_1"],"scene_id":"scene_1",
+    "style_cue":"光线+色调+质感(≤25字)","emotion":"情绪氛围(≤20字)"
+  }}],
+  "camera_summary":"本批运镜综述(≤60字)",
+  "script_fragment":"本批剧情叙事片段(80~200字)"
 }}"""
     index_list = ", ".join(str(img["index"]) for img in batch)
-    user_text = f"本批共 {len(batch)} 张帧，**按送入顺序**对应的原始 index 序列为：{index_list}。请严格按此顺序逐帧标注，并补出本批的运镜摘要和剧情片段。"
-    return await _call_llm_vision_json(config, system_prompt, user_text, batch, max_tokens=10000)
+    user_text = f"本批共 {len(batch)} 张帧，**按送入顺序**对应的原始 index 序列为：{index_list}。请严格按此顺序逐帧标注，每帧都要填写 characters_in_frame/scene_id/style_cue/emotion，并补出本批的运镜摘要和剧情片段。"
+    return await _call_llm_vision_json(config, system_prompt, user_text, batch, max_tokens=16000)
 
 
 @router.post("/generate/frame-label")
@@ -685,6 +715,7 @@ async def gen_frame_label(body: dict):
     max_concurrent = max(1, int(body.get("max_concurrent", 3)))
     skip_overview = bool(body.get("skip_overview", False))
     plot = (body.get("plot") or "").strip()
+    reference = (body.get("reference") or "").strip()
     max_retries = max(0, int(body.get("max_retries", 2)))
 
     # 加载图片 base64
@@ -719,12 +750,12 @@ async def gen_frame_label(body: dict):
             overview_imgs = images[:12]
         try:
             overview = await _retry_async(
-                lambda: llm_label_overview(config, overview_imgs, plot=plot),
+                lambda: llm_label_overview(config, overview_imgs, plot=plot, reference=reference),
                 max_retries=max_retries, label="frame-label overview",
             )
         except Exception as e:
             print(f"[frame-label] overview 最终失败，继续分批: {e}")
-            overview = {"characters": [], "scenes": [], "narrative": ""}
+            overview = {"characters": [], "scenes": [], "narrative": "", "visual_style": "", "plot_outline": ""}
 
     # 分批并发标注
     batches = [images[s:s + batch_size] for s in range(0, len(images), batch_size)]
@@ -735,7 +766,7 @@ async def gen_frame_label(body: dict):
             try:
                 batch_label = f"frame-label batch idx={batch[0]['index']}~{batch[-1]['index']}"
                 r = await _retry_async(
-                    lambda: llm_label_batch(config, batch, overview, plot=plot),
+                    lambda: llm_label_batch(config, batch, overview, plot=plot, reference=reference),
                     max_retries=max_retries, label=batch_label,
                 )
                 # 强制按顺序回填 index（不信任 LLM 填的 index 字段）
@@ -766,6 +797,8 @@ async def gen_frame_label(body: dict):
                         "index": img["index"], "timestamp": img["timestamp"],
                         "shot_type": "medium", "transition_hint": "none",
                         "content": "", "subtitle": "",
+                        "characters_in_frame": [], "scene_id": "",
+                        "style_cue": "", "emotion": "",
                         "quality": "uncertain", "error": str(e)[:200],
                     } for img in batch],
                     "batch_meta": {
@@ -796,8 +829,12 @@ async def gen_frame_label(body: dict):
             f["transition_hint"] = "none"
         if f.get("quality") not in ("clear", "motion_blur", "uncertain"):
             f["quality"] = "uncertain"
-        f["content"] = (f.get("content") or "")[:80]
-        f["subtitle"] = f.get("subtitle") or ""
+        f["content"] = (f.get("content") or "")[:200]
+        f["subtitle"] = (f.get("subtitle") or "")[:200]
+        f["characters_in_frame"] = f.get("characters_in_frame") or []
+        f["scene_id"] = (f.get("scene_id") or "")[:50]
+        f["style_cue"] = (f.get("style_cue") or "")[:50]
+        f["emotion"] = (f.get("emotion") or "")[:30]
 
     all_frames.sort(key=lambda x: x.get("index", 0))
     batch_metas.sort(key=lambda x: x.get("start_index", 0))
@@ -3566,3 +3603,533 @@ async def gen_rc_video_prompt(body: dict):
 # ═══════════════════════════════════════════════════
 #  画面生成路由已移除（rc-video-prompt 是终点）
 # ═══════════════════════════════════════════════════
+
+
+# ═══════════════════════════════════════════════════
+#  反推视频提示词（viral-recreate 模板专用）
+#  策略：分批 vision LLM 输出结构化 JSON → text LLM 合成最终 full_text
+# ═══════════════════════════════════════════════════
+
+async def _reverse_analyze_batch(config: dict, batch_images: list, batch_meta: list, batch_idx: int, total_batches: int, mode: str, overview: dict = None, reference: str = "") -> dict:
+    """
+    分批精读关键帧，输出结构化 JSON。
+    batch_images: [{b64,label}]
+    batch_meta:   [{index,timestamp,shot_type,transition_hint,content,subtitle,characters_in_frame?,scene_id?,style_cue?,emotion?}]
+    mode: 'replica'（复刻档：严格画面）| 'replace'（替换档：抽象占位）
+    overview: 来自 frame_labels.json 的全局纲要（含 characters/scenes/visual_style/plot_outline）
+    reference: 用户提供的参考信息（优先级最高）
+    """
+    overview = overview or {}
+    overview_text = json.dumps(overview, ensure_ascii=False, indent=2)
+    reference_block = f"\n【用户参考信息（优先级最高！以下信息以用户描述为准，如有与画面冲突之处以参考信息为准）】\n{reference[:2000]}\n" if reference else ""
+    appearance_rule = (
+        "严格描述人物外观（发型、发色、服装颜色与款式、配饰、年龄段、体态、表情、妆容），与原片画面完全一致；地点写出具体环境特征（招牌文字保留原文、装修风格、光源类型）。"
+        if mode == "replica"
+        else
+        "用抽象占位（男主角/女主角/反派/夜晚街道/老旧公寓等）描述人物与地点，不要锁死姓名地名，但仍要保留可识别的外观与环境特征。"
+    )
+    style_rule = "必须在 style_cue 字段写出本批的视觉风格（如：港式霓虹、4:3复古胶片、电影感写实），不可留空。"
+    subtitle_rule = "如果某帧标注里有 subtitle 字段，必须原文写入对应镜头的 dialogue（用引号），并标明说话人占位（男主角/女主角等）与语气。"
+
+    meta_text_lines = []
+    for m in batch_meta:
+        line = f"#{m['index']} @{m['timestamp']:.2f}s"
+        if m.get("shot_type"):
+            line += f" 景别:{m['shot_type']}"
+        if m.get("transition_hint") and m['transition_hint'] != "none":
+            line += f" 转场:{m['transition_hint']}"
+        if m.get("content"):
+            line += f" 内容:{m['content']}"
+        if m.get("subtitle"):
+            line += f" 字幕:{m['subtitle']}"
+        if m.get("characters_in_frame"):
+            chars = m['characters_in_frame']
+            line += f" 人物:{','.join(chars) if isinstance(chars, list) else str(chars)}"
+        if m.get("scene_id"):
+            line += f" 场景:{m['scene_id']}"
+        if m.get("style_cue"):
+            line += f" 风格:{m['style_cue']}"
+        if m.get("emotion"):
+            line += f" 情绪:{m['emotion']}"
+        meta_text_lines.append(line)
+    meta_text = "\n".join(meta_text_lines)
+
+    system_prompt = f"""你是顶级影视画面分析师。本批是视频的第 {batch_idx+1}/{total_batches} 批关键帧（共 {len(batch_images)} 张，按时间顺序）。
+你的任务：逐帧精确分析每张图，输出结构化 JSON，作为后续合成最终视频提示词的原料。
+
+【全局纲要（人物/场景/风格/剧情参考）】
+{overview_text}
+{reference_block}
+
+⚠️ 重要：画面中可能出现的字幕、水印、台标、LOGO 等叠加文字不属于视频内容本身，请完全忽略它们。appearance/action 等字段只描述画面中的实际人物和场景，不要描述任何叠加在画面上的文字信息。
+
+核心要求：
+1) {appearance_rule}
+2) {style_rule}
+3) {subtitle_rule}
+4) 严格按图片顺序输出 shots 数组，长度必须等于送入的图片张数 {len(batch_images)}。
+5) 每个 shot 推断 start/end（基于送入帧的 timestamp，把"本镜头从这一帧持续到下一帧"作为时间区间，最后一帧持续到批末尾帧时间+1秒）。
+6) camera 必须包含运镜方式（推/拉/摇/移/跟/升/降/环绕/手持/静止）+ 速度（缓慢/匀速/快速）+ 景别（特写/近景/中景/全景/远景）+ 跟随主体（如"跟随手枪移动""跟随人物面部"）。
+7) character_ids：该镜头出现的人物 ID 列表（对应全局纲要的 characters.id），无则空数组。
+8) scene_id：该镜头对应的场景 ID（对应全局纲要的 scenes.id）。
+9) composition 字段必须写出精确的空间构图（≤80字）：前景/中景/后景元素分别是什么、主体在画面中位置、焦点对准何物、哪些区域虚化模糊、物体间的前后遮挡与空间关系、画面留白或对称等构图手法。
+10) appearance 字段必须写出人物外观 + 场景环境的精确描述（≤150字），包括：人物发型发色、服装款式颜色材质、配饰、表情妆容、体态姿势；场景光线方向与色调、关键物体及其位置。
+11) action 字段必须写出精确的动作描述（≤120字）：人物具体动作（不可泛写"站着""走着"）、肢体姿势变化、表情变化、与物体的交互方式（如"手指拨动枪身""手腕下压将枪插入枪套"）、运动方向。
+
+只输出 JSON：
+{{{{
+  "shots": [
+    {{{{
+      "frame_index": 整数（与送入帧的 index 对应）,
+      "start": 数字（秒，保留1位小数）,
+      "end": 数字,
+      "shot_type": "close-up|medium|wide|extreme-close-up|over-the-shoulder|POV|insert",
+      "camera": "运镜+速度+景别 综合描述（≤30字）",
+      "composition": "精确空间构图（前景/中景/后景元素、主体位置、焦点、虚化区域、空间关系、构图手法，≤80字）",
+      "character_ids": ["char_1"],
+      "scene_id": "scene_1",
+      "appearance": "人物外观/场景环境的精确描述（≤150字，含人物发型发色服装配饰姿势+场景光线色调关键物体位置）",
+      "action": "人物精确动作、肢体姿势变化、表情变化、与物体交互方式、运动方向（≤120字）",
+      "dialogue": "如本帧有字幕/对白，按字幕规则写入；无则空串",
+      "transition": "与下一帧的转场（cut/dissolve/fade/match_cut/none）",
+      "style_cue": "该帧体现的视觉风格关键词（光线/色调/质感，≤25字，不可留空）"
+    }}}}
+  ]
+}}}}"""
+    user_text = f"本批 {len(batch_images)} 张帧的元数据（含人物/场景/风格标注）：\n{meta_text}\n\n请按顺序逐帧输出 shots，frame_index 必须按上述顺序回填原始 index，character_ids 和 scene_id 必须对齐全局纲要。"
+    return await _call_llm_vision_json(config, system_prompt, user_text, batch_images, max_tokens=12000, timeout=240.0)
+
+
+async def _reverse_synthesize(text_config: dict, all_shots: list, duration: int, mode: str, user_plot: str, user_style: str, avg_shot_sec: float, overview: dict = None, reference: str = "") -> dict:
+    """第二遍：用 text LLM 把所有批的 shots 合成为分镜为主的视频提示词。
+    输出：简短开头（风格+人物）→ 逐镜详细描述（镜头运动+转场+空间构图+人物外观/动作/表情/位置+场景+对白），≤3000字。"""
+    overview = overview or {}
+    appearance_rule = (
+        "严格保留各 shot 的 appearance（外观/环境）描述，不要抽象化。"
+        if mode == "replica"
+        else
+        "将各 shot 的 appearance 中的具体姓名/地名替换为抽象占位（男主角/女主角/反派/夜晚街道等），但保留可识别的外观与环境特征。"
+    )
+
+    shots_json = json.dumps(all_shots, ensure_ascii=False, indent=2)
+    plot_block = f"\n【用户提供的原剧情参考】\n{user_plot[:1500]}\n" if user_plot else ""
+    style_block = f"\n【用户偏好风格】\n{user_style[:200]}\n" if user_style else ""
+    reference_block = f"\n【用户参考信息（优先级最高！以用户描述为准）】\n{reference[:2000]}\n" if reference else ""
+
+    # 从 overview 提取人物/场景/风格参考（简要）
+    overview_chars = overview.get("characters", [])
+    overview_scenes = overview.get("scenes", [])
+    overview_style = overview.get("visual_style", "")
+
+    # 构建人物快查表
+    char_lookup = ""
+    if overview_chars:
+        char_lines = ["\n【人物速查（来自帧标注）】"]
+        for c in overview_chars:
+            char_lines.append(f"{c.get('id','')} {c.get('name','')}: {c.get('features','')}")
+        char_lookup = "\n".join(char_lines)
+
+    scene_lookup = ""
+    if overview_scenes:
+        scene_lines = ["\n【场景速查（来自帧标注）】"]
+        for s in overview_scenes:
+            scene_lines.append(f"{s.get('id','')} {s.get('name','')}: {s.get('features','')}")
+        scene_lookup = "\n".join(scene_lines)
+
+    style_ref = f"\n【全局视觉风格】{overview_style}" if overview_style else ""
+
+    system_prompt = f"""你是AI视频生成提示词专家。已有一份逐帧精读的结构化 JSON（shots），请把它合成为一份可直接复制到视频生成模型的完整提示词。
+
+{char_lookup}{scene_lookup}{style_ref}{reference_block}{plot_block}{style_block}
+
+⚠️ 重要：不要在最终输出中描述任何字幕、水印、台标、LOGO 等叠加元素。shots 中的 dialogue 字段是角色对白内容（用于视频配音），不是画面叠字。分镜描述的7要素中不要出现"画面底部有字幕""水印在右上角"之类的描述。
+
+## 输出格式（四个段落，按顺序输出，不可省略任何段落）
+
+### 视觉风格
+综合 overview 的 visual_style 和各 shot 的 style_cue，写出整体视觉风格：色调倾向、光影质感、画幅比例、节奏（{'快切' if avg_shot_sec < 1.2 else ('中速' if avg_shot_sec < 2.5 else '长镜头')}）、参考风格流派。≤80字，一段写完。
+
+### 人物介绍
+列出所有出现的人物，每人一行（- 角色名：发型发色、服装颜色款式材质、配饰、体态、年龄、妆容），每人 ≤60字。从 overview 的 characters 和 shot 的 appearance/character_ids 提取。{appearance_rule}
+
+### 场景介绍
+列出所有出现的场景，每个场景一行（- 场景名：空间类型、光线方向与色调、关键物体、时间、年代感），每个 ≤50字。从 overview 的 scenes 和 shot 的 scene_id/appearance 提取。
+
+### 分镜描述
+这是主体内容，每个镜头单独一段，格式：【start-end s | 镜头运动 + 景别 | 转场】详细描述。转场为 cut 时可省略。
+
+每条镜头的描述（80-180字）必须把构图空间和动作过程写清楚，格式参照示例：
+【9-11 s | 跟随手枪移动 特写】9-9.6 s 镜头从枪口特写开始，画面焦点锁定左轮手枪，枪口居左前景，机器人居右虚化，面部保持绿色笑脸。9.6-10.4 s 镜头全程跟随左轮手枪位置移动，随着机器人手指熟练拨动枪身，镜头同步小幅横移和下移，紧贴旋转的转轮、枪管与金属反光，清楚呈现左轮手枪快速旋转的轨迹。10.4-11 s 镜头继续跟随枪的下落动作，从胸前特写移动到腰间近景，机器人手腕平稳下压，将仍在轻微旋转的左轮手枪精准插入腰间枪套，动作干净利落完成收枪。
+
+每条描述必须包含以下全部要素，不可遗漏：
+1) **空间构图**（最重要！）：前景/中景/后景分别有什么、主体在画面什么位置（左/右/中央/偏上/偏下）、焦点（清晰区域）对准什么、景深虚化了什么、物体间的前后遮挡与空间关系
+2) **人物外观**：发型发色、服装颜色款式材质、配饰（参考 character_ids → 人物介绍），每个镜头都必须写出，不可省略
+3) **精确动作**：具体动作过程、肢体姿势变化、表情变化、与物体的交互方式（手指怎么动、手腕怎么转等细节），不可泛写"站着""走着"
+4) **场景环境**：光线方向与色调、关键物体及其位置、空间类型（参考 scene_id → 场景介绍）
+5) **镜头运动**：运镜方式（推/拉/摇/移/跟/环绕）+ 速度（缓慢/匀速/快速）+ 景别（特写/近景/中景/全景），从 shot.camera 和 shot.composition 提取
+6) **转场**：如 shot.transition 非 none/cut 则写明（淡入/淡出/叠化），cut 省略
+7) **对白**：如 shot.dialogue 非空，用引号写入并注明说话人
+
+如一个镜头内镜头运动发生明显变化（从特写切到中景、从静止转为跟随等），可拆分为 2-3 个子时间段分别描述（如示例中的 9-9.6s / 9.6-10.4s / 10.4-11s），每个子段独立写出构图和动作变化。
+
+时间码规则：整数秒起始，直接取 shot 的 start/end。最后一个镜头结束 = {duration}s，时间从 0 连续覆盖到 {duration}s，严禁跳时间、严禁重叠。
+
+**核心要求**：
+- 每条镜头 80-180字，**严格基于 shot 的 composition/appearance/action/camera/dialogue 字段**展开，禁止凭空编造
+- 每个镜头独立完整描述，**严禁使用「同上」「如前所述」「同前」等任何省略词** — 视频模型每次独立生成，每镜都需要完整的空间构图 + 人物外观上下文
+- 对白精确复制 shot.dialogue，无对白则不提
+- **整篇 full_text 总字数 ≤ 3000 字**
+
+只输出 JSON：{{"full_text": "视觉风格\\n\\n人物介绍\\n\\n场景介绍\\n\\n分镜描述"}}"""
+
+    user_prompt = f"逐帧 JSON（{len(all_shots)} 个镜头，总时长 {duration} 秒）：\n{shots_json}\n\n按四个段落（视觉风格→人物介绍→场景介绍→分镜描述）输出。人物/场景简要即可，分镜描述是主体，每条 80-180字、构图空间+人物外观+动作+场景+运镜全部齐全、禁止省略。整篇 ≤3000 字。"
+    return await _call_llm_json(text_config, system_prompt, user_prompt, max_tokens=12000, timeout=300.0)
+
+
+@router.post("/generate/reverse-video-prompt")
+async def gen_reverse_video_prompt(body: dict):
+    """
+    分批精读 + 合成。
+    body: {
+      workflow_id, chat_config_id,
+      duration: int,
+      user_plot?: str, user_style?: str,
+      mode?: 'replica'|'replace' (默认 replica)
+      batch_size?: int = 8
+      max_concurrent?: int = 3
+      max_retries?: int = 1
+    }
+    """
+    config = _get_config_by_id(body.get("chat_config_id", "")) or _get_first_config("chat")
+    if not config:
+        raise HTTPException(status_code=400, detail="未找到聊天配置")
+
+    wf_id = body.get("workflow_id", "")
+    if not wf_id:
+        raise HTTPException(status_code=400, detail="缺少 workflow_id")
+    wf_dir = get_workflow_dir(wf_id)
+
+    kf_path = os.path.join(wf_dir, "keyframes.json")
+    if not os.path.isfile(kf_path):
+        raise HTTPException(status_code=400, detail="未找到 keyframes.json，请先提取关键帧")
+    try:
+        kf = json.load(open(kf_path, "r", encoding="utf-8")).get("frames", [])
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"读取关键帧失败: {e}")
+    if not kf:
+        raise HTTPException(status_code=400, detail="关键帧为空")
+
+    # 帧标注（可选；强烈建议有）
+    fl_path = os.path.join(wf_dir, "frame_labels.json")
+    frame_labels = []
+    overview: dict = {}
+    if os.path.isfile(fl_path):
+        try:
+            fl_data = json.load(open(fl_path, "r", encoding="utf-8"))
+            frame_labels = fl_data.get("frames", []) or []
+            overview = fl_data.get("overview") or {}
+        except Exception:
+            frame_labels = []
+    label_by_idx = {f.get("index"): f for f in frame_labels}
+
+    duration = max(1, int(body.get("duration", 0) or 0))
+    user_plot = (body.get("user_plot") or "").strip()
+    user_style = (body.get("user_style") or "").strip()
+    user_reference = (body.get("user_reference") or "").strip()
+    mode = body.get("mode") or "replica"
+    if mode not in ("replica", "replace"):
+        mode = "replica"
+    batch_size = max(4, min(int(body.get("batch_size", 8) or 8), 12))
+    max_concurrent = max(1, min(int(body.get("max_concurrent", 3) or 3), 6))
+    max_retries = max(0, int(body.get("max_retries", 1) or 1))
+
+    # 全量关键帧（不做稀释采样）
+    all_frames = [f for f in kf if f.get("url")]
+
+    # 平均镜头时长（用于节奏感）
+    if len(all_frames) > 1:
+        ts_list = [f.get("timestamp", 0.0) for f in all_frames]
+        gaps = [max(0.05, ts_list[i+1] - ts_list[i]) for i in range(len(ts_list) - 1)]
+        avg_shot_sec = sum(gaps) / len(gaps)
+    else:
+        avg_shot_sec = float(duration)
+
+    # 切批
+    batches = []
+    for i in range(0, len(all_frames), batch_size):
+        batches.append(all_frames[i:i + batch_size])
+    if not batches:
+        raise HTTPException(status_code=400, detail="无可用关键帧")
+
+    semaphore = asyncio.Semaphore(max_concurrent)
+    last_ts_overall = all_frames[-1].get("timestamp", duration)
+
+    async def _run_batch(bi: int, batch_frames: list):
+        async with semaphore:
+            imgs = []
+            metas = []
+            for j, f in enumerate(batch_frames):
+                b64 = _load_ref_image_b64(f.get("url", ""))
+                if not b64:
+                    continue
+                idx = f.get("index")
+                ts = f.get("timestamp", 0.0)
+                lbl = label_by_idx.get(idx) or {}
+                meta = {
+                    "index": idx, "timestamp": ts,
+                    "shot_type": lbl.get("shot_type", ""),
+                    "transition_hint": lbl.get("transition_hint", ""),
+                    "content": lbl.get("content", ""),
+                    "subtitle": lbl.get("subtitle", ""),
+                    "characters_in_frame": lbl.get("characters_in_frame", []),
+                    "scene_id": lbl.get("scene_id", ""),
+                    "style_cue": lbl.get("style_cue", ""),
+                    "emotion": lbl.get("emotion", ""),
+                }
+                parts = [f"#{idx} @{ts:.2f}s"]
+                if meta["shot_type"]:
+                    parts.append(f"景别:{meta['shot_type']}")
+                if meta["subtitle"]:
+                    parts.append(f"字幕:{meta['subtitle']}")
+                if meta["characters_in_frame"]:
+                    chars = meta['characters_in_frame']
+                    parts.append(f"人物:{','.join(chars) if isinstance(chars, list) else str(chars)}")
+                imgs.append({"b64": b64, "label": " | ".join(parts)})
+                metas.append(meta)
+            if not imgs:
+                return {"shots": []}
+            return await _retry_async(
+                lambda: _reverse_analyze_batch(config, imgs, metas, bi, len(batches), mode, overview, user_reference),
+                max_retries=max_retries, label=f"reverse-batch[{bi}]",
+            )
+
+    try:
+        batch_results = await asyncio.gather(*[_run_batch(bi, b) for bi, b in enumerate(batches)])
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"分批精读失败: {e}")
+
+    # 合并所有 shots 并按 start 排序
+    all_shots = []
+    for r in batch_results:
+        for s in (r.get("shots") or []):
+            all_shots.append(s)
+    all_shots.sort(key=lambda s: float(s.get("start", 0)))
+
+    if not all_shots:
+        raise HTTPException(status_code=500, detail="分批精读未产出任何镜头")
+
+    # 时间码后处理：取整数秒 + 镜头时长在 [2,3] 秒内 + 最后一镜结束=duration
+    def _fmt(s):
+        return int(round(float(s)))
+    for s in all_shots:
+        s["start"] = _fmt(s.get("start", 0))
+        s["end"] = _fmt(s.get("end", 0))
+        if s["end"] <= s["start"]:
+            s["end"] = s["start"] + 1
+
+    MIN_SHOT = 2
+    MAX_SHOT = 3
+
+    # 第一步：合并 <2s 的镜头到上一条（动作连写）
+    merged = []
+    for s in all_shots:
+        if not merged:
+            merged.append(dict(s))
+            continue
+        prev = merged[-1]
+        prev_dur = prev["end"] - prev["start"]
+        cur_dur = s["end"] - s["start"]
+        if prev_dur < MIN_SHOT or cur_dur < MIN_SHOT:
+            new_dur = s["end"] - prev["start"]
+            if new_dur <= MAX_SHOT:
+                prev["end"] = s["end"]
+                pa = (prev.get("action") or "").strip()
+                ca = (s.get("action") or "").strip()
+                if ca and ca != pa:
+                    prev["action"] = (pa + ("，然后" if pa else "") + ca).strip("，")
+                pd = (prev.get("dialogue") or "").strip()
+                cd = (s.get("dialogue") or "").strip()
+                if cd and cd != pd:
+                    prev["dialogue"] = (pd + " " + cd).strip()
+                prev["transition"] = s.get("transition", prev.get("transition", "cut"))
+                continue
+        merged.append(dict(s))
+
+    # 第二步：拆分 >3s 的镜头，每段 2-3 秒
+    split = []
+    for s in merged:
+        dur = s["end"] - s["start"]
+        if dur <= MAX_SHOT:
+            split.append(s)
+            continue
+        cur = s["start"]
+        idx = 0
+        while cur < s["end"]:
+            remain = s["end"] - cur
+            if remain <= MAX_SHOT:
+                seg_end = s["end"]
+            elif remain <= MAX_SHOT + MIN_SHOT:
+                seg_end = cur + (remain // 2 if remain % 2 == 0 else remain // 2 + 1)
+            else:
+                seg_end = cur + MAX_SHOT
+            seg = dict(s)
+            seg["start"] = cur
+            seg["end"] = seg_end
+            if idx > 0:
+                base_action = (s.get("action") or "").strip()
+                seg["action"] = ("接着" + base_action) if base_action else ""
+            split.append(seg)
+            cur = seg_end
+            idx += 1
+
+    # 第三步：末镜结束对齐 duration
+    if split:
+        last = split[-1]
+        if last["end"] != duration:
+            last["end"] = duration
+        last_dur = last["end"] - last["start"]
+        if last_dur < MIN_SHOT and len(split) > 1:
+            # 把末镜并到倒数第二条
+            split[-2]["end"] = last["end"]
+            pa = (split[-2].get("action") or "").strip()
+            ca = (last.get("action") or "").strip()
+            if ca and ca != pa:
+                split[-2]["action"] = (pa + ("，然后" if pa else "") + ca).strip("，")
+            split.pop()
+        elif last_dur > MAX_SHOT and last["start"] < duration:
+            # 末镜过长再切一刀
+            mid = duration - MAX_SHOT
+            if mid > last["start"]:
+                last["end"] = mid
+                tail = dict(last)
+                tail["start"] = mid
+                tail["end"] = duration
+                ba = (last.get("action") or "").strip()
+                tail["action"] = ("接着" + ba) if ba else ""
+                split.append(tail)
+
+    all_shots = split
+
+    # 第二遍：合成最终 full_text
+    try:
+        synth = await _retry_async(
+            lambda: _reverse_synthesize(config, all_shots, duration, mode, user_plot, user_style, avg_shot_sec, overview, user_reference),
+            max_retries=max_retries, label="reverse-synth",
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"提示词合成失败: {e}")
+
+    full_text = (synth.get("full_text") or "").strip()
+    if not full_text:
+        raise HTTPException(status_code=500, detail="合成阶段未返回 full_text")
+
+    # 持久化
+    try:
+        out_path = os.path.join(wf_dir, "reverse_video_prompt.json")
+        with open(out_path, "w", encoding="utf-8") as f:
+            json.dump({
+                "full_text": full_text, "duration": duration, "mode": mode,
+                "avg_shot_sec": round(avg_shot_sec, 2),
+                "shot_count": len(all_shots),
+                "shots": all_shots,
+            }, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+    return JSONResponse({"code": 0, "data": {
+        "full_text": full_text, "duration": duration, "mode": mode,
+        "shot_count": len(all_shots),
+        "avg_shot_sec": round(avg_shot_sec, 2),
+    }})
+
+
+@router.post("/generate/reverse-video-prompt-chat")
+async def gen_reverse_video_prompt_chat(body: dict):
+    """
+    基于用户对话修改反推视频提示词。
+    body: {
+      workflow_id, chat_config_id,
+      current_full_text, chat_history: [{role, content}],
+      user_message, user_plot?, user_style?, user_reference?,
+      duration?, mode?
+    }
+    """
+    config = _get_config_by_id(body.get("chat_config_id", "")) or _get_first_config("chat")
+    if not config:
+        raise HTTPException(status_code=400, detail="未找到聊天配置")
+
+    wf_id = body.get("workflow_id", "")
+    if not wf_id:
+        raise HTTPException(status_code=400, detail="缺少 workflow_id")
+
+    user_message = (body.get("user_message") or "").strip()
+    if not user_message:
+        raise HTTPException(status_code=400, detail="未提供用户消息")
+
+    current_full_text = (body.get("current_full_text") or "").strip()
+    if not current_full_text:
+        raise HTTPException(status_code=400, detail="未提供当前提示词，请先运行反推")
+
+    user_plot = (body.get("user_plot") or "").strip()
+    user_style = (body.get("user_style") or "").strip()
+    user_reference = (body.get("user_reference") or "").strip()
+    mode = body.get("mode") or "replica"
+    duration = int(body.get("duration", 0) or 0)
+
+    chat_history = body.get("chat_history") or []
+    history_text = ""
+    if chat_history:
+        lines = []
+        for m in chat_history[-10:]:
+            role = "用户" if m.get("role") == "user" else "AI"
+            lines.append(f"[{role}]: {m.get('content', '')}")
+        history_text = "\n".join(lines)
+
+    plot_block = f"\n【原剧情参考】\n{user_plot[:1500]}\n" if user_plot else ""
+    style_block = f"\n【偏好风格】\n{user_style[:200]}\n" if user_style else ""
+    reference_block = f"\n【参考信息（优先级最高，以用户描述为准）】\n{user_reference[:2000]}\n" if user_reference else ""
+    mode_label = "复刻档（严格还原原片画面）" if mode == "replica" else "替换档（抽象占位）"
+
+    system_prompt = f"""你是AI视频生成提示词修改专家。用户对当前的视频提示词不满意，需要根据反馈进行修改。
+
+当前模式：{mode_label}
+视频时长：{duration} 秒
+{plot_block}{style_block}{reference_block}
+
+【当前的完整视频提示词】
+{current_full_text[:8000]}
+
+【对话历史】
+{history_text if history_text else "（首次修改）"}
+
+用户的最新修改意见见 user_message。请根据意见修改当前的视频提示词，然后输出更新后的**完整提示词**。
+
+修改原则：
+1) 保持原有四段结构（视觉风格 + 人物介绍 + 场景介绍 + 分镜描述），不改变格式
+2) 只修改用户指出的问题，其他地方尽量保持原样，不要推翻重来
+3) 如果用户说某个角色描述不对，修改该角色在人物介绍和所有分镜中的外观
+4) 如果用户说镜头运动/转场不对，只修改对应镜头
+5) 参考信息（如有）优先级最高，用户说角色是丧尸就改成丧尸
+6) 分镜时间码不变，只修改描述文字；每条描述保留空间构图（前景/后景/焦点/虚化）、人物外观、精确动作、场景环境、镜头运动等要素，80-180字
+7) 整篇 ≤3000字
+8) 不要在输出中描述字幕、水印、台标等叠加元素
+
+只输出 JSON：{{"full_text": "修改后的完整视频提示词"}}"""
+
+    user_prompt = f"用户修改意见：\n{user_message[:2000]}"
+    try:
+        result = await _retry_async(
+            lambda: _call_llm_json(config, system_prompt, user_prompt, max_tokens=12000, timeout=300.0),
+            max_retries=1, label="reverse-video-prompt-chat",
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"提示词修改失败: {e}")
+
+    new_full_text = (result.get("full_text") or "").strip()
+    if not new_full_text:
+        raise HTTPException(status_code=500, detail="模型未返回修改后的提示词")
+
+    return JSONResponse({"code": 0, "data": {
+        "message": "提示词已根据反馈更新",
+        "full_text": new_full_text,
+    }})

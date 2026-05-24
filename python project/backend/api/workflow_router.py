@@ -63,37 +63,11 @@ STORY_TEMPLATE_PRESETS = [
     {
         "id": "shotListMd",
         "name": "11栏分镜表（Markdown）",
-        "kind": "text",
-        "system_prompt": (
-            "Role: 资深分镜师 (Senior Storyboard Artist)\n"
-            "Profile: 你是一名拥有 10 年经验的专业电影分镜师，擅长将文字剧本转化为视觉化的分镜表格。"
-            "你精通镜头语言、构图美学、节奏把控以及音效设计。\n\n"
-            "Task: 我将提供一段剧本内容，请你将其拆解并转化为标准的【分镜表】。\n"
-            "核心目标：确保剧本中的每一段文字（包括动作描述、环境描写、对白）都有对应的镜头呈现，严禁遗漏任何剧情细节。\n\n"
-            "Critical Constraints (重要约束):\n"
-            "1) 输出格式必须为 Markdown 表格。\n"
-            "2) 必须包含以下 11 列，顺序不可变：[镜头号，时长，角色，场景，景别，拍摄角度，运镜，构图，画面描述，对白，音效]\n"
-            "3) 角色栏填写规则：必须填写画面中可见的所有角色，而不仅仅是对白说话者；多人同框/过肩/背景中的人都要列出（用逗号分隔）；单人特写仅列该角色；与画面描述视觉内容一致。\n"
-            "4) 内容拆分与覆盖：严禁遗漏任何段落；对白拆分原则——一句话≈一个镜头，长台词必须按句子或语义停顿拆为多个镜头并穿插反应镜头；动作/环境必须独立成镜头；生成前自查每个情节转折点和关键动作都有对应镜头号。\n"
-            "5) 对话镜头优先使用过肩镜头建立空间关系，交替正反打：说话者→倾听者反应→说话者；避免连续多个相同角度。\n"
-            "6) 拍摄角度独立成列，不可写入画面描述；可用：平视、仰拍、俯拍、侧拍、过肩、主观视角、荷兰角、背面视角、低角度、高角度；禁止连续3个镜头使用相同角度。\n"
-            "7) 画面描述要求：详细描述画面内容、动作、光影氛围、角色表情；不再含拍摄角度；多人物时描述相对位置和互动；必须涵盖剧本对应段落的所有视觉信息。\n"
-            "8) 对白栏格式：【角色名】(情绪)：台词内容；情绪如愤怒/兴奋/悲伤/冷静/犹豫/讽刺/温柔/紧张/恐惧/坚定等；纯动作或环境镜头填写\"(无)\"或\"——\"；对白栏只填说话的人，但角色栏要填画面里所有的人。\n"
-            "9) 景别与运镜需根据情绪变化动态调整，避免全程固定镜头；情绪激烈时可用特写+推镜头，情绪平缓时可用中景+固定镜头。\n\n"
-            "Workflow:\n"
-            "1) 全文通读，标记所有对白/动作/环境段落。\n"
-            "2) 一一映射，为每段文字至少分配一个镜头号。\n"
-            "3) 拆解长段落为单句或短语。\n"
-            "4) 设计多元化拍摄角度。\n"
-            "5) 检查角色栏列出所有可见角色。\n"
-            "6) 自查无遗漏，按 11 列要求生成完整 Markdown 表格。\n\n"
-            "Example Output (参考示例):\n"
-            "| 镜头号 | 时长 | 角色 | 场景 | 景别 | 拍摄角度 | 运镜 | 构图 | 画面描述 | 对白 | 音效 |\n"
-            "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n"
-            "| 1 | 3s | 张三,李四 | 办公室 | 中景 | 过肩 | 固定 | 过肩构图 | 从李四肩后看向张三，张三坐在办公桌后，双手紧握桌面，李四背影在前景虚化 | 【张三】(愤怒)：你为什么要这么做？ | 空调低频声 |\n"
-            "| 2 | 2s | 张三,李四 | 办公室 | 近景 | 侧拍 | 微推 | 中心构图 | 镜头切到李四侧面，张三肩膀在前景，李四眼神躲闪，喉结滚动 | 【李四】(犹豫)：我...我没有选择。 | 纸张摩擦声 |"
-        ),
-        "user_template": "[在此处粘贴你的剧本]",
+        "kind": "image",
+        "width": 3840,
+        "height": 2160,
+        "orientations": ["horizontal"],
+        "template": "",
     },
 ]
 
@@ -1002,10 +976,10 @@ async def plan_characters_scenes(body: dict):
 要求：
 1. 主要人物：贯穿多段的核心角色。description 必须以"【性别：男/女/其他】"开头（即使剧本未明说，也要根据名字、行为、称谓等合理推断并明确写出；不得留"未知"），随后写详细的穿着、服饰、发型、体型、年龄段等外貌特征，不写表情和动作。visual_prompt 用于AI生成角色模型图，人物保持直立姿势，白色背景，且必须在开头体现性别（如"年轻男性角色"/"中年女性角色"）
 2. 每段的次要人物：仅在该段出现的配角，如果该段没有次要人物则返回空数组。次要人物不能和主要人物重复。description 同样以"【性别：男/女/其他】"开头，visual_prompt 同样在开头体现性别。注意：同一段内可以有多个次要人物，必须全部列出，不要遗漏
-3. 每段的场景：该段剧情涉及的所有不同地点/环境，必须全部列出，不要遗漏或合并。纯环境描述，不含任何人物。visual_prompt 用于AI生成纯场景图，必须明确"无人物、无人影"。同一段内如果有多个不同场景（如室内→室外、白天→夜晚的不同地点），每个都要单独列出
+3. 每段的场景：该段剧情的**主要场景**（核心地点，剧情实际发生的地方）。只规划有实质剧情的主场景，不要列出一闪而过的过渡场景、路过的背景、或仅被提及但没有实际画面的地点。纯环境描述，不含任何人物。visual_prompt 用于AI生成纯场景图，必须明确"无人物、无人影"。一般每段 1-2 个主场景即可，除非剧情确实在多个核心地点展开
 4. 同一角色在不同段落的描述必须一致，性别绝不可前后矛盾
 5. 场景描述要前后连贯，相同场景保持一致性
-6. 不要因为数量多就省略——即使某段有5个以上次要人物或场景，也必须全部列出
+6. 场景宁少勿多——只保留对画面生成有实际意义的核心地点
 
 只输出JSON：
 {{
@@ -2257,6 +2231,81 @@ def system_prompt_user_replacement(user_template: str, script_block: str) -> str
     return tpl + "\n\n" + script_block
 
 
+async def _gen_shot_list_image(body: dict, preset: dict, img_config: dict) -> JSONResponse:
+    """11栏分镜表（图片）：只用剧情 + 人物场景参考图，不依赖分镜描述。"""
+    segment_text = body.get("segment_text", "")
+    seg_idx = body.get("segment_index", 0)
+    duration = body.get("duration", 15)
+    characters = body.get("characters", []) or []
+    minor_characters = body.get("minor_characters", []) or []
+    scenes = body.get("scenes", []) or []
+    style = body.get("style", "")
+    wf_id = body.get("workflow_id", "")
+    image_count = max(1, min(int(body.get("image_count", 1)), 4))
+    extra_hint = (body.get("extra_hint") or "").strip()
+
+    all_chars = list(characters) + list(minor_characters)
+    char_desc = "、".join(c.get("name", "") for c in all_chars) if all_chars else "无特定角色"
+    scene_desc = "、".join(f"{s.get('name','')}：{(s.get('description','') or '')[:60]}" for s in scenes) if scenes else "无特定场景"
+    style_tag = f"\n整体画面风格：{style}" if (style and style.strip()) else ""
+
+    prompt = (
+        f"专业电影分镜表设计图，横版 16:9，4K 画质，纯白背景，整洁排版。\n"
+        f"剧情：{segment_text[:600]}\n"
+        f"总时长：{duration} 秒。\n"
+        f"人物：{char_desc}。场景：{scene_desc}。\n\n"
+        f"任务：根据上述剧情，由你自行将剧情拆分为合适数量的镜头（一般 6-12 个），并以「11栏 Markdown 分镜表」的视觉化形式呈现成一张设计图。\n"
+        f"表格 11 列严格按以下顺序：[镜头号 | 时长 | 角色 | 场景 | 景别 | 拍摄角度 | 运镜 | 构图 | 画面描述 | 对白 | 音效]\n\n"
+        f"内容规则：\n"
+        f"- 角色栏列出该镜头画面里**可见**的所有角色（不仅说话者），多人用逗号分隔。\n"
+        f"- 长台词拆分到多个镜头，动作/环境独立成镜头。\n"
+        f"- 拍摄角度多样化：平视/仰拍/俯拍/侧拍/过肩/主观视角/背面/低角度/高角度，禁止连续 3 个镜头相同。\n"
+        f"- 对白格式：【角色名】(情绪)：台词；纯动作或环境镜头填\"——\"。\n"
+        f"- 时长栏写「Xs」，所有镜头时长之和 = {duration}s。\n"
+        f"- 景别多样：特写/近景/中景/全景/远景；运镜多样：固定/推/拉/摇/移/跟/升降。\n\n"
+        f"视觉呈现要求：\n"
+        f"- 顶部居中标题：「分镜表 · 第 {seg_idx+1} 段 · {duration}s」\n"
+        f"- 主体为 11 列 Markdown 表格，列宽合理、文字清晰、行间距舒适，中文字体。\n"
+        f"- 表格上方可附 1-2 行人物简介横向小卡（头像+姓名），表格下方附场景全景小图（无人物）。\n"
+        f"- 整体专业、信息密度高但不拥挤。"
+        f"{style_tag}"
+    )
+
+    if extra_hint:
+        prompt = prompt + f"\n【审核反馈（需在本次生成中解决）】：{extra_hint}"
+
+    ref_imgs = collect_ref_images(characters=all_chars, scenes=scenes)
+    ref_prefix = build_ref_index_prefix(characters=all_chars, scenes=scenes)
+    if ref_prefix:
+        prompt = ref_prefix + prompt
+
+    width = int(preset.get("width", 3840))
+    height = int(preset.get("height", 2160))
+    try:
+        img_res = await generate_image(ImageGenerateRequest(
+            config_id=img_config["id"], prompt=prompt,
+            width=width, height=height, n=image_count,
+            image_base64_list=ref_imgs,
+        ))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"分镜表图生成失败: {e}")
+
+    img_data = img_res.get("data", [])
+    image_urls = []
+    for item in img_data:
+        b64 = item.get("b64_json", "")
+        if b64:
+            url = save_workflow_image(
+                wf_id,
+                b64 if b64.startswith("data:") else f"data:image/png;base64,{b64}",
+                f"shotlist_seg{seg_idx}"
+            )
+            image_urls.append(url)
+    if not image_urls:
+        raise HTTPException(status_code=500, detail="分镜表图生成失败：响应为空")
+    return JSONResponse({"code": 0, "data": {"kind": "image", "imageUrl": image_urls[0], "imageUrls": image_urls, "prompt": prompt}})
+
+
 @router.post("/generate/story-template")
 async def gen_story_template(body: dict):
     preset = _get_preset(STORY_TEMPLATE_PRESETS, body.get("preset_id", "boardImage"))
@@ -2266,6 +2315,10 @@ async def gen_story_template(body: dict):
     img_config = get_config_by_id(body.get("image_config_id", "")) or get_first_config("image")
     if not img_config:
         raise HTTPException(status_code=400, detail="未找到图片配置")
+
+    # shotListMd 走独立简化分支：只用剧情 + 人物场景参考图，不依赖分镜描述
+    if preset.get("id") == "shotListMd":
+        return await _gen_shot_list_image(body, preset, img_config)
 
     segment_text = body.get("segment_text", "")
     seg_idx = body.get("segment_index", 0)
