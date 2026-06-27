@@ -6,7 +6,7 @@
     <title>流绘 · 对话与画布</title>
     <link rel="icon" type="image/png" href="/static/assets/favicon.png">
     <link rel="shortcut icon" href="/static/assets/favicon.png">
-    <link href="https://cdn.jsdelivr.net/npm/font-awesome@4.7.0/css/font-awesome.min.css" rel="stylesheet">
+    <link href="/static/assets/lib/font-awesome/font-awesome.min.css" rel="stylesheet">
     <link href="/static/css/workflow.css?v=20260515c" rel="stylesheet">
     <style>
         /* 全局CSS变量 - 统一高端深色主题规范 */
@@ -576,12 +576,20 @@
         </div>
     </div>
 
-    <!-- PDF.js 库 -->
-    <script src="https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.min.js"></script>
+    <!-- PDF.js 库（本地优先，CDN 兜底） -->
+    <script src="/static/assets/lib/pdf.min.js"></script>
     <script>
-        if (typeof pdfjsLib !== 'undefined') {
-            pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.worker.min.js';
-        }
+        (function() {
+            if (typeof pdfjsLib === 'undefined') {
+                var s = document.createElement('script');
+                s.src = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.min.js';
+                s.onload = function() { pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.worker.min.js'; };
+                s.onerror = function() { console.warn('[pdfjs] 本地和CDN均加载失败，PDF解析不可用'); };
+                document.head.appendChild(s);
+            } else {
+                pdfjsLib.GlobalWorkerOptions.workerSrc = '/static/assets/lib/pdf.worker.min.js';
+            }
+        })();
     </script>
     
     <!-- JS模块引入 -->
@@ -592,10 +600,10 @@
     <script src="/static/js/image.js?v=20260516a"></script>
     <script src="/static/js/panorama-viewer.js?v=20260514c"></script>
     <script src="/static/js/workflow/node-registry.js?v=20260504a"></script>
-    <script src="/static/js/workflow/engine.js?v=20260514b"></script>
+    <script src="/static/js/workflow/engine.js?v=20260514c"></script>
     <script src="/static/js/workflow/history.js?v=20260512f"></script>
     <script src="/static/js/workflow/renderer.js?v=20260515a"></script>
-    <script src="/static/js/workflow/video-workflow.js?v=20260514b"></script>
+    <script src="/static/js/workflow/video-workflow.js?v=20260514d"></script>
     <script src="/static/js/workflow/frame-prompt-workflow.js?v=20260504a"></script>
     <script src="/static/js/workflow/recreate-workflow.js?v=20260516a"></script>
     <script src="/static/js/workflow/viral-recreate-workflow.js?v=20260516a"></script>

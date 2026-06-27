@@ -126,16 +126,32 @@ function loadCss(href) {
 }
 
 async function loadDeps() {
+  // 本地优先加载 marked
   try {
     if (!window.marked) {
-      await loadScript("https://cdn.jsdelivr.net/npm/marked/marked.min.js");
+      try {
+        await loadScript("/static/assets/lib/marked.min.js");
+      } catch (_) {}
+      if (!window.marked) {
+        await loadScript("https://cdn.jsdelivr.net/npm/marked/marked.min.js");
+      }
     }
   } catch {}
 
+  // 本地优先加载 highlight.js，CDN 兜底
   try {
-    await loadCss("https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/styles/github-dark.min.css");
+    try {
+      await loadCss("/static/assets/lib/github-dark.min.css");
+    } catch (_) {
+      await loadCss("https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/styles/github-dark.min.css");
+    }
     if (!window.hljs) {
-      await loadScript("https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/highlight.min.js");
+      try {
+        await loadScript("/static/assets/lib/highlight.min.js");
+      } catch (_) {}
+      if (!window.hljs) {
+        await loadScript("https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/highlight.min.js");
+      }
     }
   } catch {}
 }

@@ -106,7 +106,14 @@
   };
 
   P.syncPipeline = function () {
-    this.pipeline = this.getPipeline();
+    var raw = this.getPipeline();
+    if (typeof raw === "function") {
+      var id = this.currentId;
+      var wf = this.workflows.find(function (w) { return w.id === id; }) || null;
+      this.pipeline = wf ? (raw(wf) || this.defaultPipeline) : this.defaultPipeline;
+    } else {
+      this.pipeline = raw || [];
+    }
   };
 
   /* ── current ── */
@@ -126,7 +133,7 @@
     }
     if (!template && templates.length) template = templates[0];
 
-    var tplPipeline = (template && template.pipeline && template.pipeline.pipeline) || this.defaultPipeline;
+    var tplPipelineRaw = (template && template.pipeline && template.pipeline.pipeline) || this.defaultPipeline;
 
     var wf = {
       id: makeId(),
@@ -135,10 +142,13 @@
       createdAt: new Date().toISOString(),
       input: { plot: "", style: "", type: "", segmentCount: null, episodeCount: null },
       mode: "single",
+      dramaMode: "grid",
       multiCount: 1,
       history: [],
       _loaded: true,
     };
+    // 解析函数式 pipeline
+    var tplPipeline = typeof tplPipelineRaw === "function" ? (tplPipelineRaw(wf) || this.defaultPipeline) : tplPipelineRaw;
     var self = this;
     tplPipeline.forEach(function (step) {
       if (step.nodeType === "input" || step.nodeType === "fpInput" || step.nodeType === "rcInput" || step.nodeType === "vrInput") return;
@@ -188,13 +198,24 @@
     if (!("episodeCount" in wf.input)) wf.input.episodeCount = null;
     if (!wf.history) wf.history = [];
     if (!wf.mode) wf.mode = "single";
+    if (!wf.dramaMode) wf.dramaMode = "grid";
     if (!wf.multiCount) wf.multiCount = 1;
+    // 清理旧版模式相关的 skip 标记（现由 pipeline 过滤机制替代）
+    ["firstFrameSkip", "singleStoryboardSkip", "storyboardSkip", "lastFrameSkip"].forEach(function (k) { delete wf[k]; });
+    // 段级清理
+    (wf.segments || []).forEach(function (seg) {
+      ["firstFrameSkip", "singleStoryboardSkip", "storyboardSkip", "lastFrameSkip"].forEach(function (k) { delete seg[k]; });
+    });
     if (!wf.segments) wf.segments = [];
 
     var wfPipeline = this.defaultPipeline;
     if (wf.templateId) {
       var tpl = (window.WF_Templates || []).find(function (t) { return t.id === wf.templateId; });
       if (tpl && tpl.pipeline && tpl.pipeline.pipeline) wfPipeline = tpl.pipeline.pipeline;
+    }
+    // 解析函数式 pipeline（支持按 dramaMode 切换）
+    if (typeof wfPipeline === "function") {
+      wfPipeline = wfPipeline(wf) || this.defaultPipeline;
     }
 
     // 多剧集迁移：把旧版顶层字段包装为 episodes[0]
@@ -205,8 +226,13 @@
       if (step.category === "global") {
         var countKey = step.nodeType + "Count";
         var arrayKey = step.nodeType + "s";
-        if (!wf[countKey]) wf[countKey] = 1;
-        if (!wf[arrayKey] || !wf[arrayKey].length) wf[arrayKey] = [NR.createNodeData()];
+        if (step.manualOnly) {
+          if (!wf[arrayKey]) wf[arrayKey] = [];
+          wf[countKey] = wf[arrayKey].length;
+        } else {
+          if (!wf[countKey]) wf[countKey] = 1;
+          if (!wf[arrayKey] || !wf[arrayKey].length) wf[arrayKey] = [NR.createNodeData()];
+        }
       }
     });
     wf.segments.forEach(function (seg) {
@@ -214,8 +240,13 @@
         if (step.category !== "segment") return;
         var countKey = step.nodeType + "Count";
         var arrayKey = step.nodeType + "s";
-        if (!seg[countKey]) seg[countKey] = 1;
-        if (!seg[arrayKey] || !seg[arrayKey].length) seg[arrayKey] = [NR.createNodeData()];
+        if (step.manualOnly) {
+          if (!seg[arrayKey]) seg[arrayKey] = [];
+          seg[countKey] = seg[arrayKey].length;
+        } else {
+          if (!seg[countKey]) seg[countKey] = 1;
+          if (!seg[arrayKey] || !seg[arrayKey].length) seg[arrayKey] = [NR.createNodeData()];
+        }
       });
     });
   };
@@ -225,9 +256,11 @@
   var SHARED_GLOBAL_NODES = { mainCharacters: true, episodePlan: true };
 
   // 哪些顶层字段属于"剧集级"（每集独立）
-  P._getEpisodeFieldKeys = function (wfPipeline) {
+  P._getEpisodeFieldKeys = function (wfPipeline, wf) {
     var keys = ["segments"];
-    (wfPipeline || this.defaultPipeline).forEach(function (step) {
+    // 解析函数式 pipeline（如 video-workflow 的 _getModePipeline）
+    var pipe = typeof wfPipeline === "function" ? (wf ? wfPipeline(wf) : []) : (wfPipeline || []);
+    (pipe.length ? pipe : this.defaultPipeline).forEach(function (step) {
       if (step.nodeType === "input" || step.nodeType === "fpInput" || step.nodeType === "output") return;
       if (step.category !== "global") return;
       if (SHARED_GLOBAL_NODES[step.nodeType]) return;
@@ -243,13 +276,13 @@
 
   P._snapshotEpisode = function (wf, wfPipeline) {
     var snap = {};
-    var keys = this._getEpisodeFieldKeys(wfPipeline);
+    var keys = this._getEpisodeFieldKeys(wfPipeline, wf);
     keys.forEach(function (k) { if (wf[k] !== undefined) snap[k] = wf[k]; });
     return snap;
   };
 
   P._applyEpisode = function (wf, ep, wfPipeline) {
-    var keys = this._getEpisodeFieldKeys(wfPipeline);
+    var keys = this._getEpisodeFieldKeys(wfPipeline, wf);
     keys.forEach(function (k) {
       if (ep[k] !== undefined) wf[k] = ep[k];
       else delete wf[k];
@@ -316,16 +349,28 @@
       var snap = this._snapshotEpisode(wf, pipeline);
       Object.keys(snap).forEach(function (k) { cur[k] = snap[k]; });
     }
+    // 保存当前集的 runningNodes 到 episode 对象上，切回来时恢复
+    var state = this._state(wf.id);
+    if (cur) {
+      cur._runningNodes = Object.assign({}, state.runningNodes);
+      cur._segmentRunning = Object.assign({}, state.segmentRunning);
+    }
+    // 切换到目标集：恢复目标集的 runningNodes（如果有的话），否则空开
     wf.currentEpisodeId = target.id;
+    state.runningNodes = Object.assign({}, target._runningNodes || {});
+    state.segmentRunning = Object.assign({}, target._segmentRunning || {});
     this._applyEpisode(wf, target, pipeline);
     this.ensureShape(wf);
+    // 如果有 stuck 状态（上次异常中断），重置它们
+    this._resetStuckNodes(wf);
     this.save();
   };
 
   P.addEpisode = function (title) {
     var wf = this.current();
     if (!wf) return null;
-    var pipeline = this.getPipeline();
+    var raw = this.getPipeline();
+    var pipeline = typeof raw === "function" ? (raw(wf) || this.defaultPipeline) : (raw || []);
     // 写回当前集
     var cur = this.currentEpisode(wf);
     if (cur) {
@@ -353,8 +398,17 @@
         newEp[step.nodeType + "Count"] = 1;
       }
     });
+    // 保存当前集的 runningNodes 到 episode 对象
+    var state = this._state(wf.id);
+    if (cur) {
+      cur._runningNodes = Object.assign({}, state.runningNodes);
+      cur._segmentRunning = Object.assign({}, state.segmentRunning);
+    }
     wf.episodes.push(newEp);
     wf.currentEpisodeId = newEp.id;
+    // 新集没有 runningNodes，空开
+    state.runningNodes = {};
+    state.segmentRunning = {};
     this._applyEpisode(wf, newEp, pipeline);
     this.ensureShape(wf);
     this.save();
@@ -576,13 +630,16 @@
 
         for (var sti = 0; sti < segSteps.length; sti++) {
           var ss = segSteps[sti];
-          var sCount = seg[ss.nodeType + "Count"] || 1;
+          var _sc = seg[ss.nodeType + "Count"];
+          var sCount = (_sc != null) ? _sc : 1;
           var sArr = seg[ss.nodeType + "s"] || [];
           var sColKeys = [];
 
           for (var sbi = 0; sbi < branchCount; sbi++) {
             var sSrcIdx = sbi < sCount ? sbi : 0;
             var sNd = sArr[sSrcIdx] || {};
+            // manualOnly 节点：count=0 时不渲染任何卡片
+            if (sCount === 0) continue;
             var sKey = "seg_" + si + "_" + ss.nodeType + "_" + sbi;
             var sny = segY + sbi * (LAYOUT.nodeH + LAYOUT.gapY);
             nodes.push({ key: sKey, type: ss.nodeType, x: segStartColX, y: sny, status: sNd.status || "idle", branchIdx: sbi, srcIdx: sSrcIdx, segIndex: si, isReuse: sbi >= sCount });
@@ -745,6 +802,10 @@
     }
     var v = NR.getActiveVersion(nd);
     if (!v) return false;
+    // 模板模式：storyboard 只产出文本分镜描述，有 grid_prompts 即算完成
+    if (nodeType === "storyboard" && wf.dramaMode === "template") {
+      return !!(v.gridPrompts && v.gridPrompts.length);
+    }
     if (typeDef && typeDef.needsImage && !_allImagesReady(v, nodeType)) return false;
 
     if (REVIEWABLE_NODES[nodeType] && this._state(wf.id)._autoExecMode && this._reviewEnabled()) {
@@ -786,10 +847,29 @@
         if (segIdx > 0) addDep("planFrames", segIdx - 1);
         break;
       case "firstFrame":
+        addDep("planFrames", segIdx);
+        addDep("mainCharacters", null);
+        addDep("scene", segIdx);
+        break;
       case "lastFrame":
         addDep("planFrames", segIdx);
         addDep("mainCharacters", null);
         addDep("scene", segIdx);
+        // Mode 2: 有 singleStoryboard 时 lastFrame 依赖最后一个 singleStoryboard
+        if (segIdx !== null && segIdx !== undefined && wf.dramaMode === "single") {
+          var segLF = wf.segments && wf.segments[segIdx];
+          var singleCount = segLF ? (segLF.singleStoryboardCount || 0) : 0;
+          if (singleCount > 0) addDep("singleStoryboard", segIdx);
+        }
+        break;
+      case "singleStoryboard":
+        addDep("planFrames", segIdx);
+        addDep("mainCharacters", null);
+        addDep("scene", segIdx);
+        // 第一个 singleStoryboard 依赖 firstFrame，后续依赖前一个 singleStoryboard
+        if (segIdx !== null && segIdx !== undefined && wf.dramaMode === "single") {
+          addDep("firstFrame", segIdx);
+        }
         break;
       case "storyboard":
         addDep("planFrames", segIdx);
@@ -799,6 +879,37 @@
         if (segIdx > 0) addDep("storyboard", segIdx - 1);
         break;
       case "videoPrompt":
+        if (wf.templateId === "viral-recreate") {
+          addDep("vrVideoPromptReverse", null);
+          addDep("planCharactersScenes", null);
+          addDep("mainCharacters", null);
+          if (segIdx !== null && segIdx !== undefined) {
+            addDep("scene", segIdx);
+            addDep("planFrames", segIdx);
+          }
+        } else {
+          addDep("script", null);
+          addDep("planCharactersScenes", null);
+          addDep("mainCharacters", null);
+          if (segIdx !== null && segIdx !== undefined) {
+            var vpSegTypes = ["minorCharacters", "scene", "planFrames"];
+            var dm = wf.dramaMode || "grid";
+            if (dm === "single") {
+              // single 模式：firstFrame → singleStoryboard → lastFrame → storyTemplate → videoPrompt
+              vpSegTypes.push("firstFrame", "singleStoryboard", "lastFrame");
+            } else if (dm === "template") {
+              // template 模式：storyboard → storyTemplate → videoPrompt
+              vpSegTypes.push("storyboard", "storyTemplate");
+            } else {
+              // grid 模式：storyboard → videoPrompt → storyTemplate
+              vpSegTypes.push("storyboard");
+            }
+            for (var vi = 0; vi < vpSegTypes.length; vi++) {
+              addDep(vpSegTypes[vi], segIdx);
+            }
+          }
+        }
+        break;
       case "storyTemplate":
         if (wf.templateId === "viral-recreate") {
           addDep("vrVideoPromptReverse", null);
@@ -812,9 +923,9 @@
           addDep("script", null);
           addDep("planCharactersScenes", null);
         }
-        // storyTemplate 的文本预设（shotListMd）不需要图片类依赖
+        // 文本预设（shotListMd）不需要图片类依赖
         var stTextMode = false;
-        if (nodeType === "storyTemplate" && segIdx !== null && segIdx !== undefined) {
+        if (segIdx !== null && segIdx !== undefined) {
           var stSeg = wf.segments && wf.segments[segIdx];
           var stNd = stSeg && (stSeg.storyTemplates || [])[0];
           if (stNd && stNd.presetId) {
@@ -825,9 +936,20 @@
         if (!stTextMode && wf.templateId !== "viral-recreate") {
           addDep("mainCharacters", null);
           if (segIdx !== null && segIdx !== undefined) {
-            var segNodeTypes = ["minorCharacters", "scene", "planFrames", "firstFrame", "storyboard", "lastFrame"];
-            for (var i = 0; i < segNodeTypes.length; i++) {
-              addDep(segNodeTypes[i], segIdx);
+            var stSegTypes = ["minorCharacters", "scene", "planFrames"];
+            var dm2 = wf.dramaMode || "grid";
+            if (dm2 === "single") {
+              // single 模式：firstFrame → singleStoryboard → lastFrame → storyTemplate → videoPrompt
+              stSegTypes.push("firstFrame", "singleStoryboard", "lastFrame");
+            } else if (dm2 === "template") {
+              // template 模式：storyboard → storyTemplate → videoPrompt
+              stSegTypes.push("storyboard");
+            } else {
+              // grid 模式：storyboard → videoPrompt → storyTemplate
+              stSegTypes.push("storyboard", "videoPrompt");
+            }
+            for (var si = 0; si < stSegTypes.length; si++) {
+              addDep(stSegTypes[si], segIdx);
             }
           }
         }
@@ -879,6 +1001,8 @@
     var keys = Object.keys(state.runningNodes);
     for (var i = 0; i < keys.length; i++) {
       var k = keys[i];
+      // 排除单个角色/场景的独立生成 key，避免单个项生成时整个节点被标记为"运行中"
+      if (k.indexOf("_char_") !== -1 || k.indexOf("_item_") !== -1) continue;
       if (segIdx !== null && segIdx !== undefined) {
         if (k.indexOf("seg_" + segIdx + "_" + nodeType + "_") === 0) return true;
       } else {
@@ -1292,8 +1416,10 @@
   };
 
   P._resetStuckNodes = function (wf) {
-    var self = this;
-    this.pipeline.forEach(function (step) {
+    // 解析函数式 pipeline（如 video-workflow 的 _getModePipeline）
+    var raw = this.getPipeline();
+    var pipe = typeof raw === "function" ? (raw(wf) || this.defaultPipeline) : (raw || []);
+    pipe.forEach(function (step) {
       if (step.nodeType === "input" || step.nodeType === "fpInput") return;
       if (step.category === "global") {
         var arr = wf[step.nodeType + "s"] || [];
@@ -1301,7 +1427,7 @@
       }
     });
     (wf.segments || []).forEach(function (seg) {
-      self.pipeline.forEach(function (step) {
+      pipe.forEach(function (step) {
         if (step.category !== "segment") return;
         var arr = seg[step.nodeType + "s"] || [];
         arr.forEach(function (nd) { if (nd && nd.status === "running") nd.status = "idle"; });

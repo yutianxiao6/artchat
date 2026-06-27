@@ -6,7 +6,7 @@
     <title>流绘 · Android</title>
     <link rel="icon" type="image/png" href="assets/favicon.png">
     <link rel="shortcut icon" href="assets/favicon.png">
-    <link href="https://cdn.jsdelivr.net/npm/font-awesome@4.7.0/css/font-awesome.min.css" rel="stylesheet">
+    <link href="assets/lib/font-awesome/font-awesome.min.css" rel="stylesheet">
     <style>
         html.app-booting, html.app-booting body {
             background: #0b1120;
@@ -667,12 +667,20 @@
     </div>
 
     <!-- JS模块引入 -->
-    <!-- PDF.js 库 -->
-    <script src="https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.min.js"></script>
+    <!-- PDF.js 库（本地优先，CDN 兜底） -->
+    <script src="assets/lib/pdf.min.js"></script>
     <script>
-        if (typeof pdfjsLib !== 'undefined') {
-            pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.worker.min.js';
-        }
+        (function() {
+            if (typeof pdfjsLib === 'undefined') {
+                var s = document.createElement('script');
+                s.src = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.min.js';
+                s.onload = function() { pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.worker.min.js'; };
+                s.onerror = function() { console.warn('[pdfjs] 本地和CDN均加载失败，PDF解析不可用'); };
+                document.head.appendChild(s);
+            } else {
+                pdfjsLib.GlobalWorkerOptions.workerSrc = 'assets/lib/pdf.worker.min.js';
+            }
+        })();
     </script>
     
     <script src="js/mobile-api.js?v=20260429b"></script>

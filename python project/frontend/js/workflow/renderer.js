@@ -253,7 +253,14 @@
         visibleSegSteps.forEach(function (col) {
           html += '<div class="wf-seg-cell">';
           var sArr = seg[col.nodeType + "s"] || [];
-          html += renderContentCard(engine, col.nodeType, sArr[0], 0, segIdx);
+          var typeDef = NR.get(col.nodeType);
+          if (typeDef && typeDef.allowMultiple && sArr.length > 0) {
+            for (var si = 0; si < sArr.length; si++) {
+              html += renderContentCard(engine, col.nodeType, sArr[si], si, segIdx);
+            }
+          } else {
+            html += renderContentCard(engine, col.nodeType, sArr[0], 0, segIdx);
+          }
           html += '</div>';
         });
         html += '</div>';
@@ -271,8 +278,8 @@
     if (!wf) return '<div class="wf-content-area"></div>';
     var segSteps = engine.getSegmentSteps();
 
-    // 非 video 模板走通用 pipeline 渲染
-    if (wf.templateId && wf.templateId !== "video-short-drama") {
+    // 所有模板统一走通用 pipeline 渲染（含 video-short-drama）
+    if (wf.templateId) {
       return renderGenericPipelineContent(engine, wf);
     }
 
@@ -586,10 +593,22 @@
       }
       if (isRunning) html += '<div class="wf-card-loading"><i class="fa fa-spinner fa-spin"></i> 生成图片中...</div>';
     } else if (nodeType === "storyboard") {
+      var _wf = engine.current();
+      var isTemplateMode = _wf && _wf.dramaMode === "template";
       if (v.gridPrompts && v.gridPrompts.length) {
         html += '<div class="wf-card-text" style="font-size:10px;">' + v.gridPrompts.length + '格分镜</div>';
       } else if (v.description) {
         html += '<div class="wf-card-text" style="font-size:10px;">' + esc(v.description).slice(0, 80) + '</div>';
+      }
+      if (isTemplateMode && v.gridPrompts && v.gridPrompts.length) {
+        // Mode 3: 显示纯文本分镜 + 组织状态（从故事模板节点读取）
+        html += '<div class="wf-card-tag" style="color:#f59e0b;font-size:9px;">模式板 · 待出图</div>';
+        var stSeg = _wf.segments && _wf.segments[segIndex];
+        var stNd = stSeg ? (stSeg.storyTemplates || [])[0] : null;
+        var stV = stNd ? NR.getActiveVersion(stNd) : null;
+        if (stV && stV.organizedPrompt) {
+          html += '<div class="wf-card-text" style="font-size:9px;color:#10b981;">提示词已组织</div>';
+        }
       }
       var imgs = v.images || [];
       if (imgs.length) {
@@ -599,9 +618,12 @@
         html += '</div>';
       }
       if (isRunning) html += '<div class="wf-card-loading"><i class="fa fa-spinner fa-spin"></i> 生成图片中...</div>';
-    } else if (nodeType === "firstFrame" || nodeType === "lastFrame") {
+    } else if (nodeType === "firstFrame" || nodeType === "lastFrame" || nodeType === "singleStoryboard") {
       if (v.description) html += '<div class="wf-card-text">' + esc(v.description).slice(0, 100) + '</div>';
       if (v.imageUrl) html += '<img class="wf-card-img wf-preview-img" src="' + esc(v.imageUrl) + '" data-preview="' + esc(v.imageUrl) + '">';
+      if (nodeType === "singleStoryboard") {
+        html += '<div class="wf-card-tag" style="font-size:9px;">单分镜帧</div>';
+      }
       if (isRunning) html += '<div class="wf-card-loading"><i class="fa fa-spinner fa-spin"></i> 生成图片中...</div>';
     } else if (nodeType === "videoPrompt" || nodeType === "framePrompt") {
       if (v.fullText) html += '<div class="wf-card-text">' + esc(v.fullText).slice(0, 300) + '</div>';
@@ -617,13 +639,19 @@
       }
       html += '<button class="wf-copy-btn" data-copy-vp="' + key + '"><i class="fa fa-copy"></i> 复制全部</button>';
     } else if (nodeType === "storyTemplate") {
+      if (v.organizedPrompt) {
+        var orgPreview = String(v.organizedPrompt).slice(0, 200);
+        if (v.organizedPrompt.length > 200) orgPreview += "…";
+        html += '<div class="wf-card-text" style="font-size:10px;line-height:1.4;white-space:pre-wrap;">' + esc(orgPreview) + '</div>';
+        html += '<div class="wf-card-tag" style="color:#10b981;">提示词已组织</div>';
+      }
       if (v.kind === "text" && v.markdown) {
         var preview = String(v.markdown).split("\n").slice(0, 6).join("\n");
         if (v.markdown.length > preview.length) preview += "\n…";
         html += '<pre class="wf-card-text" style="font-family:monospace;font-size:11px;white-space:pre;overflow:hidden;max-height:140px;">' + esc(preview) + '</pre>';
       } else if (v.imageUrl) {
         html += '<img class="wf-card-img wf-preview-img" src="' + esc(v.imageUrl) + '" data-preview="' + esc(v.imageUrl) + '">';
-      } else {
+      } else if (!v.organizedPrompt) {
         html += '<div class="wf-card-text">已生成</div>';
       }
       if (isRunning) html += '<div class="wf-card-loading"><i class="fa fa-spinner fa-spin"></i> 生成中...</div>';
@@ -837,16 +865,26 @@
     var resHtml = resOptions.map(function (o) {
       return '<option value="' + o.value + '"' + (res === o.value ? " selected" : "") + '>' + o.label + '</option>';
     }).join("");
-    return '<div class="wf-detail-section"><div class="wf-detail-label">分镜宫格（全局）</div>'
-      + '<div class="wf-grid-btns">'
-      + '<button class="wf-grid-btn' + (grid === 4 ? " active" : "") + '" data-grid="4">2×2</button>'
-      + '<button class="wf-grid-btn' + (grid === 6 ? " active" : "") + '" data-grid="6">2×3</button>'
-      + '<button class="wf-grid-btn' + (grid === 9 ? " active" : "") + '" data-grid="9">3×3</button>'
-      + '<button class="wf-grid-btn' + (grid === 16 ? " active" : "") + '" data-grid="16">4×4</button>'
-      + '</div></div>'
+    var html = '<div class="wf-detail-section"><div class="wf-detail-label">分镜宫格（全局）</div>'
+      + '<div class="wf-grid-btns">';
+    var standardGrids = [4, 6, 9, 16];
+    var extendedGrids = [5, 7, 8, 10, 11, 12];
+    var allGrids = standardGrids.concat(extendedGrids).sort(function(a,b){return a-b;});
+    var isTemplateMode = wf.dramaMode === "template";
+    var showGrids = isTemplateMode ? [5, 6, 7, 8, 9, 10, 11, 12] : standardGrids;
+    showGrids.forEach(function (g) {
+      if (isTemplateMode) {
+        html += '<button class="wf-grid-btn' + (grid === g ? " active" : "") + '" data-grid="' + g + '">' + g + '格</button>';
+      } else {
+        var labelMap = {4:"2×2",6:"2×3",9:"3×3",16:"4×4"};
+        html += '<button class="wf-grid-btn' + (grid === g ? " active" : "") + '" data-grid="' + g + '">' + (labelMap[g] || g) + '</button>';
+      }
+    });
+    html += '</div></div>'
       + '<div class="wf-detail-section"><div class="wf-detail-label">分镜分辨率（全局）</div>'
       + '<select class="wf-detail-input" id="wf-sb-resolution">' + resHtml + '</select>'
       + '</div>';
+    return html;
   }
 
   function renderStoryTemplateOrientation(engine) {
@@ -1224,7 +1262,7 @@
         if (!rnd) return;
         var rpreset = window.WF_findPreset && window.WF_findPreset(rkind, rnd.presetId);
         if (rpreset) {
-          rnd.promptTemplate = rpreset.template || rpreset.system_prompt || "";
+          rnd.promptTemplate = rpreset.prompt_template || rpreset.template || rpreset.system_prompt || "";
           engine.save();
           rerender();
         }
@@ -1363,7 +1401,7 @@
         var branchIdx = parseBranchIdx(key);
         var newPresetId = e.target.value;
         var preset = window.WF_findPreset && window.WF_findPreset(presetKind, newPresetId);
-        var newTemplate = preset ? (preset.template || preset.system_prompt || "") : "";
+        var newTemplate = preset ? (preset.prompt_template || preset.template || preset.system_prompt || "") : "";
 
         var wf = engine.current();
         if (!wf) return;

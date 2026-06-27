@@ -84,6 +84,32 @@ def build_endpoint_url(api_base: str, endpoint: str, *, default_version: str = "
 
 
 # 通用异步HTTP客户端
+class _StreamContextManager:
+    """管理流式请求中 httpx.AsyncClient 的生命周期。
+    确保 client 在流读取完毕后被正确关闭，避免连接泄漏导致 ReadError。
+    """
+    def __init__(self, method, url, headers, json_data, timeout_config):
+        self.client = httpx.AsyncClient(verify=False, timeout=timeout_config)
+        self._method = method
+        self._url = url
+        self._headers = headers
+        self._json_data = json_data
+        self._stream_ctx = None
+
+    async def __aenter__(self):
+        self._stream_ctx = self.client.stream(
+            self._method, self._url, headers=self._headers, json=self._json_data
+        )
+        return await self._stream_ctx.__aenter__()
+
+    async def __aexit__(self, *args):
+        try:
+            if self._stream_ctx:
+                await self._stream_ctx.__aexit__(*args)
+        finally:
+            await self.client.aclose()
+
+
 async def async_http_request(
     method: str,
     url: str,
@@ -95,8 +121,7 @@ async def async_http_request(
     timeout_config = httpx.Timeout(timeout, connect=10.0)
 
     if stream:
-        client = httpx.AsyncClient(verify=False, timeout=timeout_config)
-        return client.stream(method, url, headers=headers, json=json_data)
+        return _StreamContextManager(method, url, headers, json_data, timeout_config)
 
     async with httpx.AsyncClient(verify=False, timeout=timeout_config) as client:
         if method.upper() == "POST":

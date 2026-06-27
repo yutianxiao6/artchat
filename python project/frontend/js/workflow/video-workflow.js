@@ -125,11 +125,26 @@
     return allChars.filter(function (c) { return c && nameSet[(c.name || "").trim()]; });
   }
 
-  async function callApi(url, body) {
-    var res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-    var result = await res.json();
-    if (result.code !== 0) throw new Error(result.message || result.detail || "生成失败");
-    return result.data;
+  async function callApi(url, body, timeoutMs) {
+    var controller = new AbortController();
+    var timer = timeoutMs ? setTimeout(function () { controller.abort(); }, timeoutMs) : null;
+    try {
+      var res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal: controller.signal });
+      var result = await res.json();
+      if (result.code !== 0) throw new Error(result.message || result.detail || "生成失败");
+      return result.data;
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
+  // 从人物场景规划节点读取LLM推导的风格模板
+  function getStyleTemplate(wf) {
+    if (!wf) return "";
+    var pcsNd = (wf.planCharactersSceness || [])[0];
+    if (!pcsNd) return "";
+    var pcsV = NR.getActiveVersion(pcsNd);
+    return (pcsV && pcsV.styleTemplate) || "";
   }
 
   // ── 多剧集辅助 ─────────────────────────────
@@ -202,13 +217,24 @@
       },
     ],
     storyTemplate: [
-      { id: "boardImage", name: "电影故事板（图文设计图）", kind: "image", template: "" },
       {
-        id: "shotListMd",
-        name: "11栏分镜表（Markdown）",
+        id: "boardImage", name: "电影故事板（图文设计图）", kind: "image",
+        template: "",
+        prompt_template: "影视级美术设计画板，高端视觉开发图纸，简洁版式设计，横向大画幅画布。比例16:9。\n画板呈现 {scenes} 场景，采用{style}设计风格，高级影视氛围感。\n\n【模块 1 —— 俯视图机位】\n左侧区域：场景的俯视视角布局图，标注人物在场景中的具体位置和行动路线。\n\n【模块 2 —— 分镜网格】\n右侧区域：分镜网格（{grid}格分镜图，根据剧情逐一演绎），每格画幅比例为16:9。\n分镜内容：\n{grid_prompts}\n角色：{characters}\n风格：写实影视摄影，电影剧照，强叙事性，戏剧化构图。\n\n【模块 3 —— 立面视图】\n底部区域：立面效果图，展示这段剧情所拍摄的场景空间。\n剧情概要：{plot}",
+      },
+      {
+        id: "shotListMd", name: "11栏分镜表（Markdown）",
         kind: "image",
         width: 3840, height: 2160,
         template: "",
+        prompt_template: "为一组短剧分镜生成完整的叙事故事板提示词，{style}风格。\n\n剧情：{plot}\n\n分镜画面：\n{grid_prompts}\n\n人物：{characters}\n场景：{scenes}\n\n请按以下结构组织：\n1. 【整体氛围】描述本段落的情绪基调和视觉风格\n2. 【分镜详解】逐格描述画面内容、人物动作、镜头语言（景别+运镜）\n3. 【排版布局】{grid}格在画面中的排列方式和视觉流\n4. 【参考引用】每格需要@的人物和场景参考图",
+      },
+      {
+        id: "visualDevBoard", name: "视觉开发板（角色与场景设定总览）",
+        kind: "image",
+        width: 3840, height: 2160,
+        template: "",
+        prompt_template: "生成一张电影级「视觉开发板 / 角色与场景设定总览板」风格的高密度信息排版图，整体为专业概念设计提案板、影视前期美术设定板的形式。\n不是普通海报，而是一张完整的项目视觉说明图。\n画面采用深色纯净背景或深灰黑底，版式高级、理性、秩序清晰，带有国际化电影美术手册气质。\n比例16:9，{style}风格。\n\n剧情：{plot}\n人物：{characters}\n场景：{scenes}\n分镜描述：\n{grid_prompts}\n\n整张图包含以下结构模块，必须统一在同一视觉主题下：\n1. 左上区域：主标题、副标题、栏目标题，高端编辑设计排版，可用中英双语标题，字体克制、细致、专业。\n2. 左侧上半区：角色设定区，展示主角色的正面、侧面、背面、半身近景或肖像特写，配有少量角色信息文字。角色服装、发型、姿态、道具统一风格。\n3. 右上区域：一张最大的环境主视觉图，作为核心世界观场景，电影感强，细节丰富，有沉浸式空间氛围。\n4. 中部区域：分镜 storyboard 模块，{grid}格连续小图展示角色在场景中的探索、观察、互动、发现、记录等情节过程。\n5. 中下区域：camera movement 模块，包含镜头运动轨迹图、箭头路径、推拉摇移示意、空间动线设计图，专业摄影调度图感觉。\n6. 右中或右下区域：lighting & mood 模块，展示数张不同光线氛围参考小图，强调统一的灯光语言、时间气质、情绪氛围。\n7. 底部：color palette 模块，以横向色卡形式展示主题配色。\n8. 底部或右下：lens & camera reference 模块，表格形式展示镜头焦段、光圈、ISO、快门、机位、运动方式等摄影参数。\n9. 最下方：reference 图条或细节参考图带，作为补充视觉素材。\n\n整体要求：所有模块内容必须高度统一，像同一个电影项目的官方设定板；版面整洁，留白克制，网格对齐，层级清晰；不是杂乱拼贴，而是专业 art direction board；图中文字要像真实的设计版文字，避免廉价排版；整体质感高级、电影化、叙事性强、概念设计感强；超高细节，统一色调，统一世界观，编辑设计感，影视前期开发资料质感。",
       },
     ],
   };
@@ -269,7 +295,7 @@
     var template = (probe && probe.promptTemplate) || "";
     if (!template) {
       var p = presets.find(function (x) { return x.id === curId; }) || presets[0];
-      template = (p && (p.template || p.system_prompt)) || "";
+      template = (p && (p.prompt_template || p.template || p.system_prompt)) || "";
     }
     var opts = presets.map(function (p) {
       var sel = p.id === curId ? " selected" : "";
@@ -428,6 +454,18 @@
       var engine = window._wfEngine;
       var curEp = (engine && engine.currentEpisode && engine.currentEpisode(wf)) || null;
 
+      // 安全防护：如果当前剧集已有段落内容，二次确认防止误覆盖
+      if (curEp && curEp.segments && curEp.segments.length > 0) {
+        var hasContent = curEp.segments.some(function (seg) {
+          return seg.scriptText || Object.keys(seg).some(function (k) {
+            return /[a-z]+s$/.test(k) && Array.isArray(seg[k]) && seg[k].some(function (nd) { return nd && nd.versions && nd.versions.length; });
+          });
+        });
+        if (hasContent && !confirm("「" + (curEp.title || ("第" + (curEp.index + 1) + "集")) + "」已有剧本和段落数据。重新生成剧本会重置本集所有段落节点。\n\n确定要继续吗？")) {
+          throw new Error("已取消：用户选择不覆盖已有剧本");
+        }
+      }
+
       // 规划过的集（episodePlan 已生成且包含本集）：plot 已自洽，不再传前集剧本。
       // 未规划过的续写集（用户手动"新增剧集"扩出来）：按原有逻辑传前集上下文保证衔接。
       var epPlanV = NR.getActiveVersion((wf.episodePlans || [])[0]);
@@ -496,6 +534,13 @@
       } else {
         html = '<div class="wf-detail-text" style="color:#64748b;">尚未生成</div>';
       }
+      // 显示当前操作的剧集
+      var curEp_script = (ctx.engine && ctx.engine.currentEpisode) ? ctx.engine.currentEpisode(wf) : null;
+      if (curEp_script) {
+        html += '<div class="wf-detail-text" style="font-size:11px;color:#f59e0b;margin-top:6px;">'
+          + '<i class="fa fa-info-circle"></i> 当前剧集：' + esc(curEp_script.title || ("第" + (curEp_script.index + 1) + "集"))
+          + '</div>';
+      }
       html += '<div class="wf-detail-actions"><button class="wf-tb-btn primary" data-gen-global="script"' + dis + '><i class="fa fa-refresh"></i> ' + (v ? "重新生成" : "生成剧本") + '</button></div>';
       return html;
     },
@@ -561,15 +606,15 @@
       (wf.segments || []).forEach(function (seg, i) {
         var sp = segPlans[i] || {};
         var minorNd = (seg.minorCharacterss || [])[0];
-        if (minorNd) {
-          var minors = sp.minor_characters || [];
+        if (minorNd && sp.minor_characters) {
+          var minors = sp.minor_characters;
           NR.addVersion(minorNd, { characters: minors });
           seg.hasMinor = minors.length > 0;
           seg.minorCharactersSkip = minors.length === 0;
         }
         var sceneNd = (seg.scenes || [])[0];
-        if (sceneNd) {
-          var rawScenes = sp.scenes || [];
+        if (sceneNd && (sp.scenes && sp.scenes.length)) {
+          var rawScenes = sp.scenes;
           var resolvedScenes = rawScenes.map(function (sc) {
             var nm = (sc.name || "").trim();
             var hit = prevSceneByName[nm];
@@ -588,12 +633,14 @@
           NR.addVersion(sceneNd, { scenes: resolvedScenes, sceneCount: resolvedScenes.length });
         }
       });
-      return { mainCharacters: mergedMain, segments: segPlans };
+      return { mainCharacters: mergedMain, segments: segPlans, styleTemplate: data.style_template || "" };
     },
     renderDetail: function (nd, wf, ctx) {
       var v = NR.getActiveVersion(nd);
       var dis = _getDisabledAttr(ctx, "planCharactersScenes");
       var html = '';
+      html += '<div class="wf-detail-section"><div class="wf-detail-label">风格模板</div>'
+        + '<textarea class="wf-detail-textarea wf-editable" data-edit-field="styleTemplate" rows="3" placeholder="LLM推导的风格模板，将自动附加到所有出图提示词后...">' + esc((v && v.styleTemplate) || "") + '</textarea></div>';
       html += '<div class="wf-detail-section"><div class="wf-detail-label">补充指令</div>'
         + '<textarea class="wf-detail-textarea wf-editable" data-edit-field="userHint" rows="2" placeholder="可选：补充风格、角色要求等...">' + esc((nd && nd.userHint) || "") + '</textarea></div>';
       html += '<div class="wf-detail-section"><div class="wf-detail-label">风格参考图</div>'
@@ -623,6 +670,13 @@
           });
         }
         html += '<div class="wf-detail-text" style="font-size:11px;color:#64748b;margin-top:6px;">完整描述请查看对应节点</div>';
+      }
+      // 显示当前操作的剧集
+      var curEp_pcs = (ctx.engine && ctx.engine.currentEpisode) ? ctx.engine.currentEpisode(wf) : null;
+      if (curEp_pcs) {
+        html += '<div class="wf-detail-text" style="font-size:11px;color:#f59e0b;margin-top:6px;">'
+          + '<i class="fa fa-info-circle"></i> 当前剧集：' + esc(curEp_pcs.title || ("第" + (curEp_pcs.index + 1) + "集"))
+          + '</div>';
       }
       html += '<div class="wf-detail-actions"><button class="wf-tb-btn primary" data-gen-global="planCharactersScenes"' + dis + '><i class="fa fa-magic"></i> ' + (v ? "重新规划" : "开始规划") + '</button>'
         + (v ? '<button class="wf-review-btn" data-review-plan><i class="fa fa-search"></i> 审核规划</button>' : '')
@@ -668,12 +722,14 @@
       var data = await callApi("/api/workflow/generate/main-characters", {
         workflow_id: wf.id, image_config_id: getConfigId("image", "mainCharacters"),
         characters: charsForApi, style: wf.input.style,
+        style_template: getStyleTemplate(wf),
         ref_image_urls: nd.refImages || [],
         image_count: getImageCount("mainCharacters"),
         preset_id: nd.presetId || "default",
         prompt_template: nd.promptTemplate || "",
         width: preset && preset.width,
         height: preset && preset.height,
+        grid_merge: !!gridMerge,
       });
       var resultChars = data.characters || [];
       var errs = data.errors || [];
@@ -766,12 +822,14 @@
       var data = await callApi("/api/workflow/generate/minor-characters", {
         workflow_id: wf.id, image_config_id: getConfigId("image", "minorCharacters"),
         characters: charsForApi, style: wf.input.style,
+        style_template: getStyleTemplate(wf),
         ref_image_urls: nd.refImages || [],
         image_count: getImageCount("minorCharacters"),
         preset_id: nd.presetId || "default",
         prompt_template: nd.promptTemplate || "",
         width: preset && preset.width,
         height: preset && preset.height,
+        grid_merge: !!gridMerge,
       });
       var resultChars = data.characters || [];
       var errs = data.errors || [];
@@ -866,8 +924,10 @@
       var data = await callApi("/api/workflow/generate/scene", {
         workflow_id: wf.id, image_config_id: getConfigId("image", "scene"),
         scenes: scenesForApi, prev_segment_scenes: prevScenes,
-        style: wf.input.style, ref_image_urls: nd.refImages || [],
+        style: wf.input.style, style_template: getStyleTemplate(wf),
+        ref_image_urls: nd.refImages || [],
         image_count: getImageCount("scene"),
+        grid_merge: !!gridMerge,
       });
       var resultScenes = data.scenes || [];
       var errs = data.errors || [];
@@ -933,10 +993,12 @@
     generate: async function (ctx) {
       var wf = ctx.workflow;
       var seg = ctx.segment;
-      var skipFF = !!(wf.firstFrameSkip || seg.firstFrameSkip);
-      var skipSB = !!(wf.storyboardSkip || seg.storyboardSkip);
-      var skipLF = !!(wf.lastFrameSkip || seg.lastFrameSkip);
-      if (skipFF && skipSB && skipLF) return { firstFrame: {}, storyboard: {}, lastFrame: {} };
+      // 根据 pipeline 中实际存在的节点类型决定规划内容
+      var pipeTypes = (ctx.engine && ctx.engine.pipeline) ? ctx.engine.pipeline.map(function (s) { return s.nodeType; }) : [];
+      var planFF = pipeTypes.indexOf("firstFrame") >= 0;
+      var planSB = pipeTypes.indexOf("storyboard") >= 0;
+      var planLF = pipeTypes.indexOf("lastFrame") >= 0;
+      if (!planFF && !planSB && !planLF) return { firstFrame: {}, storyboard: {}, lastFrame: {} };
       var mcV = NR.getActiveVersion((wf.mainCharacterss || [])[0]);
       var minorV = NR.getActiveVersion((seg.minorCharacterss || [])[0]);
       var sceneV = NR.getActiveVersion((seg.scenes || [])[0]);
@@ -981,6 +1043,12 @@
       }
       var planNd = ctx.nodeData;
       var planV = NR.getActiveVersion(planNd);
+      var dramaMode = wf.dramaMode || "grid";
+      // 单个分镜模式：统计用户手动添加的单分镜节点数，传给后端一起规划
+      var singleFrameCount = 0;
+      if (dramaMode === "single") {
+        singleFrameCount = (seg.singleStoryboards || []).length;
+      }
       var data = await callApi("/api/workflow/generate/plan-frames", {
         workflow_id: wf.id, chat_config_id: getConfigId("chat", "planFrames"),
         segment_text: seg.scriptText,
@@ -990,15 +1058,17 @@
         scenes: scenes, style: wf.input.style,
         grid: getStoryboardGrid(),
         resolution: getStoryboardResolution(),
+        drama_mode: dramaMode,
+        single_frame_count: singleFrameCount,
         is_last_segment: isLast,
         prev_last_frame_desc: prevLastDesc,
         prev_segment_text: prevSegmentText,
         prev_planning_history: prevPlanningHistory,
         prev_storyboard_url: prevStoryboardUrl,
         user_hint: (planV && planV.userHint) || (planNd && planNd.userHint) || "",
-        skip_first_frame: skipFF,
-        skip_storyboard: skipSB,
-        skip_last_frame: skipLF,
+        skip_first_frame: !planFF,
+        skip_storyboard: !planSB,
+        skip_last_frame: !planLF,
       });
       var ff = data.first_frame || {};
       var sb = data.storyboard || {};
@@ -1011,30 +1081,43 @@
         planNd.planningHistory.push(data.planning_record);
       }
 
-      if (!skipFF && ff.description) {
+      if (planFF && ff.description) {
         var ffNd = (seg.firstFrames || [])[0];
         if (ffNd) NR.addVersion(ffNd, { description: ff.description || "", visualPrompt: ff.visual_prompt || "" });
       }
-      if (!skipSB && (sb.description || (sb.grid_prompts && sb.grid_prompts.length))) {
+      if (planSB && (sb.description || (sb.grid_prompts && sb.grid_prompts.length))) {
         var sbNd = (seg.storyboards || [])[0];
-        if (sbNd) NR.addVersion(sbNd, { description: sb.description || "", gridPrompts: normalizeGridPrompts(sb.grid_prompts || []) });
+        if (sbNd) {
+          var sbVersionData = { description: sb.description || "", gridPrompts: normalizeGridPrompts(sb.grid_prompts || []) };
+          // Mode 3: 标记为纯文本分镜（不出图）
+          if (dramaMode === "template") sbVersionData.textOnly = true;
+          NR.addVersion(sbNd, sbVersionData);
+        }
       }
-      if (!skipLF && lf.description) {
+      if (planLF && lf.description) {
         var lfNd = (seg.lastFrames || [])[0];
         if (lfNd) NR.addVersion(lfNd, { description: lf.description || "", visualPrompt: lf.visual_prompt || "" });
+      }
+      // 单个分镜模式：将后端返回的 single_frames 写入各单分镜节点
+      if (dramaMode === "single" && Array.isArray(data.single_frames)) {
+        var singleArr = seg.singleStoryboards || [];
+        data.single_frames.forEach(function (sf, i) {
+          var sNd = singleArr[i];
+          if (sNd) NR.addVersion(sNd, { description: sf.description || "", visualPrompt: sf.visual_prompt || "" });
+        });
       }
       return { firstFrame: ff, storyboard: sb, lastFrame: lf, appearingCharacters: appearing };
     },
     renderDetail: function (nd, wf, ctx) {
       var v = NR.getActiveVersion(nd);
       var seg = (ctx.segIndex !== null && ctx.segIndex !== undefined && wf.segments) ? wf.segments[ctx.segIndex] : null;
-      var allSkipped = !!(wf.firstFrameSkip || (seg && seg.firstFrameSkip))
-        && !!(wf.storyboardSkip || (seg && seg.storyboardSkip))
-        && !!(wf.lastFrameSkip || (seg && seg.lastFrameSkip));
+      // 检查 pipeline 中是否有需要规划的帧节点
+      var _pipeTypes = (ctx.engine && ctx.engine.pipeline) ? ctx.engine.pipeline.map(function (s) { return s.nodeType; }) : [];
+      var _needPlan = _pipeTypes.indexOf("firstFrame") >= 0 || _pipeTypes.indexOf("storyboard") >= 0 || _pipeTypes.indexOf("lastFrame") >= 0;
       var dis = _getDisabledAttr(ctx, "planFrames");
       var html = '';
-      if (allSkipped) {
-        html += '<div class="wf-detail-text" style="color:#f59e0b;">首帧、分镜、尾帧节点均已跳过，无需规划</div>';
+      if (!_needPlan) {
+        html += '<div class="wf-detail-text" style="color:#f59e0b;">当前模式无需帧画面规划</div>';
         return html;
       }
 
@@ -1094,6 +1177,39 @@
       if (!ctx.isPipelineNode) { html += '<div class="wf-detail-actions"><button class="wf-tb-btn primary" data-gen-seg="' + ctx.segIndex + '" data-gen-type="planFrames"' + dis + '><i class="fa fa-magic"></i> ' + (v ? "重新规划" : "开始规划") + '</button>'
         + (v ? '<button class="wf-review-btn" data-review-frame-plan="' + ctx.segIndex + '"><i class="fa fa-search"></i> 审核规划</button>' : '')
         + '</div>'; }
+
+      // ── Mode 2: 单分镜帧管理 ──
+      if ((wf.dramaMode || "grid") === "single" && seg) {
+        var singleArr = seg.singleStoryboards || [];
+        var singleCount = seg.singleStoryboardCount || 0;
+        var maxCount = 10;
+        html += '<div class="wf-detail-section" style="background:#1e293b;padding:12px;border-radius:8px;margin-top:12px;">';
+        html += '<div class="wf-detail-label" style="color:#06b6d4;"><i class="fa fa-film"></i> 单分镜帧管理 (' + singleCount + '/' + maxCount + ')</div>';
+        html += '<div style="font-size:11px;color:#94a3b8;margin-bottom:8px;">首帧 → 单分镜 → 尾帧 级联生成，每帧参考前一张图片</div>';
+        for (var si = 0; si < singleCount; si++) {
+          var sNd = singleArr[si];
+          var sV = NR.getActiveVersion(sNd);
+          var sDesc = (sV && sV.description) || "";
+          var sImg = (sV && sV.imageUrl) || "";
+          var refLabel = si === 0 ? "参考：首帧" : "参考：单分镜" + si;
+          html += '<div style="display:flex;align-items:center;gap:8px;padding:8px;background:#0f172a;border-radius:6px;margin-bottom:6px;">';
+          html += '<span style="color:#64748b;font-size:12px;min-width:50px;">分镜' + (si + 1) + '</span>';
+          html += '<span style="flex:1;font-size:11px;color:#94a3b8;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + esc(sDesc || "（待填写）") + '</span>';
+          html += '<span style="font-size:9px;color:#64748b;">' + refLabel + '</span>';
+          if (sImg) {
+            html += '<img src="' + esc(sImg) + '" style="width:40px;height:24px;object-fit:cover;border-radius:3px;" data-preview="' + esc(sImg) + '">';
+          }
+          html += '<button class="wf-tb-btn" data-single-del="' + ctx.segIndex + '" data-single-idx="' + si + '" style="color:#ef4444;background:transparent;border:none;cursor:pointer;font-size:12px;padding:2px 6px;" title="删除此分镜"><i class="fa fa-trash-o"></i></button>';
+          html += '</div>';
+        }
+        html += '<div style="display:flex;gap:6px;">';
+        if (singleCount < maxCount) {
+          html += '<button class="wf-tb-btn" data-single-add="' + ctx.segIndex + '" style="background:#06b6d4;color:#fff;border:none;">'
+            + '<i class="fa fa-plus"></i> ' + (singleCount > 0 ? '再添加一帧' : '添加单分镜') + '</button>';
+        }
+        html += '</div></div>';
+      }
+
       return html;
     },
   });
@@ -1127,6 +1243,7 @@
         characters: mcChars,
         minor_characters: minorChars,
         scenes: scenes, style: wf.input.style,
+        style_template: getStyleTemplate(wf),
         ref_image_urls: nd.refImages || [],
         image_count: getImageCount("firstFrame"),
       });
@@ -1185,11 +1302,19 @@
       var v = NR.getActiveVersion(nd);
       var gridPrompts = normalizeGridPrompts((v && v.gridPrompts) || []);
       var desc = (v && v.description) || "";
+
+      // Mode 3: 纯文本模式，不出图
+      if ((wf.dramaMode || "grid") === "template") {
+        if (!desc && !gridPrompts.length) throw new Error("请先运行帧画面规划或手动填写描述");
+        return { description: desc, gridPrompts: gridPrompts, images: [], textOnly: true };
+      }
+
       if (!desc && !gridPrompts.length) throw new Error("请先运行帧画面规划或手动填写描述");
       var mcV = !wf.mainCharactersSkip ? NR.getActiveVersion((wf.mainCharacterss || [])[0]) : null;
       var minorV = !wf.minorCharactersSkip ? NR.getActiveVersion((seg.minorCharacterss || [])[0]) : null;
       var sceneV = !wf.sceneSkip ? NR.getActiveVersion((seg.scenes || [])[0]) : null;
-      var ffV = !wf.firstFrameSkip ? NR.getActiveVersion((seg.firstFrames || [])[0]) : null;
+      var _hasFF = (ctx.engine && ctx.engine.pipeline) ? ctx.engine.pipeline.map(function (s) { return s.nodeType; }).indexOf("firstFrame") >= 0 : false;
+      var ffV = _hasFF ? NR.getActiveVersion((seg.firstFrames || [])[0]) : null;
       var scenes = sceneV && sceneV.scenes ? sceneV.scenes : [];
       var appearingNames = getAppearingCharNames(seg);
       var mcChars = filterCharsByAppearing(mcV ? mcV.characters : [], appearingNames);
@@ -1225,6 +1350,7 @@
         segment_index: ctx.segIndex,
         grid: getStoryboardGrid(),
         style: wf.input.style,
+        style_template: getStyleTemplate(wf),
         ref_image_urls: nd.refImages || [],
         resolution: getStoryboardResolution(),
         image_count: getImageCount("storyboard"),
@@ -1240,6 +1366,7 @@
     },
     renderDetail: function (nd, wf, ctx) {
       var v = NR.getActiveVersion(nd);
+      var isTemplateMode = (wf.dramaMode || "grid") === "template";
       var html = "";
       if (v && v.gridPrompts && v.gridPrompts.length) {
         // 显示锁定状态
@@ -1254,6 +1381,18 @@
             + '<textarea class="wf-detail-textarea wf-editable" data-edit-field="gridPrompts.' + i + '" rows="2" style="margin-top:2px;">' + esc(gp || "") + '</textarea></div>';
         });
         html += '</div>';
+
+        // Mode 3: 提示词组织状态（从故事模板节点读取）
+        if (isTemplateMode) {
+          var stNd = (wf && wf.segments && wf.segments[ctx.segIndex] ? (wf.segments[ctx.segIndex].storyTemplates || [])[0] : null);
+          var stV = stNd ? NR.getActiveVersion(stNd) : null;
+          if (stV && stV.organizedPrompt) {
+            html += '<div class="wf-detail-section" style="background:#1e293b;padding:8px;border-radius:8px;margin-bottom:8px;">';
+            html += '<div style="font-size:11px;color:#10b981;"><i class="fa fa-check-circle"></i> 提示词已组织，请在「故事模板」节点完成生图</div>';
+            html += '</div>';
+          }
+        }
+
         // 对话历史
         var history = v.chatHistory || [];
         if (history.length) {
@@ -1283,9 +1422,94 @@
         v.images.forEach(function (url) { html += '<img class="wf-detail-img wf-preview-img" src="' + esc(url) + '">'; });
         html += '</div>';
       }
-      html += '<div class="wf-upload-wrap"><label class="wf-upload-btn"><i class="fa fa-upload"></i> ' + (v && v.images && v.images.length ? '替换分镜图' : '上传分镜图') + '<input type="file" accept="image/*" class="wf-file-input" data-upload-direct="storyboard" style="display:none"></label></div>';
-      html += renderRefImagesSection(nd, "storyboard");
-      if (!ctx.isPipelineNode) { var _dis = _getDisabledAttr(ctx, "storyboard"); html += '<div class="wf-detail-actions"><button class="wf-tb-btn primary" data-gen-seg="' + ctx.segIndex + '" data-gen-type="storyboard"' + _dis + '><i class="fa fa-refresh"></i> ' + (v && v.images && v.images.length ? "重新生成图片" : "生成图片") + '</button></div>'; }
+      if (!isTemplateMode) {
+        html += '<div class="wf-upload-wrap"><label class="wf-upload-btn"><i class="fa fa-upload"></i> ' + (v && v.images && v.images.length ? '替换分镜图' : '上传分镜图') + '<input type="file" accept="image/*" class="wf-file-input" data-upload-direct="storyboard" style="display:none"></label></div>';
+        html += renderRefImagesSection(nd, "storyboard");
+      }
+      if (!ctx.isPipelineNode && !isTemplateMode) { var _dis = _getDisabledAttr(ctx, "storyboard"); html += '<div class="wf-detail-actions"><button class="wf-tb-btn primary" data-gen-seg="' + ctx.segIndex + '" data-gen-type="storyboard"' + _dis + '><i class="fa fa-refresh"></i> ' + (v && v.images && v.images.length ? "重新生成图片" : "生成图片") + '</button></div>'; }
+      return html;
+    },
+  });
+
+  /* ── Node: singleStoryboard ── (Mode 2 单分镜帧) */
+  NR.register({
+    id: "singleStoryboard", label: "单分镜帧", icon: "fa-film", color: "#06b6d4",
+    category: "segment", allowMultiple: true, maxCount: 10, needsImage: true,
+    getPreview: function (nd) {
+      var v = NR.getActiveVersion(nd);
+      return v && v.description ? v.description.slice(0, 50) : "";
+    },
+    generate: async function (ctx) {
+      var wf = ctx.workflow;
+      var seg = ctx.segment;
+      var nd = ctx.nodeData;
+      var v = NR.getActiveVersion(nd);
+      var desc = (v && v.description) || "";
+      var vp = (v && v.visualPrompt) || "";
+      if (!vp && !desc) throw new Error("请先填写分镜描述或提示词");
+
+      // 找前一张图的 imageUrl 作为参考图
+      var prevImageUrl = "";
+      var sArr = seg.singleStoryboards || [];
+      var myIdx = sArr.indexOf(nd);
+      if (myIdx > 0) {
+        // 取前一个 singleStoryboard 的图
+        var prevNd = sArr[myIdx - 1];
+        var prevV = NR.getActiveVersion(prevNd);
+        prevImageUrl = (prevV && prevV.imageUrl) || "";
+      } else {
+        // 第一个 singleStoryboard，取 firstFrame 的图
+        var ffNd = (seg.firstFrames || [])[0];
+        var ffV = NR.getActiveVersion(ffNd);
+        prevImageUrl = (ffV && ffV.imageUrl) || "";
+      }
+
+      var mcV = !wf.mainCharactersSkip ? NR.getActiveVersion((wf.mainCharacterss || [])[0]) : null;
+      var minorV = !wf.minorCharactersSkip ? NR.getActiveVersion((seg.minorCharacterss || [])[0]) : null;
+      var sceneV = !wf.sceneSkip ? NR.getActiveVersion((seg.scenes || [])[0]) : null;
+      var scenes = sceneV && sceneV.scenes ? sceneV.scenes : [];
+      var appearingNames = getAppearingCharNames(seg);
+      var mcChars = filterCharsByAppearing(mcV ? mcV.characters : [], appearingNames);
+      var minorChars = filterCharsByAppearing(minorV ? minorV.characters : [], appearingNames);
+
+      var data = await callApi("/api/workflow/generate/single-storyboard", {
+        workflow_id: wf.id, image_config_id: getConfigId("image", "singleStoryboard"),
+        visual_prompt: vp, description: desc,
+        ref_image_url: prevImageUrl,
+        characters: mcChars,
+        minor_characters: minorChars,
+        scenes: scenes, style: wf.input.style,
+        style_template: getStyleTemplate(wf),
+        ref_image_urls: nd.refImages || [],
+        image_count: getImageCount("singleStoryboard"),
+      });
+      var urls = data.imageUrls || (data.imageUrl ? [data.imageUrl] : []);
+      if (urls.length > 0) { nd.isLocked = true; nd.segmentIndex = ctx.segIndex; }
+      return { description: desc, visualPrompt: vp, imageUrl: urls[0] || "", imageUrls: urls };
+    },
+    renderDetail: function (nd, wf, ctx) {
+      var v = NR.getActiveVersion(nd);
+      var html = "";
+      if (nd.isLocked) {
+        html += '<div class="wf-detail-section" style="background:#fef3c7;padding:8px;border-radius:4px;margin-bottom:8px;">'
+          + '<i class="fa fa-lock" style="color:#f59e0b;"></i> <strong style="color:#f59e0b;">节点已锁定</strong> - 图片已生成'
+          + '</div>';
+      }
+      html += '<div class="wf-detail-section"><div class="wf-detail-label">画面描述</div><textarea class="wf-detail-textarea wf-editable" data-edit-field="description" rows="3" placeholder="描述这一分镜的画面内容...">' + esc((v && v.description) || "") + '</textarea></div>';
+      html += '<div class="wf-detail-section"><div class="wf-detail-label">生图提示词</div><textarea class="wf-detail-textarea wf-editable" data-edit-field="visualPrompt" rows="2" placeholder="图片生成的提示词...">' + esc((v && v.visualPrompt) || "") + '</textarea></div>';
+      if (v && v.imageUrls && v.imageUrls.length > 1) {
+        html += '<div class="wf-detail-section"><div class="wf-detail-label">生成结果（点击选择）</div><div style="display:grid;grid-template-columns:repeat(2,1fr);gap:6px;">';
+        v.imageUrls.forEach(function (url, i) {
+          var sel = url === v.imageUrl ? 'border:2px solid #06b6d4;' : 'border:2px solid transparent;opacity:0.7;';
+          html += '<img class="wf-detail-img wf-preview-img" src="' + esc(url) + '" data-pick-image="' + i + '" style="cursor:pointer;border-radius:6px;' + sel + '">';
+        });
+        html += '</div></div>';
+      } else if (v && v.imageUrl) {
+        html += '<img class="wf-detail-img wf-preview-img" src="' + esc(v.imageUrl) + '">';
+      }
+      html += '<div class="wf-upload-wrap"><label class="wf-upload-btn"><i class="fa fa-upload"></i> ' + ((v && v.imageUrl) ? '替换图片' : '上传图片') + '<input type="file" accept="image/*" class="wf-file-input" data-upload-direct="singleStoryboard" style="display:none"></label></div>';
+      html += renderRefImagesSection(nd, "singleStoryboard");
+      if (!ctx.isPipelineNode) { var _dis = _getDisabledAttr(ctx, "singleStoryboard"); html += '<div class="wf-detail-actions"><button class="wf-tb-btn primary" data-gen-seg="' + ctx.segIndex + '" data-gen-type="singleStoryboard"' + _dis + '><i class="fa fa-refresh"></i> ' + ((v && v.imageUrl) ? "重新生成图片" : "生成图片") + '</button></div>'; }
       return html;
     },
   });
@@ -1309,19 +1533,30 @@
       var mcV = !wf.mainCharactersSkip ? NR.getActiveVersion((wf.mainCharacterss || [])[0]) : null;
       var minorV = !wf.minorCharactersSkip ? NR.getActiveVersion((seg.minorCharacterss || [])[0]) : null;
       var sceneV = !wf.sceneSkip ? NR.getActiveVersion((seg.scenes || [])[0]) : null;
-      var sbV = !wf.storyboardSkip ? NR.getActiveVersion((seg.storyboards || [])[0]) : null;
+      var _hasSB2 = (ctx.engine && ctx.engine.pipeline) ? ctx.engine.pipeline.map(function (s) { return s.nodeType; }).indexOf("storyboard") >= 0 : false;
+      var sbV = _hasSB2 ? NR.getActiveVersion((seg.storyboards || [])[0]) : null;
       var scenes = sceneV && sceneV.scenes ? sceneV.scenes : [];
       var appearingNames = getAppearingCharNames(seg);
       var mcChars = filterCharsByAppearing(mcV ? mcV.characters : [], appearingNames);
       var minorChars = filterCharsByAppearing(minorV ? minorV.characters : [], appearingNames);
+      // Mode 2: 尾帧参考最后一个单分镜帧
+      var allRefUrls = (nd.refImages || []).slice();
+      if ((wf.dramaMode || "grid") === "single") {
+        var singleArr = seg.singleStoryboards || [];
+        if (singleArr.length > 0) {
+          var lastSingleV = NR.getActiveVersion(singleArr[singleArr.length - 1]);
+          if (lastSingleV && lastSingleV.imageUrl) allRefUrls.push(lastSingleV.imageUrl);
+        }
+      }
       var data = await callApi("/api/workflow/generate/last-frame", {
         workflow_id: wf.id, image_config_id: getConfigId("image", "lastFrame"),
         visual_prompt: vp, description: desc,
         characters: mcChars,
         minor_characters: minorChars,
         scenes: scenes, style: wf.input.style,
+        style_template: getStyleTemplate(wf),
         storyboard_urls: sbV ? sbV.images : [],
-        ref_image_urls: nd.refImages || [],
+        ref_image_urls: allRefUrls,
         image_count: getImageCount("lastFrame"),
       });
       var urls = data.imageUrls || (data.imageUrl ? [data.imageUrl] : []);
@@ -1376,20 +1611,24 @@
       var wf = ctx.workflow;
       var seg = ctx.segment;
 
+      // 管道中存在的节点类型
+      var pipeTypes = (ctx.engine && ctx.engine.pipeline) ? ctx.engine.pipeline.map(function (s) { return s.nodeType; }) : [];
+      var hasFF = pipeTypes.indexOf("firstFrame") >= 0;
+      var hasSB = pipeTypes.indexOf("storyboard") >= 0;
+      var hasLF = pipeTypes.indexOf("lastFrame") >= 0;
+
+      // 用户手动跳过标记（非模式相关）
       var mcSkip = wf.mainCharactersSkip;
       var minorSkip = wf.minorCharactersSkip || seg.minorCharactersSkip;
       var sceneSkip = wf.sceneSkip || seg.sceneSkip;
-      var ffSkip = wf.firstFrameSkip || seg.firstFrameSkip;
-      var sbSkip = wf.storyboardSkip || seg.storyboardSkip;
-      var lfSkip = wf.lastFrameSkip || seg.lastFrameSkip;
 
       var mcArr = wf.mainCharacterss || [];
       var mcV = !mcSkip ? NR.getActiveVersion(mcArr[0]) : null;
       var minorV = !minorSkip ? NR.getActiveVersion((seg.minorCharacterss || [])[0]) : null;
       var sceneV = !sceneSkip ? NR.getActiveVersion((seg.scenes || [])[0]) : null;
-      var sbV = !sbSkip ? NR.getActiveVersion((seg.storyboards || [])[0]) : null;
-      var ffV = !ffSkip ? NR.getActiveVersion((seg.firstFrames || [])[0]) : null;
-      var lfV = !lfSkip ? NR.getActiveVersion((seg.lastFrames || [])[0]) : null;
+      var sbV = hasSB ? NR.getActiveVersion((seg.storyboards || [])[0]) : null;
+      var ffV = hasFF ? NR.getActiveVersion((seg.firstFrames || [])[0]) : null;
+      var lfV = hasLF ? NR.getActiveVersion((seg.lastFrames || [])[0]) : null;
 
       // 收集所有段落的规划历史和执行进度
       var allSegmentsContext = [];
@@ -1428,13 +1667,34 @@
         scenes: scenes,
         characters: mcChars,
         minor_characters: minorChars,
-        storyboard_grid: !sbSkip ? getStoryboardGrid() : 0,
+        storyboard_grid: hasSB ? getStoryboardGrid() : 0,
         storyboard_images: sbV ? sbV.images : [],
         grid_prompts: gridPrompts,
         first_frame: ffV ? { description: ffV.description, imageUrl: ffV.imageUrl } : {},
         last_frame: lfV ? { description: lfV.description, imageUrl: lfV.imageUrl } : {},
-        style: wf.input.style, type: wf.input.type,
-        all_segments_context: allSegmentsContext
+        style: wf.input.style, style_template: getStyleTemplate(wf), type: wf.input.type,
+        all_segments_context: allSegmentsContext,
+        drama_mode: wf.dramaMode || "grid",
+        story_template_content: (function () {
+          // Mode 3: 传递故事模板markdown内容
+          if ((wf.dramaMode || "grid") === "template") {
+            var stNd = (seg.storyTemplates || [])[0];
+            var stV = NR.getActiveVersion(stNd);
+            return (stV && stV.markdown) || "";
+          }
+          return "";
+        })(),
+        story_template_image_urls: (function () {
+          // Mode 3: 传递故事模板图片 URL，让多模态 LLM 能看图写视频提示词
+          if ((wf.dramaMode || "grid") === "template") {
+            var stNd = (seg.storyTemplates || [])[0];
+            var stV = NR.getActiveVersion(stNd);
+            if (stV && stV.imageUrl) {
+              return [stV.imageUrl].concat((stV.imageUrls || []).filter(function (u) { return u !== stV.imageUrl; }));
+            }
+          }
+          return [];
+        })(),
       });
       return { fullText: data.full_text || "" };
     },
@@ -1511,6 +1771,9 @@
       }
 
       var isShotList = (nd.presetId || "boardImage") === "shotListMd";
+      var isTemplate = (wf.dramaMode || "grid") === "template";
+      var stV = NR.getActiveVersion(nd);
+      var organizedPrompt = (isTemplate && stV && stV.organizedPrompt) || "";
       var body = {
         workflow_id: wf.id,
         image_config_id: getConfigId("image", "storyTemplate"),
@@ -1526,12 +1789,16 @@
         grid_prompts: isShotList ? [] : sbGridPrompts,
         orientation: getStoryTemplateOrientation(),
         style: wf.input.style,
+        style_template: getStyleTemplate(wf),
         image_count: getImageCount("storyTemplate"),
         extra_hint: (nd && nd.reviewHint) || "",
         preset_id: nd.presetId || "boardImage",
         prompt_template: nd.promptTemplate || "",
         prev_last_frame_desc: prevLastDesc,
         next_first_frame_desc: nextFirstDesc,
+        ref_image_urls: nd.refImages || [],
+        organized_prompt: organizedPrompt,
+        drama_mode: wf.dramaMode || "grid",
       };
       // 图片类预设需要 characters 合并列表（兼容后端旧路径）
       if (presetKind !== "text") {
@@ -1547,7 +1814,62 @@
     renderDetail: function (nd, wf, ctx) {
       var v = NR.getActiveVersion(nd);
       var dis = _getDisabledAttr(ctx, "storyTemplate");
+      var isTemplateMode = (wf.dramaMode || "grid") === "template";
       var html = renderPresetSelector(nd, "storyTemplate", "boardImage", "storyTemplate", ctx, "storyTemplate");
+
+      // Mode 3 (template): 从分镜组织提示词 + 生图
+      if (isTemplateMode) {
+        html += '<div class="wf-detail-section" style="background:#1e293b;padding:12px;border-radius:8px;margin-bottom:8px;">';
+        html += '<div class="wf-detail-label" style="color:#f59e0b;"><i class="fa fa-magic"></i> 模式板出图</div>';
+
+        if (ctx.isPipelineNode) {
+          html += '<div style="margin-top:6px;font-size:11px;color:#64748b;">请点击具体段落的故事模板卡片进行操作</div>';
+        } else {
+          var seg = wf.segments && wf.segments[ctx.segIndex];
+          var sbNd = seg ? (seg.storyboards || [])[0] : null;
+          var sbV = sbNd ? NR.getActiveVersion(sbNd) : null;
+          var hasGridPrompts = sbV && sbV.gridPrompts && sbV.gridPrompts.length;
+          var stOrgPrompt = (v && v.organizedPrompt) || "";
+
+          if (!hasGridPrompts) {
+            html += '<div style="margin-top:6px;font-size:11px;color:#64748b;">请先在分镜图中运行帧画面规划</div>';
+          } else {
+            // 组织提示词按钮
+            html += '<button class="wf-tb-btn" data-sb-organize="' + ctx.segIndex + '" style="margin-top:8px;background:#8b5cf6;color:#fff;border:none;">'
+              + '<i class="fa fa-magic"></i> 组织提示词</button>';
+
+            // 组织后的提示词 + 对话修改
+            if (stOrgPrompt) {
+              html += '<div style="margin-top:8px;"><span style="font-size:11px;color:#10b981;">已组织提示词（可编辑）</span>'
+                + '<textarea class="wf-detail-textarea wf-editable" data-edit-field="organizedPrompt" rows="6" style="margin-top:4px;white-space:pre-wrap;background:#0f172a;color:#e2e8f0;border:1px solid #334155;width:100%;font-size:12px;">' + esc(stOrgPrompt) + '</textarea></div>';
+              html += '<button class="wf-tb-btn" data-sb-copy-organized="' + ctx.segIndex + '" style="margin-top:8px;">'
+                + '<i class="fa fa-copy"></i> 复制</button>';
+            } else {
+              html += '<div style="margin-top:6px;font-size:11px;color:#64748b;">尚未组织提示词，请先选择上方提示词模板后点击「组织提示词」</div>';
+            }
+
+            // 对话修改（始终显示，没组织时点发送会提示）
+            var stHistory = v.chatHistory || [];
+            if (stHistory.length) {
+              html += '<div style="margin-top:8px;"><span style="font-size:11px;color:#94a3b8;">修改历史</span><div class="wf-chat-history" id="wf-st-chat-history" style="max-height:120px;overflow-y:auto;">';
+              stHistory.forEach(function (msg) {
+                if (msg.role === "user") {
+                  html += '<div class="wf-chat-msg wf-chat-user"><span class="wf-chat-role">你:</span> ' + esc(msg.content) + '</div>';
+                } else if (msg.role === "assistant") {
+                  html += '<div class="wf-chat-msg wf-chat-ai"><span class="wf-chat-role">AI:</span> ' + esc(msg.content) + '</div>';
+                }
+              });
+              html += '</div></div>';
+            }
+            html += '<div style="margin-top:6px;">'
+              + '<textarea class="wf-detail-textarea" id="wf-st-chat-input" rows="2" placeholder="描述修改方向，如：把分镜布局改成竖版、增加灯光描述..."></textarea>'
+              + '<button class="wf-tb-btn primary" id="wf-st-chat-send" style="margin-top:6px;"><i class="fa fa-paper-plane"></i> 发送修改</button>'
+              + '</div>';
+          }
+        }
+        html += '</div>';
+      }
+
       if (v) {
         if (v.prompt) {
           html += '<div class="wf-detail-section"><div class="wf-detail-label">生成提示词</div>'
@@ -1592,25 +1914,100 @@
     },
   });
 
-  /* ── Pipeline Definition ── */
+  /* ── Pipeline Definition: 3套模式，不同节点组合 ── */
+  var PIPELINE_BASE_GLOBAL = [
+    { nodeType: "input", category: "global" },
+    { nodeType: "episodePlan", category: "global" },
+    { nodeType: "script", category: "global" },
+    { nodeType: "planCharactersScenes", category: "global" },
+    { nodeType: "mainCharacters", category: "global" },
+  ];
+  var PIPELINE_BASE_SEGMENT_COMMON = [
+    { nodeType: "minorCharacters", category: "segment" },
+    { nodeType: "scene", category: "segment" },
+    { nodeType: "planFrames", category: "segment" },
+  ];
+  // template 模式：storyboard → storyTemplate → videoPrompt
+  var PIPELINE_BASE_SEGMENT_TAIL = [
+    { nodeType: "storyTemplate", category: "segment" },
+    { nodeType: "videoPrompt", category: "segment" },
+  ];
+  // grid 模式：storyboard → videoPrompt → storyTemplate（视频提示词紧跟分镜图）
+  var PIPELINE_GRID = PIPELINE_BASE_GLOBAL.concat(
+    PIPELINE_BASE_SEGMENT_COMMON,
+    [{ nodeType: "storyboard", category: "segment" }],
+    [{ nodeType: "videoPrompt", category: "segment" }],
+    [{ nodeType: "storyTemplate", category: "segment" }]
+  );
+  var PIPELINE_SINGLE = PIPELINE_BASE_GLOBAL.concat(
+    PIPELINE_BASE_SEGMENT_COMMON,
+    [
+      { nodeType: "firstFrame", category: "segment" },
+      { nodeType: "singleStoryboard", category: "segment", manualOnly: true },
+      { nodeType: "lastFrame", category: "segment" },
+    ],
+    PIPELINE_BASE_SEGMENT_TAIL
+  );
+  var PIPELINE_TEMPLATE = PIPELINE_BASE_GLOBAL.concat(
+    PIPELINE_BASE_SEGMENT_COMMON,
+    [{ nodeType: "storyboard", category: "segment" }],
+    PIPELINE_BASE_SEGMENT_TAIL
+  );
+
+  function _getModePipeline(wf) {
+    var mode = (wf && wf.dramaMode) || "grid";
+    var pipe;
+    if (mode === "single") pipe = PIPELINE_SINGLE;
+    else if (mode === "template") pipe = PIPELINE_TEMPLATE;
+    else pipe = PIPELINE_GRID;
+    // 剧集规划为1集（或未设置）→ 隐藏 episodePlan
+    var epCount = parseInt(wf && wf.input && wf.input.episodeCount) || 0;
+    if (epCount <= 1) {
+      pipe = pipe.filter(function (s) { return s.nodeType !== "episodePlan"; });
+    }
+    return pipe;
+  }
+
+  var VIDEO_PIPELINE_STEPS = PIPELINE_GRID;
+
+  function _renderDramaModeTopbar(engine, wf) {
+    var mode = wf.dramaMode || "grid";
+    var modes = [
+      { id: "grid", label: "宫格分镜图", icon: "fa-th" },
+      { id: "single", label: "单个分镜", icon: "fa-film" },
+      { id: "template", label: "故事模板", icon: "fa-th-large" },
+    ];
+    var html = '<div class="wf-drama-mode-bar" style="display:flex;align-items:center;gap:10px;padding:10px 16px;background:#1e293b;border-radius:8px;margin-bottom:12px;">';
+    html += '<span style="color:#94a3b8;font-size:13px;font-weight:600;margin-right:4px;">短剧模式</span>';
+    modes.forEach(function (m) {
+      var active = mode === m.id;
+      html += '<button class="wf-drama-mode-btn" data-drama-mode="' + m.id + '" style="'
+        + 'padding:6px 16px;border-radius:6px;border:1px solid ' + (active ? '#8b5cf6' : '#334155') + ';'
+        + 'background:' + (active ? '#8b5cf620' : 'transparent') + ';'
+        + 'color:' + (active ? '#c4b5fd' : '#94a3b8') + ';'
+        + 'cursor:pointer;font-size:13px;font-weight:' + (active ? '600' : '400') + ';'
+        + 'transition:all 0.15s;'
+        + '"><i class="fa ' + m.icon + '" style="margin-right:5px;"></i>' + m.label + '</button>';
+    });
+    // 单个分镜模式：显示添加分镜按钮
+    if (mode === "single") {
+      var segCount = (wf.segments || []).length;
+      html += '<span style="margin-left:auto;display:flex;gap:6px;">';
+      for (var si = 0; si < segCount; si++) {
+        html += '<button class="wf-tb-btn" data-single-add="' + si + '" style="background:#06b6d4;color:#fff;border:none;padding:6px 14px;border-radius:6px;cursor:pointer;font-size:12px;">'
+          + '<i class="fa fa-plus"></i> ' + (segCount > 1 ? '段' + (si + 1) + '添加分镜' : '添加分镜') + '</button>';
+      }
+      html += '</span>';
+    }
+    html += '</div>';
+    return html;
+  }
+
   var VIDEO_PIPELINE = {
     id: "video",
     title: "视频工作流",
-    pipeline: [
-      { nodeType: "input", category: "global" },
-      { nodeType: "episodePlan", category: "global" },
-      { nodeType: "script", category: "global" },
-      { nodeType: "planCharactersScenes", category: "global" },
-      { nodeType: "mainCharacters", category: "global" },
-      { nodeType: "minorCharacters", category: "segment" },
-      { nodeType: "scene", category: "segment" },
-      { nodeType: "planFrames", category: "segment" },
-      { nodeType: "firstFrame", category: "segment" },
-      { nodeType: "storyboard", category: "segment" },
-      { nodeType: "lastFrame", category: "segment" },
-      { nodeType: "videoPrompt", category: "segment" },
-      { nodeType: "storyTemplate", category: "segment" },
-    ],
+    pipeline: _getModePipeline,
+    topbarHtml: _renderDramaModeTopbar,
   };
 
   /* ── Template Registration ── */
@@ -1648,10 +2045,287 @@
     _rerender();
   }
 
+  // ── Mode 2 helpers ──
+  function addSingleStoryboard(engine, segIdx, rerender) {
+    console.log("[video-workflow] addSingleStoryboard called: segIdx=" + segIdx + " engine=" + !!engine);
+    var wf = engine.current();
+    if (!wf) { console.log("[video-workflow] addSingleStoryboard: no wf"); return; }
+    var seg = (wf.segments || [])[segIdx];
+    if (!seg) { console.log("[video-workflow] addSingleStoryboard: no seg at idx=" + segIdx + " total segs=" + (wf.segments || []).length); return; }
+    if (!seg.singleStoryboards) seg.singleStoryboards = [];
+    // 始终以数组实际长度为准，避免 count 字段与实际数组不同步
+    seg.singleStoryboardCount = seg.singleStoryboards.length;
+    console.log("[video-workflow] addSingleStoryboard: arrLen=" + seg.singleStoryboards.length + " count=" + seg.singleStoryboardCount + " arrEmpty=" + (seg.singleStoryboards.length === 0));
+    if (seg.singleStoryboardCount >= 10) { console.log("[video-workflow] addSingleStoryboard: max reached (10)"); return; }
+    seg.singleStoryboards.push(NR.createNodeData());
+    seg.singleStoryboardCount = seg.singleStoryboards.length;
+    console.log("[video-workflow] addSingleStoryboard: now " + seg.singleStoryboardCount + " nodes");
+    engine.save();
+    rerender();
+  }
+
+  function delSingleStoryboard(engine, segIdx, idx, rerender) {
+    var wf = engine.current();
+    if (!wf) return;
+    var seg = (wf.segments || [])[segIdx];
+    if (!seg || !seg.singleStoryboards) return;
+    seg.singleStoryboards.splice(idx, 1);
+    seg.singleStoryboardCount = seg.singleStoryboards.length;
+    engine.save();
+    rerender();
+  }
+
+  // ── Mode 3 helpers ──
+  async function organizeStoryboardPrompt(engine, segIdx, rerender) {
+    var wf = engine.current();
+    if (!wf) return;
+    var seg = (wf.segments || [])[segIdx];
+    if (!seg) return;
+    var sbNd = (seg.storyboards || [])[0];
+    if (!sbNd) return;
+    var sbV = NR.getActiveVersion(sbNd);
+    if (!sbV || !sbV.gridPrompts || !sbV.gridPrompts.length) {
+      alert("请先运行帧画面规划获取分镜描述");
+      return;
+    }
+    var stNd = (seg.storyTemplates || [])[0];
+    if (!stNd) return;
+    var stKey = "seg_" + segIdx + "_storyTemplate_0";
+    engine.runningNodes[stKey] = true;
+    rerender();
+    try {
+      var mcV = NR.getActiveVersion((wf.mainCharacterss || [])[0]);
+      var minorV = NR.getActiveVersion((seg.minorCharacterss || [])[0]);
+      var sceneV = NR.getActiveVersion((seg.scenes || [])[0]);
+      var scenes = sceneV && sceneV.scenes ? sceneV.scenes : [];
+      var appearingNames = getAppearingCharNames(seg);
+      var mcChars = filterCharsByAppearing(mcV ? mcV.characters : [], appearingNames);
+      var minorChars = filterCharsByAppearing(minorV ? minorV.characters : [], appearingNames);
+      // 从故事模板节点读取提示词模板（支持预设 + 自定义）
+      var template = (stNd && stNd.promptTemplate) || "";
+      if (!template) {
+        var preset = findPreset("storyTemplate", stNd && stNd.presetId);
+        template = (preset && preset.prompt_template) || "";
+      }
+      var data = await callApi("/api/workflow/generate/organize-storyboard-prompt", {
+        workflow_id: wf.id,
+        chat_config_id: getConfigId("chat", "storyboard"),
+        plot: wf.input.plot || "",
+        style: wf.input.style || "",
+        grid_prompts: sbV.gridPrompts,
+        characters: mcChars,
+        minor_characters: minorChars,
+        scenes: scenes,
+        prompt_template: template,
+        segment_index: segIdx,
+      });
+      var stV = NR.getActiveVersion(stNd);
+      NR.addVersion(stNd, {
+        organizedPrompt: data.organized_prompt || "",
+        imageUrl: (stV && stV.imageUrl) || "",
+        images: (stV && stV.images) || [],
+        imageUrls: (stV && stV.imageUrls) || [],
+        markdown: (stV && stV.markdown) || "",
+        prompt: (stV && stV.prompt) || "",
+        kind: (stV && stV.kind) || "",
+        presetId: (stV && stV.presetId) || "",
+        chatHistory: (stV && stV.chatHistory) || [],
+      });
+      engine.save();
+    } catch (err) {
+      console.error("[video-workflow] organize-storyboard-prompt failed:", err);
+      alert("组织提示词失败: " + (err.message || err));
+    }
+    delete engine.runningNodes[stKey];
+    rerender();
+  }
+
+  async function generateTemplateBoardImage(engine, segIdx, rerender) {
+    var wf = engine.current();
+    if (!wf) return;
+    var seg = (wf.segments || [])[segIdx];
+    if (!seg) return;
+    var stNd = (seg.storyTemplates || [])[0];
+    if (!stNd) return;
+    var stV = NR.getActiveVersion(stNd);
+    var sbNd = (seg.storyboards || [])[0];
+    if (!sbNd) return;
+    var organizedPrompt = (stV && stV.organizedPrompt) || "";
+    if (!organizedPrompt) {
+      alert("请先组织提示词");
+      return;
+    }
+    var stKey = "seg_" + segIdx + "_storyTemplate_0";
+    engine.runningNodes[stKey] = true;
+    rerender();
+    try {
+      var mcV = NR.getActiveVersion((wf.mainCharacterss || [])[0]);
+      var minorV = NR.getActiveVersion((seg.minorCharacterss || [])[0]);
+      var sceneV = NR.getActiveVersion((seg.scenes || [])[0]);
+      var scenes = sceneV && sceneV.scenes ? sceneV.scenes : [];
+      var appearingNames = getAppearingCharNames(seg);
+      var mcChars = filterCharsByAppearing(mcV ? mcV.characters : [], appearingNames);
+      var minorChars = filterCharsByAppearing(minorV ? minorV.characters : [], appearingNames);
+      var grid = getStoryboardGrid();
+      var data = await callApi("/api/workflow/generate/template-board-image", {
+        workflow_id: wf.id,
+        image_config_id: getConfigId("image", "storyboard"),
+        organized_prompt: organizedPrompt,
+        characters: mcChars.concat(minorChars),
+        scenes: scenes,
+        style: wf.input.style || "",
+        style_template: getStyleTemplate(wf),
+        grid: grid,
+        orientation: getStoryTemplateOrientation(),
+        segment_index: segIdx,
+        image_count: getImageCount("storyboard"),
+      });
+      var urls = data.imageUrls || (data.imageUrl ? [data.imageUrl] : []);
+      NR.addVersion(sbNd, { images: urls, imageUrl: urls[0] || "" });
+      if (urls.length > 0) { sbNd.isLocked = true; sbNd.segmentIndex = segIdx; }
+      engine.save();
+    } catch (err) {
+      console.error("[video-workflow] template-board-image failed:", err);
+      alert("生图失败: " + (err.message || err));
+    }
+    delete engine.runningNodes[stKey];
+    rerender();
+  }
+
+  function copyOrganizedPrompt(engine, segIdx) {
+    var wf = engine.current();
+    if (!wf) return;
+    var seg = (wf.segments || [])[segIdx];
+    if (!seg) return;
+    var stNd = (seg.storyTemplates || [])[0];
+    if (!stNd) return;
+    var stV = NR.getActiveVersion(stNd);
+    if (!stV || !stV.organizedPrompt) return;
+    navigator.clipboard.writeText(stV.organizedPrompt).then(function () {
+      console.log("[video-workflow] organized prompt copied");
+    });
+  }
+
+  async function iterateStoryTemplate(engine, rerender) {
+    var input = document.getElementById("wf-st-chat-input");
+    if (!input) return;
+    var msg = input.value.trim();
+    if (!msg) return;
+    var key = engine.selectedNodeKey;
+    if (!key) return;
+    var nd = WF_Renderer.getNodeDataByKey(engine, key);
+    var v = NR.getActiveVersion(nd);
+    if (!v) { alert("尚未生成任何内容"); return; }
+    // 优先使用组织后的提示词，否则回退到生成提示词
+    var orgPrompt = v.organizedPrompt || v.prompt || "";
+    if (!orgPrompt) { alert("请先生成内容或组织提示词"); return; }
+
+    var btn = document.getElementById("wf-st-chat-send");
+    if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fa fa-spinner fa-spin"></i> 分析中...'; }
+    if (input) input.disabled = true;
+
+    try {
+      var wf = engine.current();
+      var segIdx = WF_Renderer.parseSegIndex(key);
+      var imageUrls = (v.imageUrl) ? [v.imageUrl] : [];
+      var prevHistory = v.chatHistory || [];
+      var data = await callApi("/api/workflow/generate/storytemplate-iterate", {
+        chat_config_id: getConfigId("chat", "storyTemplate"),
+        organized_prompt: orgPrompt,
+        image_urls: imageUrls,
+        chat_history: prevHistory,
+        user_message: msg,
+      });
+      var newHistory = prevHistory.slice();
+      newHistory.push({ role: "user", content: msg });
+      newHistory.push({ role: "assistant", content: data.analysis || "done" });
+      NR.addVersion(nd, {
+        organizedPrompt: data.organized_prompt || orgPrompt,
+        chatHistory: newHistory,
+        imageUrl: v.imageUrl || "",
+        images: v.images || [],
+        imageUrls: v.imageUrls || [],
+        markdown: v.markdown || "",
+        prompt: v.prompt || "",
+        kind: v.kind || "",
+        presetId: v.presetId || "",
+      });
+      engine.save();
+      rerender();
+      requestAnimationFrame(function () { var h = document.getElementById("wf-st-chat-history"); if (h) h.scrollTop = h.scrollHeight; });
+    } catch (err) {
+      alert("修改失败：" + (err.message || err));
+    } finally {
+      if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fa fa-paper-plane"></i> 发送修改'; }
+      if (input) { input.disabled = false; input.value = ""; input.focus(); }
+    }
+  }
+
   function bindVideoEvents(engine, rerender) {
     document.addEventListener("click", function (e) {
       var wfRoot = e.target.closest && e.target.closest("#workflow");
       if (!wfRoot) return;
+
+      // ── 短剧模式切换 ──
+      var dramaModeBtn = e.target.closest && e.target.closest("[data-drama-mode]");
+      if (dramaModeBtn) {
+        var wf = engine.current();
+        if (wf) {
+          var newMode = dramaModeBtn.getAttribute("data-drama-mode");
+          if (newMode && newMode !== wf.dramaMode) {
+            wf.dramaMode = newMode;
+            engine.syncPipeline();
+            engine.ensureShape(wf);
+            engine.save();
+            rerender();
+          }
+        }
+        return;
+      }
+
+      // ── Mode 2: 单分镜帧 添加/删除 ──
+      var singleAdd = e.target.closest && e.target.closest("[data-single-add]");
+      console.log("[video-workflow] click: target", e.target.tagName, e.target.className,
+        "closest(#workflow)=", !!e.target.closest("#workflow"),
+        "closest([data-single-add])=", !!singleAdd,
+        "closest([data-drama-mode])=", !!(e.target.closest && e.target.closest("[data-drama-mode]")));
+      if (singleAdd) {
+        var addSegIdx = parseInt(singleAdd.getAttribute("data-single-add"));
+        console.log("[video-workflow] addSingleStoryboard: segIdx=" + addSegIdx);
+        addSingleStoryboard(engine, addSegIdx, rerender);
+        return;
+      }
+      var singleDel = e.target.closest && e.target.closest("[data-single-del]");
+      if (singleDel) {
+        var delSegIdx = parseInt(singleDel.getAttribute("data-single-del"));
+        var delIdx = parseInt(singleDel.getAttribute("data-single-idx"));
+        delSingleStoryboard(engine, delSegIdx, delIdx, rerender);
+        return;
+      }
+
+      // ── Mode 3: 故事版组织提示词 ──
+      var sbOrganize = e.target.closest && e.target.closest("[data-sb-organize]");
+      if (sbOrganize) {
+        var orgSegIdx = parseInt(sbOrganize.getAttribute("data-sb-organize"));
+        organizeStoryboardPrompt(engine, orgSegIdx, rerender);
+        return;
+      }
+
+      // ── Mode 3: 故事版生图 ──
+      var sbGenerate = e.target.closest && e.target.closest("[data-sb-generate]");
+      if (sbGenerate) {
+        var genSegIdx = parseInt(sbGenerate.getAttribute("data-sb-generate"));
+        generateTemplateBoardImage(engine, genSegIdx, rerender);
+        return;
+      }
+
+      // ── Mode 3: 复制组织后的提示词 ──
+      var sbCopy = e.target.closest && e.target.closest("[data-sb-copy-organized]");
+      if (sbCopy) {
+        var copySegIdx = parseInt(sbCopy.getAttribute("data-sb-copy-organized"));
+        copyOrganizedPrompt(engine, copySegIdx);
+        return;
+      }
 
       if (e.target.closest && e.target.closest("#wf-save-input")) {
         var wf = engine.current();
@@ -1742,6 +2416,11 @@
         return;
       }
 
+      if (e.target.closest && e.target.closest("#wf-st-chat-send")) {
+        iterateStoryTemplate(engine, rerender);
+        return;
+      }
+
       if (e.target.closest && e.target.closest("#wf-sb-chat-send")) {
         iterateStoryboard(engine, rerender);
         return;
@@ -1770,6 +2449,10 @@
       if (e.target.id === "wf-vp-chat-input" && e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
         iterateVideoPrompt(engine, rerender);
+      }
+      if (e.target.id === "wf-st-chat-input" && e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        iterateStoryTemplate(engine, rerender);
       }
       if (e.target.id === "wf-sb-chat-input" && e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
@@ -1807,6 +2490,12 @@
         if (sbV && sbV.images) refImageUrls = refImageUrls.concat(sbV.images);
         var lfV = NR.getActiveVersion((seg.lastFrames || [])[0]);
         if (lfV && lfV.imageUrl) refImageUrls.push(lfV.imageUrl);
+        // 故事模板模式：加入故事模板图
+        if ((wf.dramaMode || "grid") === "template") {
+          var stV = NR.getActiveVersion((seg.storyTemplates || [])[0]);
+          if (stV && stV.imageUrl) refImageUrls.push(stV.imageUrl);
+          if (stV && stV.imageUrls) refImageUrls = refImageUrls.concat(stV.imageUrls.filter(function (u) { return u !== (stV.imageUrl || ""); }));
+        }
       }
 
       var prevHistory = v.chatHistory || [];
@@ -2040,13 +2729,15 @@
         image_config_id: getConfigId("image", charType),
         characters: [charForApi],
         style: wf.input.style,
+        style_template: getStyleTemplate(wf),
         ref_image_urls: refImageUrls,
         image_count: getImageCount(charType),
         preset_id: nd.presetId || "default",
         prompt_template: nd.promptTemplate || "",
         width: preset && preset.width,
         height: preset && preset.height,
-      });
+        grid_merge: false,
+      }, 300000);
       var resultChars = data.characters || [];
       var errs = data.errors || [];
       if (errs.length) {
@@ -2112,8 +2803,12 @@
       }
       var nodeRefs = nd.refImages || [];
       var itemRefs = singleScene.refImages || [];
-      var refImageUrls = itemRefs.concat(nodeRefs.filter(function (u) { return itemRefs.indexOf(u) < 0; }));
-      // 剥掉旧 imageUrl/imageUrls/gridInfo，否则后端见 imageUrl 会跳过
+      // 合并参考图去重：item 级别 refImages + node 级别 refImages
+      var refImageUrls = itemRefs.concat(nodeRefs.filter(function (u) {
+        return u && itemRefs.indexOf(u) < 0;
+      }));
+      // 剥掉旧 imageUrl/imageUrls/gridInfo，否则后端见 imageUrl 会跳过。
+      // 注意：此处不清除 refImages，后端会一并使用 item 级别和 node 级别参考图。
       var sceneForApi = {};
       for (var k in singleScene) if (Object.prototype.hasOwnProperty.call(singleScene, k)) sceneForApi[k] = singleScene[k];
       delete sceneForApi.imageUrl;
@@ -2125,9 +2820,11 @@
         scenes: [sceneForApi],
         prev_segment_scenes: prevScenes,
         style: wf.input.style,
+        style_template: getStyleTemplate(wf),
         ref_image_urls: refImageUrls,
         image_count: getImageCount("scene"),
-      });
+        grid_merge: false,
+      }, 300000);
       var resultScenes = data.scenes || [];
       var errs = data.errors || [];
       if (errs.length) {
@@ -2293,9 +2990,10 @@
     if (!v) { pfNd.reviewStatus = "passed"; return; }
     var state = engine._state(wf.id);
 
-    var skipFF = !!(wf.firstFrameSkip || seg.firstFrameSkip);
-    var skipSB = !!(wf.storyboardSkip || seg.storyboardSkip);
-    var skipLF = !!(wf.lastFrameSkip || seg.lastFrameSkip);
+    var _rvPipeTypes = (engine.pipeline) ? engine.pipeline.map(function (s) { return s.nodeType; }) : [];
+    var _rvPlanFF = _rvPipeTypes.indexOf("firstFrame") >= 0;
+    var _rvPlanSB = _rvPipeTypes.indexOf("storyboard") >= 0;
+    var _rvPlanLF = _rvPipeTypes.indexOf("lastFrame") >= 0;
 
     for (var attempt = 0; attempt < maxRetries; attempt++) {
       engine.setNodeReviewing("planFrames", segIdx, true, wf.id);
@@ -2305,9 +3003,9 @@
         var data = await callApi("/api/workflow/review/frame-plan", {
           chat_config_id: getConfigId("chat", "planFrames"),
           segment_text: seg.scriptText || "",
-          first_frame: skipFF ? {} : (v.firstFrame || {}),
-          storyboard: skipSB ? {} : (v.storyboard || {}),
-          last_frame: skipLF ? {} : (v.lastFrame || {}),
+          first_frame: _rvPlanFF ? (v.firstFrame || {}) : {},
+          storyboard: _rvPlanSB ? (v.storyboard || {}) : {},
+          last_frame: _rvPlanLF ? (v.lastFrame || {}) : {},
           style: wf.input.style,
         });
         if (data.passed) {
@@ -2318,15 +3016,15 @@
         engine._updateLastReviewHistory(wf, "planFrames", segIdx, "review_failed", data.analysis || "审核不通过");
         if (data.revised_data) {
           var rd = data.revised_data;
-          if (!skipFF && rd.first_frame && rd.first_frame.description) {
+          if (_rvPlanFF && rd.first_frame && rd.first_frame.description) {
             var ffNd = (seg.firstFrames || [])[0];
             if (ffNd) NR.addVersion(ffNd, { description: rd.first_frame.description, visualPrompt: rd.first_frame.visual_prompt || "" });
           }
-          if (!skipSB && rd.storyboard && rd.storyboard.grid_prompts) {
+          if (_rvPlanSB && rd.storyboard && rd.storyboard.grid_prompts) {
             var sbNd = (seg.storyboards || [])[0];
             if (sbNd) NR.addVersion(sbNd, { description: rd.storyboard.description || "", gridPrompts: normalizeGridPrompts(rd.storyboard.grid_prompts) });
           }
-          if (!skipLF && rd.last_frame && rd.last_frame.description) {
+          if (_rvPlanLF && rd.last_frame && rd.last_frame.description) {
             var lfNd = (seg.lastFrames || [])[0];
             if (lfNd) NR.addVersion(lfNd, { description: rd.last_frame.description, visualPrompt: rd.last_frame.visual_prompt || "" });
           }

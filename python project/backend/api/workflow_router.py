@@ -13,7 +13,7 @@ from backend.core.workflow_storage import (
 from backend.api.config_router import get_config_list
 from backend.api.image_router import generate_image
 from backend.models.schemas import ImageGenerateRequest
-from backend.core.request_client import async_http_request
+from backend.core.request_client import async_http_request, build_endpoint_url
 
 router = APIRouter(prefix="/api/workflow", tags=["工作流"])
 
@@ -59,6 +59,20 @@ STORY_TEMPLATE_PRESETS = [
         "kind": "image",
         "orientations": ["horizontal", "vertical"],
         "template": "",  # 走原有 gen_story_template 的拼装逻辑
+        "prompt_template": (
+            "影视级美术设计画板，高端视觉开发图纸，简洁版式设计，横向大画幅画布。比例16:9。\n"
+            "画板呈现 {scenes} 场景，采用{style}设计风格，高级影视氛围感。\n\n"
+            "【模块 1 —— 俯视图机位】\n"
+            "左侧区域：场景的俯视视角布局图，标注人物在场景中的具体位置和行动路线。\n\n"
+            "【模块 2 —— 分镜网格】\n"
+            "右侧区域：分镜网格（{grid}格分镜图，根据剧情逐一演绎），每格画幅比例为16:9。\n"
+            "分镜内容：\n{grid_prompts}\n"
+            "角色：{characters}\n"
+            "风格：写实影视摄影，电影剧照，强叙事性，戏剧化构图。\n\n"
+            "【模块 3 —— 立面视图】\n"
+            "底部区域：立面效果图，展示这段剧情所拍摄的场景空间。\n"
+            "剧情概要：{plot}"
+        ),
     },
     {
         "id": "shotListMd",
@@ -68,6 +82,48 @@ STORY_TEMPLATE_PRESETS = [
         "height": 2160,
         "orientations": ["horizontal"],
         "template": "",
+        "prompt_template": (
+            "为一组短剧分镜生成完整的叙事故事板提示词，{style}风格。\n\n"
+            "剧情：{plot}\n\n"
+            "分镜画面：\n{grid_prompts}\n\n"
+            "人物：{characters}\n"
+            "场景：{scenes}\n\n"
+            "请按以下结构组织：\n"
+            "1. 【整体氛围】描述本段落的情绪基调和视觉风格\n"
+            "2. 【分镜详解】逐格描述画面内容、人物动作、镜头语言（景别+运镜）\n"
+            "3. 【排版布局】{grid}格在画面中的排列方式和视觉流\n"
+            "4. 【参考引用】每格需要@的人物和场景参考图"
+        ),
+    },
+    {
+        "id": "visualDevBoard",
+        "name": "视觉开发板（角色与场景设定总览）",
+        "kind": "image",
+        "width": 3840,
+        "height": 2160,
+        "orientations": ["horizontal"],
+        "template": "",
+        "prompt_template": (
+            "生成一张电影级「视觉开发板 / 角色与场景设定总览板」风格的高密度信息排版图，整体为专业概念设计提案板、影视前期美术设定板的形式。\n"
+            "不是普通海报，而是一张完整的项目视觉说明图。\n"
+            "画面采用深色纯净背景或深灰黑底，版式高级、理性、秩序清晰，带有国际化电影美术手册气质。\n"
+            "比例16:9，{style}风格。\n\n"
+            "剧情：{plot}\n"
+            "人物：{characters}\n"
+            "场景：{scenes}\n"
+            "分镜描述：\n{grid_prompts}\n\n"
+            "整张图包含以下结构模块，必须统一在同一视觉主题下：\n"
+            "1. 左上区域：主标题、副标题、栏目标题，高端编辑设计排版，可用中英双语标题，字体克制、细致、专业。\n"
+            "2. 左侧上半区：角色设定区，展示主角色的正面、侧面、背面、半身近景或肖像特写，配有少量角色信息文字。角色服装、发型、姿态、道具统一风格。\n"
+            "3. 右上区域：一张最大的环境主视觉图，作为核心世界观场景，电影感强，细节丰富，有沉浸式空间氛围。\n"
+            "4. 中部区域：分镜 storyboard 模块，{grid}格连续小图展示角色在场景中的探索、观察、互动、发现、记录等情节过程。\n"
+            "5. 中下区域：camera movement 模块，包含镜头运动轨迹图、箭头路径、推拉摇移示意、空间动线设计图，专业摄影调度图感觉。\n"
+            "6. 右中或右下区域：lighting & mood 模块，展示数张不同光线氛围参考小图，强调统一的灯光语言、时间气质、情绪氛围。\n"
+            "7. 底部：color palette 模块，以横向色卡形式展示主题配色。\n"
+            "8. 底部或右下：lens & camera reference 模块，表格形式展示镜头焦段、光圈、ISO、快门、机位、运动方式等摄影参数。\n"
+            "9. 最下方：reference 图条或细节参考图带，作为补充视觉素材。\n\n"
+            "整体要求：所有模块内容必须高度统一，像同一个电影项目的官方设定板；版面整洁，留白克制，网格对齐，层级清晰；不是杂乱拼贴，而是专业 art direction board；图中文字要像真实的设计版文字，避免廉价排版；整体质感高级、电影化、叙事性强、概念设计感强；超高细节，统一色调，统一世界观，编辑设计感，影视前期开发资料质感。"
+        ),
     },
 ]
 
@@ -196,7 +252,8 @@ def build_ref_index_prefix(characters=None, scenes=None, extra_labels=None):
 
 def compute_grid_layout(grid: int, resolution: str = "") -> tuple:
     """根据grid数和分辨率计算行列布局。返回 (grid, rows, cols, grid_label)"""
-    if grid not in (4, 6, 9, 16):
+    VALID_GRIDS = {4, 5, 6, 7, 8, 9, 10, 11, 12, 16}
+    if grid not in VALID_GRIDS:
         grid = 4
     if grid == 6:
         is_portrait = False
@@ -209,9 +266,12 @@ def compute_grid_layout(grid: int, resolution: str = "") -> tuple:
         rows, cols = (3, 2) if is_portrait else (2, 3)
         grid_label = "3x2" if is_portrait else "2x3"
     else:
-        rows = {4: 2, 9: 3, 16: 4}[grid]
-        cols = rows
-        grid_label = {4: "2x2", 9: "3x3", 16: "4x4"}[grid]
+        LAYOUTS = {
+            4: (2, 2, "2x2"), 5: (2, 3, "2x3"), 7: (2, 4, "2x4"),
+            8: (2, 4, "2x4"), 9: (3, 3, "3x3"), 10: (2, 5, "2x5"),
+            11: (3, 4, "3x4"), 12: (3, 4, "3x4"), 16: (4, 4, "4x4"),
+        }
+        rows, cols, grid_label = LAYOUTS.get(grid, (2, 2, "2x2"))
     return grid, rows, cols, grid_label
 
 
@@ -219,6 +279,14 @@ GRID_POSITION_LABELS = {
     2: ["左", "右"],
     3: ["左", "中", "右"],
     4: ["左上", "右上", "左下", "右下"],
+    5: ["左上", "中上", "右上", "左下", "右下"],
+    6: ["左上", "中上", "右上", "左下", "中下", "右下"],
+    7: ["格1", "格2", "格3", "格4", "格5", "格6", "格7"],
+    8: ["格1", "格2", "格3", "格4", "格5", "格6", "格7", "格8"],
+    9: ["左上", "中上", "右上", "左中", "正中", "右中", "左下", "中下", "右下"],
+    10: ["格1", "格2", "格3", "格4", "格5", "格6", "格7", "格8", "格9", "格10"],
+    11: ["格1", "格2", "格3", "格4", "格5", "格6", "格7", "格8", "格9", "格10", "格11"],
+    12: ["格1", "格2", "格3", "格4", "格5", "格6", "格7", "格8", "格9", "格10", "格11", "格12"],
 }
 
 
@@ -287,6 +355,15 @@ def _build_grid_prompt(style: str, items: list, item_type: str, prompt_template:
     return header + "，" + "，".join(parts)
 
 
+def _resolve_style(style_template: str = "", style_fallback: str = "") -> str:
+    """解析出图风格：优先用 style_template（LLM推导的完整模板），否则退到用户输入的 style"""
+    if style_template:
+        return style_template
+    if style_fallback:
+        return f"{style_fallback}风格"
+    return ""
+
+
 def _strip_style_prefix(text: str, style: str = "") -> str:
     """剥离描述文本里嵌入的风格词（如"水墨国风风格，"），保留其他内容（包括"第N格"编号）。
     能处理"水墨国风风格，..."、"第1格：水墨国风风格，..."、"...，水墨国风风格，..."等位置。
@@ -321,16 +398,27 @@ def get_first_config(config_type: str):
     return next((c for c in get_config_list() if c.get("config_type") in allowed), None)
 
 
+def _should_retry_without_json_mode(response) -> bool:
+    try:
+        text = response.text or ""
+    except Exception:
+        return False
+    text = text.lower()
+    return any(key in text for key in ("openai_error", "bad_response", "response_format", "json_object"))
+
+
 async def call_llm_json(config: dict, system_prompt: str, user_prompt: str, max_tokens: int = 20000) -> dict:
     headers = {"Content-Type": "application/json", "Authorization": f"Bearer {config['api_key']}"}
-    url = config["api_base"].rstrip("/") + "/chat/completions"
+    url = build_endpoint_url(config["api_base"], "/chat/completions")
     data = {
         "model": config["model_name"],
         "messages": [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
-        "temperature": 0.7, "stream": False, "max_tokens": max_tokens,
-        "response_format": {"type": "json_object"}
+        "temperature": 0.7, "stream": False, "max_tokens": max_tokens
     }
-    response = await async_http_request("POST", url, headers, data, timeout=180.0)
+    json_mode_data = {**data, "response_format": {"type": "json_object"}}
+    response = await async_http_request("POST", url, headers, json_mode_data, timeout=180.0)
+    if response.status_code != 200 and _should_retry_without_json_mode(response):
+        response = await async_http_request("POST", url, headers, data, timeout=180.0)
     if response.status_code != 200:
         raise HTTPException(status_code=response.status_code, detail=response.text[:500])
     result = response.json()
@@ -980,6 +1068,7 @@ async def plan_characters_scenes(body: dict):
 4. 同一角色在不同段落的描述必须一致，性别绝不可前后矛盾
 5. 场景描述要前后连贯，相同场景保持一致性
 6. 场景宁少勿多——只保留对画面生成有实际意义的核心地点
+7. **风格模板**：根据用户输入的风格描述"{style}"和剧情内容，推导出一个完整的视觉风格模板。不要简单复制用户的风格词——要结合作品的年代、地域、氛围，补充最合适的画风、色调、光影、构图风格、年代背景、画面质感等要素，形成一段固定的风格描述。后续所有出图都会自动附加这段风格模板，所以必须是确定的、不随段落改变的通用描述。例如用户只写"古风"，你应补充为"中国宋式水墨画风，暖黄色调，柔和散光，中远景构图，宣纸质感"。
 
 只输出JSON：
 {{
@@ -992,7 +1081,8 @@ async def plan_characters_scenes(body: dict):
       "minor_characters": [{{"name": "角色名", "description": "【性别：女】详细穿着外貌特征", "visual_prompt": "中年女性角色模型图，直立姿势，白色背景，详细外貌描述..."}}],
       "scenes": [{{"name": "场景名称标签", "description": "场景环境详细描述", "visual_prompt": "纯场景环境，无人物无人影，{style}风格，场景描述..."}}]
     }}
-  ]
+  ],
+  "style_template": "完整的视觉风格描述字符串，融合用户输入和剧情推断"
 }}"""
     result = await call_llm_json(config, system_prompt, f"完整剧本：\n{full_text}\n\n分段剧本：\n{seg_texts}")
     return JSONResponse({"code": 0, "data": result})
@@ -1020,6 +1110,8 @@ async def plan_frames(body: dict):
     skip_storyboard = body.get("skip_storyboard", False)
     skip_last_frame = body.get("skip_last_frame", False)
     resolution = body.get("resolution", "")
+    drama_mode = body.get("drama_mode", "grid")  # "grid" | "single" | "template"
+    single_frame_count = body.get("single_frame_count", 0)  # Mode 2: 用户手动添加的单分镜数量
 
     grid, rows, cols, grid_label = compute_grid_layout(grid, resolution)
 
@@ -1083,18 +1175,30 @@ async def plan_frames(body: dict):
     ending_hint = "这是整个视频的最后一段，尾帧需要有结束感和余韵。" if is_last_segment else "这段之后还有下一段，尾帧需要为下一段做铺垫和过渡。"
     hint_line = f"\n用户补充要求：{user_hint}" if user_hint else ""
 
-    # 构建需要规划的节点列表
+    # 构建需要规划的节点列表（按模式区分）
     plan_parts = []
     json_fields = []
-    if not skip_first_frame:
-        plan_parts.append("首帧画面")
-        json_fields.append('"first_frame": {"description": "首帧画面详细描述", "visual_prompt": "用于AI生图的完整提示词"}')
-    if not skip_storyboard:
-        plan_parts.append(f"{grid_label}分镜图（{grid}格）")
-        json_fields.append('"storyboard": {"description": "分镜整体描述", "grid_prompts": ["第1排第1格画面描述", ...]}')
-    if not skip_last_frame:
-        plan_parts.append("尾帧画面")
-        json_fields.append('"last_frame": {"description": "尾帧画面详细描述", "visual_prompt": "用于AI生图的完整提示词"}')
+    if drama_mode == "single":
+        # Mode 2: 规划首帧、尾帧、以及用户手动插入的单分镜帧
+        if not skip_first_frame:
+            plan_parts.append("首帧画面")
+            json_fields.append('"first_frame": {"description": "首帧画面详细描述", "visual_prompt": "用于AI生图的完整提示词"}')
+        if single_frame_count > 0:
+            plan_parts.append(f"{single_frame_count}个中间分镜帧")
+            json_fields.append('"single_frames": [{"description": "第1个单分镜画面详细描述", "visual_prompt": "用于AI生图的完整提示词"}, ...]')
+        if not skip_last_frame:
+            plan_parts.append("尾帧画面")
+            json_fields.append('"last_frame": {"description": "尾帧画面详细描述", "visual_prompt": "用于AI生图的完整提示词"}')
+    elif drama_mode == "template":
+        # Mode 3: 只规划 storyboard grid_prompts（纯文本，不出图）
+        if not skip_storyboard:
+            plan_parts.append(f"{grid_label}分镜描述（{grid}格）")
+            json_fields.append('"storyboard": {"description": "分镜整体描述", "grid_prompts": ["第1格画面描述", ...]}')
+    else:
+        # Mode 1 (grid): 规划 storyboard grid_prompts（无首尾帧）
+        if not skip_storyboard:
+            plan_parts.append(f"{grid_label}宫格分镜图（{grid}格）")
+            json_fields.append('"storyboard": {"description": "分镜整体描述", "grid_prompts": ["第1排第1格画面描述", ...]}')
 
     json_fields.append('"appearing_characters": ["本段出场的人物名（必须严格从下面给出的人物名单中挑选，逐字一致）", ...]')
 
@@ -1113,10 +1217,24 @@ async def plan_frames(body: dict):
 
     storyboard_rules = ""
     if not skip_storyboard:
-        # 按宫格数限定每格字数，总提示词压在 2000 中文字以内（不含数组包装/逗号等）
-        # 2x2=4格 → 每格约 200 字；2x3=6格 → 每格约 150 字；3x3=9格 → 每格约 100 字；4x4=16格 → 每格约 60 字
         per_cell_budget = max(40, min(200, 2000 // max(grid, 1)))
-        storyboard_rules = f"""
+        if drama_mode == "template":
+            # Mode 3: 故事模板分镜规则 — @引用由故事模板组织提示词阶段处理
+            storyboard_rules = f"""
+分镜描述要求（{grid}格，{grid_label}布局）：
+- grid_prompts 数组中每个元素是一格的分镜描述
+- 每格必须是视频中的关键节点：情节转折、动作高潮、情绪变化、场景切换等重要时刻
+- 按以下顺序写每格描述：
+  a) 镜头：景别（特写/近景/中景/全景/远景）+ 角度（俯拍/仰拍/平拍/过肩/斜角）+ 运镜（如推/拉/摇/跟，可选）
+  b) 人物动作与情绪：谁在做什么、表情、肢体语言；用人物名直接指代
+  c) 站位与构图：左/中/右/前景/背景
+  d) 场景环境的氛围：光线方向、关键物件/道具
+- **长度预算**：每格描述不超过 {per_cell_budget} 个中文字；grid_prompts 总量不超过 2000 字
+- 每格描述中不要重复写风格词
+- 相邻格之间必须有逻辑连贯性"""
+        else:
+            # Mode 1 (grid): 标准的宫格分镜规则（保持原逻辑）
+            storyboard_rules = f"""
 分镜图严格要求（{grid}格，{grid_label}布局，格位：{grid_pos_text}）：
 - grid_prompts 数组中每个元素只用"第X排第Y格"标识格位，不要写"第N格"
 - 每格必须是视频中的关键节点：情节转折、动作高潮、情绪变化、场景切换等重要时刻
@@ -1132,7 +1250,81 @@ async def plan_frames(body: dict):
 - 相邻格之间必须有逻辑连贯性，动作和情节能自然衔接（同一动作的不同瞬间、机位切换、反应镜头等）
 - 不要描述无意义的过渡画面，每格都必须有明确的叙事功能"""
 
-    system_prompt = f"""你是一位资深电影分镜师与镜头语言导演。根据剧本片段，规划该段的{plan_target}。
+    # 按模式构建 system_prompt
+    if drama_mode == "single":
+        single_frame_instruction = ""
+        if single_frame_count > 0:
+            single_frame_instruction = f"""
+【中间分镜帧规划】
+- 用户已插入 {single_frame_count} 个中间分镜帧，你需要为每个中间帧规划画面
+- 序列为：首帧 → 单分镜1 → 单分镜2 → ... → 单分镜{single_frame_count} → 尾帧
+- 每个单分镜之间保持视觉连贯性——人物位置、动作方向、场景元素需自然过渡
+- single_frames 数组长度必须正好为 {single_frame_count}
+- 每个 single_frame 包含 description（画面描述）和 visual_prompt（生图提示词）
+"""
+        system_prompt = f"""你是一位资深电影分镜师与镜头语言导演。根据剧本片段，规划该段的{plan_target}。
+本模式为线性分镜模式：首帧 → （{f'{single_frame_count}个单分镜帧' if single_frame_count > 0 else ''}） → 尾帧。
+{single_frame_instruction}
+**核心理念：分镜不是人物图鉴，而是镜头语言。**——重镜头、重动作、重情绪、重构图，不重穿着外貌。
+风格：{style}
+{ending_hint}{prev_hint}{hint_line}{prev_context}
+
+可用人物名单（共{len(all_char_names)}人）：{char_name_list_text}
+角色设定（仅供参考，分镜里只需用人物名指代，不要重复描述外貌穿着）：
+{char_desc}
+
+场景设定（仅供参考；分镜里写氛围/光线/关键物即可，不要全文复述）：
+{scene_desc}
+
+严格要求：
+{"- 首帧是开场镜头，要有视觉冲击力——通过景别、角度、构图、光线营造氛围，不是人物站姿照" if not skip_first_frame else ""}
+{"- 尾帧是该段最后一帧，要留余韵或抛悬念" if not skip_last_frame else ""}
+{"- 首帧和尾帧之间会由用户插入过渡帧——首帧和尾帧的设计要考虑中间可以自然插入过渡画面" if not skip_first_frame and not skip_last_frame else ""}
+
+【描述写法 - 必须遵守】
+- **用人物名直接指代角色**，不要重复外貌描述
+- **以镜头语言开头**：每段描述先点明景别+角度，再写动作
+- **重点写动作和情绪**
+- visual_prompt 中不要写风格描述，风格"{style}"会在生图时统一附加
+
+【输出 appearing_characters】
+- 列出本段实际出镜的人物名（必须严格从"可用人物名单"中挑选，逐字一致）
+
+只输出JSON：
+{{
+  {json_structure}
+}}"""
+    elif drama_mode == "template":
+        system_prompt = f"""你是一位资深电影分镜师与故事板设计师。根据剧本片段，为该段规划故事模板的{plan_target}。
+**本模式为故事模板模式——分镜描述仅用于组织故事板提示词，不直接用于生图。**
+
+风格：{style}
+{ending_hint}{hint_line}{prev_context}
+
+可用人物名单（共{len(all_char_names)}人）：{char_name_list_text}
+角色设定：
+{char_desc}
+
+场景设定：
+{scene_desc}
+{storyboard_rules}
+
+【描述写法】
+- **以镜头语言开头**：景别+角度+运镜
+- **重点写动作和情绪**：谁在做什么、表情、视线、肢体张力
+- visual_prompt 中不要写风格描述
+- 每格描述自成一体，能独立用于组织故事板提示词
+
+【输出 appearing_characters】
+- 列出本段实际出镜的人物名
+
+只输出JSON：
+{{
+  {json_structure}
+}}"""
+    else:
+        # Mode 1 (grid) - 保持原有提示词
+        system_prompt = f"""你是一位资深电影分镜师与镜头语言导演。根据剧本片段，规划该段的{plan_target}。
 **核心理念：分镜不是人物图鉴，而是镜头语言。**——重镜头、重动作、重情绪、重构图，不重穿着外貌。
 风格：{style}
 {ending_hint}{prev_hint}{hint_line}{prev_context}
@@ -1146,10 +1338,8 @@ async def plan_frames(body: dict):
 {storyboard_rules}
 
 严格要求：
-{"- 首帧是开场镜头，要有视觉冲击力——通过景别、角度、构图、光线营造氛围，不是人物站姿照" if not skip_first_frame else ""}
-{"- 首帧画面必须能自然过渡到分镜图第1排第1格" if not skip_first_frame and not skip_storyboard else ""}
-{f"- 分镜图第{rows}排第{cols}格必须能自然过渡到尾帧画面" if not skip_storyboard and not skip_last_frame else ""}
-{"- 尾帧是该段最后一帧，要留余韵或抛悬念" if not skip_last_frame else ""}
+- 每格分镜必须有叙事功能，不是无意义的过渡
+- 相邻格之间逻辑连贯
 
 【描述写法 - 必须遵守】
 - **用人物名直接指代角色**（如"林霜"、"老周"），不要重复"年轻女子，黑长发，白衬衫…"这种角色卡式描述。模型会按角色设定自动还原外貌。
@@ -1207,6 +1397,8 @@ async def plan_frames(body: dict):
                 result["storyboard"] = reviewed["storyboard"]
             if not skip_last_frame and reviewed.get("last_frame"):
                 result["last_frame"] = reviewed["last_frame"]
+            if isinstance(reviewed.get("single_frames"), list):
+                result["single_frames"] = reviewed["single_frames"]
             if isinstance(reviewed.get("appearing_characters"), list):
                 result["appearing_characters"] = reviewed["appearing_characters"]
         except Exception as e:
@@ -1267,12 +1459,249 @@ async def plan_frames(body: dict):
         "first_frame": result.get("first_frame", {}),
         "storyboard": result.get("storyboard", {}),
         "last_frame": result.get("last_frame", {}),
+        "single_frames": result.get("single_frames", []),
         "appearing_characters": result.get("appearing_characters", []),
         "grid": grid,
         "grid_label": grid_label
     }
 
     return JSONResponse({"code": 0, "data": result, "planning_record": planning_record})
+
+
+@router.post("/generate/single-storyboard")
+async def gen_single_storyboard(body: dict):
+    """Mode 2 单分镜帧图片生成：以前一帧为参考图保持视觉连续性"""
+    img_config = get_config_by_id(body.get("image_config_id", "")) or get_first_config("image")
+    if not img_config:
+        raise HTTPException(status_code=400, detail="未找到图片配置")
+
+    visual_prompt = body.get("visual_prompt", "")
+    description = body.get("description", "")
+    characters = body.get("characters", [])
+    scenes = body.get("scenes", [])
+    ref_image_url = body.get("ref_image_url", "")
+    style = body.get("style", "")
+    style_template = body.get("style_template", "")
+    resolved_style = _resolve_style(style_template, style)
+    wf_id = body.get("workflow_id", "")
+    ref_image_urls = body.get("ref_image_urls", [])
+    minor_characters = body.get("minor_characters", [])
+    image_count = max(1, min(int(body.get("image_count", 1)), 4))
+
+    # 收集参考图（包含前一帧作为风格连续性参考）
+    extra_urls = []
+    extra_labels = []
+    if ref_image_url:
+        extra_urls.append(ref_image_url)
+        extra_labels.append((ref_image_url, "前一帧画面（风格连续性参考）"))
+    extra_urls.extend(ref_image_urls)
+    ref_imgs = collect_ref_images(
+        characters=characters + minor_characters, scenes=scenes,
+        extra_urls=extra_urls
+    )
+    ref_prefix = build_ref_index_prefix(
+        characters=characters + minor_characters, scenes=scenes,
+        extra_labels=extra_labels
+    )
+
+    prompt = f"{ref_prefix}{resolved_style}，单帧电影画面，严格参考前一帧画面的风格色调保持视觉连续性，{visual_prompt or description}"
+
+    img_res = await generate_image(ImageGenerateRequest(
+        config_id=img_config["id"], prompt=prompt,
+        width=2048, height=1152, n=image_count,
+        image_base64_list=ref_imgs
+    ))
+    urls = [img_res.get("url")] if img_res.get("url") else img_res.get("urls", [])
+    if not urls:
+        raise HTTPException(status_code=500, detail="图片生成失败：未返回URL")
+    return JSONResponse({
+        "code": 0,
+        "data": {
+            "description": description or visual_prompt,
+            "visualPrompt": visual_prompt,
+            "imageUrl": urls[0],
+            "imageUrls": urls,
+        }
+    })
+
+
+@router.post("/generate/organize-storyboard-prompt")
+async def organize_storyboard_prompt(body: dict):
+    """Mode 3 步骤1：根据剧情和分镜描述，用LLM组织完整的故事板提示词"""
+    chat_config = get_config_by_id(body.get("chat_config_id", "")) or get_first_config("chat")
+    if not chat_config:
+        raise HTTPException(status_code=400, detail="未找到聊天配置")
+
+    plot = body.get("plot", "")
+    style = body.get("style", "")
+    grid_prompts = body.get("grid_prompts", [])
+    characters = body.get("characters", [])
+    minor_characters = body.get("minor_characters", [])
+    scenes = body.get("scenes", [])
+    grid = body.get("grid", 4)
+    prompt_template = body.get("prompt_template", "")
+    segment_index = body.get("segment_index", 0)
+    duration = body.get("duration", 15)
+    segment_text = body.get("segment_text", "")
+
+    # 构建人物和场景摘要
+    all_chars = characters + minor_characters
+    char_summary = json.dumps([
+        {"name": c.get("name"), "description": (c.get("description") or "")[:150]} for c in all_chars
+    ], ensure_ascii=False) if all_chars else "无"
+    scene_summary = json.dumps([
+        {"name": s.get("name"), "description": (s.get("description") or "")[:150]} for s in scenes
+    ], ensure_ascii=False) if scenes else "无"
+
+    # 分镜描述文本
+    sb_text = "\n".join([
+        f"第{i+1}格: {gp}" for i, gp in enumerate(grid_prompts)
+    ])
+
+    if prompt_template:
+        # 用户提供了自定义模板
+        template_instruction = f"""请严格按照以下提示词模板组织语言：
+
+{prompt_template}
+
+将上述分镜描述、人物、场景信息填入模板，输出一个完整的故事板图生图提示词。"""
+    else:
+        template_instruction = f"""请将以下分镜描述组织成一个专业的故事板图生图提示词，用于生成一张{grid}格的故事板。
+
+要求：
+1. 每格的具体画面描述（@引用对应人物和场景参考图）
+2. 整体布局说明（{grid}格排列方式）
+3. 风格统一要求：{style}风格
+4. 标注每格的景别、运镜等电影要素"""
+
+    system_prompt = f"""你是资深故事板设计师。{template_instruction}
+
+剧情概要：{segment_text[:500] or plot[:500]}
+风格：{style}
+段落：第{segment_index+1}段 · 时长{duration}秒
+人物参考：
+{char_summary}
+场景参考：
+{scene_summary}
+分镜描述：
+{sb_text}
+
+只输出JSON：{{"organized_prompt": "完整的图生图提示词"}}"""
+
+    result = await call_llm_json(chat_config, system_prompt,
+        f"请根据上述分镜描述组织故事模板提示词。")
+    return JSONResponse({"code": 0, "data": {
+        "organized_prompt": result.get("organized_prompt", ""),
+    }})
+
+
+@router.post("/generate/storytemplate-iterate")
+async def iterate_story_template(body: dict):
+    """对话修改故事模板已组织的提示词，可选传入已生成图片做视觉检查"""
+    chat_config = get_config_by_id(body.get("chat_config_id", "")) or get_first_config("chat")
+    if not chat_config:
+        raise HTTPException(status_code=400, detail="未找到聊天配置")
+
+    organized_prompt = body.get("organized_prompt", "")
+    if not organized_prompt:
+        raise HTTPException(status_code=400, detail="请先生成内容或组织提示词")
+
+    user_message = body.get("user_message", "")
+    if not user_message:
+        raise HTTPException(status_code=400, detail="请输入修改方向")
+
+    chat_history = body.get("chat_history", [])
+    image_urls = body.get("image_urls", []) or []
+
+    # 构建历史对话文本
+    history_text = ""
+    for h in chat_history[-6:]:
+        role = "用户" if h.get("role") == "user" else "AI"
+        history_text += f"{role}：{h.get('content', '')}\n"
+
+    image_instruction = ""
+    if image_urls:
+        image_instruction = f"\n当前已生成 {len(image_urls)} 张故事模板图，你可以参考图片检查提示词是否合理、排版是否有问题。"
+
+    system_prompt = f"""你是资深故事板设计师。用户希望你修改已组织的故事板提示词。
+{image_instruction}
+
+当前提示词：
+{organized_prompt}
+
+修改历史：
+{history_text}
+
+用户修改方向：{user_message}
+
+请根据用户的方向直接修改提示词，保持专业的故事板图生图提示词风格。
+只输出JSON：{{"organized_prompt": "修改后的完整提示词", "analysis": "简要说明你做了哪些修改"}}"""
+
+    result = await call_llm_json(chat_config, system_prompt,
+        f"请修改故事板提示词：{user_message}")
+    return JSONResponse({"code": 0, "data": {
+        "organized_prompt": result.get("organized_prompt", organized_prompt),
+        "analysis": result.get("analysis", "修改完成"),
+    }})
+
+
+@router.post("/generate/template-board-image")
+async def gen_template_board_image(body: dict):
+    """Mode 3 步骤2：用组织好的提示词生成故事板图片"""
+    img_config = get_config_by_id(body.get("image_config_id", "")) or get_first_config("image")
+    if not img_config:
+        raise HTTPException(status_code=400, detail="未找到图片配置")
+
+    organized_prompt = body.get("organized_prompt", "")
+    if not organized_prompt:
+        raise HTTPException(status_code=400, detail="请先组织提示词")
+    characters = body.get("characters", [])
+    minor_characters = body.get("minor_characters", [])
+    scenes = body.get("scenes", [])
+    style = body.get("style", "")
+    style_template = body.get("style_template", "")
+    resolved_style = _resolve_style(style_template, style)
+    grid = body.get("grid", 4)
+    orientation = body.get("orientation", "horizontal")  # 默认横版
+    wf_id = body.get("workflow_id", "")
+    image_count = max(1, min(int(body.get("image_count", 1)), 4))
+
+    ref_imgs = collect_ref_images(characters=characters + minor_characters, scenes=scenes)
+    ref_prefix = build_ref_index_prefix(characters=characters + minor_characters, scenes=scenes)
+
+    full_prompt = f"{ref_prefix}{organized_prompt}"
+    if resolved_style:
+        full_prompt += f"\n整体画面风格：{resolved_style}"
+
+    # 根据横竖版和grid确定分辨率
+    if orientation == "vertical":
+        resolutions = [(2160, 3840), (1080, 1920)]
+    else:
+        resolutions = [(3840, 2160), (2560, 1440)]
+
+    last_error = None
+    for w, h in resolutions:
+        try:
+            img_res = await generate_image(ImageGenerateRequest(
+                config_id=img_config["id"], prompt=full_prompt,
+                width=w, height=h, n=image_count,
+                image_base64_list=ref_imgs
+            ))
+            urls = [img_res.get("url")] if img_res.get("url") else img_res.get("urls", [])
+            if urls:
+                return JSONResponse({
+                    "code": 0,
+                    "data": {
+                        "imageUrl": urls[0],
+                        "imageUrls": urls,
+                        "organized_prompt": organized_prompt,
+                    }
+                })
+        except Exception as e:
+            last_error = str(e)
+            continue
+
+    raise HTTPException(status_code=500, detail=f"故事板图片生成失败: {last_error}")
 
 
 @router.post("/generate/main-characters")
@@ -1282,6 +1711,8 @@ async def gen_main_characters(body: dict):
         raise HTTPException(status_code=400, detail="未找到图片配置")
     characters = body.get("characters", [])
     style = body.get("style", "")
+    style_template = body.get("style_template", "")
+    resolved_style = _resolve_style(style_template, style)
     wf_id = body.get("workflow_id", "")
     ref_image_urls = body.get("ref_image_urls", [])
     image_count = max(1, min(int(body.get("image_count", 1)), 4))
@@ -1292,7 +1723,11 @@ async def gen_main_characters(body: dict):
     node_refs = collect_ref_images(extra_urls=ref_image_urls)
     errors = []
 
-    groups = compute_grid_groups(characters, threshold=4)
+    if body.get("grid_merge"):
+        groups = compute_grid_groups(characters, threshold=4)
+    else:
+        need_gen = [i for i, it in enumerate(characters) if not it.get("imageUrl")]
+        groups = [[i] for i in need_gen]
 
     async def gen_single(idx, char):
         try:
@@ -1305,7 +1740,7 @@ async def gen_main_characters(body: dict):
             if all_refs:
                 ref_labels = [(u, f"角色「{char.get('name', '')}」参考") for u in (char.get("refImages", []) + ref_image_urls) if u]
                 ref_prefix = build_ref_index_prefix(extra_labels=ref_labels)
-            prompt = f"{ref_prefix}{_apply_template(prompt_template, style=style, description=desc)}"
+            prompt = f"{ref_prefix}{_apply_template(prompt_template, style=resolved_style, description=desc)}"
             img_res = await generate_image(ImageGenerateRequest(config_id=img_config["id"], prompt=prompt, width=width, height=height, n=image_count, image_base64_list=all_refs))
             img_data = img_res.get("data", [])
             urls = []
@@ -1326,7 +1761,7 @@ async def gen_main_characters(body: dict):
     async def gen_grid_group(group_indices):
         group_items = [characters[i] for i in group_indices]
         try:
-            prompt = _build_grid_prompt(style, group_items, "character", prompt_template)
+            prompt = _build_grid_prompt(resolved_style, group_items, "character", prompt_template)
             grid_size = len(group_indices)
             g_width = max(width, 1024) if grid_size <= 2 else max(width, 1536)
             g_height = max(height, 1024) if grid_size <= 2 else max(height, 1536)
@@ -1387,6 +1822,8 @@ async def gen_minor_characters(body: dict):
         raise HTTPException(status_code=400, detail="未找到图片配置")
     characters = body.get("characters", [])
     style = body.get("style", "")
+    style_template = body.get("style_template", "")
+    resolved_style = _resolve_style(style_template, style)
     wf_id = body.get("workflow_id", "")
     ref_image_urls = body.get("ref_image_urls", [])
     image_count = max(1, min(int(body.get("image_count", 1)), 4))
@@ -1397,7 +1834,11 @@ async def gen_minor_characters(body: dict):
     node_refs = collect_ref_images(extra_urls=ref_image_urls)
     errors = []
     if characters:
-        groups = compute_grid_groups(characters, threshold=2)
+        if body.get("grid_merge"):
+            groups = compute_grid_groups(characters, threshold=2)
+        else:
+            need_gen = [i for i, it in enumerate(characters) if not it.get("imageUrl")]
+            groups = [[i] for i in need_gen]
 
         async def gen_single(idx, char):
             try:
@@ -1408,7 +1849,7 @@ async def gen_minor_characters(body: dict):
                 if all_refs:
                     ref_labels = [(u, f"角色「{char.get('name', '')}」参考") for u in (char.get("refImages", []) + ref_image_urls) if u]
                     ref_prefix = build_ref_index_prefix(extra_labels=ref_labels)
-                prompt = f"{ref_prefix}{_apply_template(prompt_template, style=style, description=desc)}"
+                prompt = f"{ref_prefix}{_apply_template(prompt_template, style=resolved_style, description=desc)}"
                 img_res = await generate_image(ImageGenerateRequest(config_id=img_config["id"], prompt=prompt, width=width, height=height, n=image_count, image_base64_list=all_refs))
                 img_data = img_res.get("data", [])
                 urls = []
@@ -1429,7 +1870,7 @@ async def gen_minor_characters(body: dict):
         async def gen_grid_group(group_indices):
             group_items = [characters[i] for i in group_indices]
             try:
-                prompt = _build_grid_prompt(style, group_items, "character", prompt_template)
+                prompt = _build_grid_prompt(resolved_style, group_items, "character", prompt_template)
                 grid_size = len(group_indices)
                 g_width = max(width, 1024) if grid_size <= 2 else max(width, 1536)
                 g_height = max(height, 1024) if grid_size <= 2 else max(height, 1536)
@@ -1481,6 +1922,8 @@ async def gen_scene(body: dict):
         raise HTTPException(status_code=400, detail="未找到图片配置")
     scenes = body.get("scenes", [])
     style = body.get("style", "")
+    style_template = body.get("style_template", "")
+    resolved_style = _resolve_style(style_template, style)
     wf_id = body.get("workflow_id", "")
     ref_image_urls = body.get("ref_image_urls", [])
     image_count = max(1, min(int(body.get("image_count", 1)), 4))
@@ -1489,22 +1932,30 @@ async def gen_scene(body: dict):
     node_refs = collect_ref_images(extra_urls=ref_image_urls)
     errors = []
 
-    groups = compute_grid_groups(scenes, threshold=4)
+    if body.get("grid_merge"):
+        groups = compute_grid_groups(scenes, threshold=4)
+    else:
+        need_gen = [i for i, it in enumerate(scenes) if not it.get("imageUrl")]
+        groups = [[i] for i in need_gen]
 
     async def gen_single(idx, sc):
         try:
             if sc.get("imageUrl"):
                 return
             desc = sc.get("description") or sc.get("visual_prompt") or ""
-            item_refs = collect_ref_images(extra_urls=sc.get("refImages", []))
+            # 防御性处理：确保 refImages 和 ref_image_urls 总是列表
+            _sc_refs = sc.get("refImages") or []
+            _ext_refs = ref_image_urls or []
+            item_refs = collect_ref_images(extra_urls=_sc_refs if isinstance(_sc_refs, list) else [])
             all_refs = item_refs + [r for r in node_refs if r not in item_refs] + [r for r in prev_ref_imgs if r not in item_refs and r not in node_refs]
             ref_prefix = ""
             if all_refs:
-                ref_labels = [(u, f"场景「{sc.get('name', '')}」参考") for u in (sc.get("refImages", []) + ref_image_urls) if u]
+                _labels_src = (_sc_refs if isinstance(_sc_refs, list) else []) + _ext_refs
+                ref_labels = [(u, f"场景「{sc.get('name', '')}」参考") for u in _labels_src if u]
                 if prev_scenes[:1]:
                     ref_labels += [(prev_scenes[0].get("imageUrl", ""), "前段场景参考")]
                 ref_prefix = build_ref_index_prefix(extra_labels=ref_labels)
-            prompt = f"{ref_prefix}{style}风格，2x2四机位全景图网格，纯场景环境，无人物无人影，从四个不同角度拍摄同一场景，{desc}"
+            prompt = f"{ref_prefix}{resolved_style}，2x2四机位全景图网格，纯场景环境，无人物无人影，从四个不同角度拍摄同一场景，{desc}"
             img_res = await generate_image(ImageGenerateRequest(config_id=img_config["id"], prompt=prompt, width=2048, height=1536, n=image_count, image_base64_list=all_refs))
             img_data = img_res.get("data", [])
             urls = []
@@ -1525,7 +1976,7 @@ async def gen_scene(body: dict):
     async def gen_grid_group(group_indices):
         group_items = [scenes[i] for i in group_indices]
         try:
-            prompt = _build_grid_prompt(style, group_items, "scene")
+            prompt = _build_grid_prompt(resolved_style, group_items, "scene")
             grid_size = len(group_indices)
             group_prev_refs = collect_ref_images(extra_urls=[scenes[i].get("prevImageUrl", "") for i in group_indices])
             all_refs = group_prev_refs + [r for r in (node_refs + prev_ref_imgs) if r not in group_prev_refs]
@@ -1579,13 +2030,14 @@ async def gen_storyboard(body: dict):
     first_frame_url = body.get("first_frame_url", "")
     grid = body.get("grid", 4)
     style = body.get("style", "")
+    style_template = body.get("style_template", "")
+    resolved_style = _resolve_style(style_template, style)
     wf_id = body.get("workflow_id", "")
     ref_image_urls = body.get("ref_image_urls", [])
     resolution = body.get("resolution", "")
     image_count = max(1, min(int(body.get("image_count", 1)), 4))
     grid, _rows, _cols, grid_label = compute_grid_layout(grid, resolution)
-    # 清洗 storyboard_prompt 里可能残留的风格前缀，避免"{style}风格...第X格：{style}风格..."重复
-    # 注意：分镜图端要保留"第N格"编号（前端就是按这种格式拼的）
+    # 清洗 storyboard_prompt 里可能残留的风格前缀，避免风格词重复
     cleaned_sb_prompt = _strip_style_prefix(storyboard_prompt or "", style) if storyboard_prompt else ""
 
     extra_labels = []
@@ -1596,8 +2048,8 @@ async def gen_storyboard(body: dict):
         ref_block = "\n" + ref_block.rstrip("\n")
 
     prompt = f"{grid_label}宫格分镜图，电影分镜，每格一个镜头，{cleaned_sb_prompt}，清晰的格线分隔，每格内容不同{ref_block}"
-    if style and style.strip():
-        prompt += f"\n整体画面风格：{style.strip()}"
+    if resolved_style:
+        prompt += f"\n整体画面风格：{resolved_style}"
     ref_imgs = collect_ref_images(characters=characters, scenes=scenes, extra_urls=([first_frame_url] if first_frame_url else []) + ref_image_urls)
 
     # 解析分辨率，支持前端传入 "宽x高" 格式，自动添加降级分辨率
@@ -1661,6 +2113,8 @@ async def gen_first_frame(body: dict):
     minor_characters = body.get("minor_characters", [])
     scenes = body.get("scenes", [])
     style = body.get("style", "")
+    style_template = body.get("style_template", "")
+    resolved_style = _resolve_style(style_template, style)
     wf_id = body.get("workflow_id", "")
     ref_image_urls = body.get("ref_image_urls", [])
     image_count = max(1, min(int(body.get("image_count", 1)), 4))
@@ -1669,7 +2123,7 @@ async def gen_first_frame(body: dict):
     try:
         ref_imgs = collect_ref_images(characters=characters + minor_characters, scenes=scenes, extra_urls=ref_image_urls)
         ref_prefix = build_ref_index_prefix(characters=characters + minor_characters, scenes=scenes)
-        prompt = f"{ref_prefix}{style}风格，电影首帧画面，{visual_prompt or description}"
+        prompt = f"{ref_prefix}{resolved_style}，电影首帧画面，{visual_prompt or description}"
         img_res = await generate_image(ImageGenerateRequest(config_id=img_config["id"], prompt=prompt, width=2048, height=1152, n=image_count, image_base64_list=ref_imgs))
         img_data = img_res.get("data", [])
         for item in img_data:
@@ -1695,6 +2149,8 @@ async def gen_last_frame(body: dict):
     minor_characters = body.get("minor_characters", [])
     scenes = body.get("scenes", [])
     style = body.get("style", "")
+    style_template = body.get("style_template", "")
+    resolved_style = _resolve_style(style_template, style)
     wf_id = body.get("workflow_id", "")
     storyboard_urls = body.get("storyboard_urls", [])
     ref_image_urls = body.get("ref_image_urls", [])
@@ -1704,7 +2160,7 @@ async def gen_last_frame(body: dict):
     try:
         ref_imgs = collect_ref_images(characters=characters + minor_characters, scenes=scenes, extra_urls=storyboard_urls + ref_image_urls)
         ref_prefix = build_ref_index_prefix(characters=characters + minor_characters, scenes=scenes, extra_labels=[(u, "分镜图") for u in storyboard_urls])
-        prompt = f"{ref_prefix}{style}风格，电影尾帧画面，{visual_prompt or description}"
+        prompt = f"{ref_prefix}{resolved_style}，电影尾帧画面，{visual_prompt or description}"
         img_res = await generate_image(ImageGenerateRequest(config_id=img_config["id"], prompt=prompt, width=2048, height=1152, n=image_count, image_base64_list=ref_imgs))
         img_data = img_res.get("data", [])
         for item in img_data:
@@ -1739,6 +2195,9 @@ async def gen_video_prompt(body: dict):
     vtype = body.get("type", "")
     duration = body.get("duration", 15)
     all_segments_context = body.get("all_segments_context", [])
+    drama_mode = body.get("drama_mode", "grid")  # "grid" | "single" | "template"
+    story_template_content = body.get("story_template_content", "")  # Mode 3: 故事模板文字内容
+    story_template_image_urls = body.get("story_template_image_urls", [])  # Mode 3: 故事模板图片 URL
 
     has_first = bool(first_frame.get("imageUrl"))
     has_sb = bool(storyboard_images) and storyboard_grid > 0
@@ -1847,6 +2306,15 @@ async def gen_video_prompt(body: dict):
         last_frame_ref = f"@图片{img_idx}"
         img_ref_lines.append(f"@图片{img_idx} 是尾帧图")
         img_idx += 1
+    # Mode 3: 故事模板图 —— 视频提示词必须严格遵照此图内容
+    st_ref_indices = []
+    if drama_mode == "template" and story_template_image_urls:
+        for st_url in story_template_image_urls:
+            if st_url and st_url not in seen_grid_urls:
+                seen_grid_urls[st_url] = img_idx
+                st_ref_indices.append(img_idx)
+                img_ref_lines.append(f"@图片{img_idx} 是故事模板设计图——这是本段视频的蓝图，视频提示词描述的每一格/每一秒内容都必须严格遵照此图")
+                img_idx += 1
 
     img_ref_block = "\n".join(img_ref_lines) if img_ref_lines else ""
 
@@ -1916,20 +2384,68 @@ async def gen_video_prompt(body: dict):
 
 {grid_section}
 
-每个时间段的详细描述必须包含：
-1. 具体的镜头运动（推/拉/摇/移/跟/升/降/环绕/手持，含速度和距离）
-2. 人物的精确动作、表情、姿态变化
-3. 场景环境细节（光线方向、色调、氛围物体）
-4. 特效和视觉效果（粒子、光效、物理效果）
-5. 景别变化（特写→近景→中景→全景→远景）
-6. 如果剧情中有台词或对白，必须在对应时间段内完整写出台词内容（用引号标注），并注明说话人、语气和情绪
+【提示词写作核心原则】
+视频生成模型不是在"理解"指令，而是在训练数据分布里匹配最接近的视频片段。因此：
+- 用训练标注的语法写（主体特征+动作+环境+镜头语言+风格），不要用抽象感受词（如"高级感""氛围感""史诗级"）
+- 每个时间段只写一个核心动作，不要堆叠多个复杂动作
+- 动作描述用具体动词+速度副词（缓缓/轻轻/渐渐/微微/突然），不要泛写"站着""走着"
+- 镜头运动从以下高频词中选择：静止/缓推/拉远/环绕/跟拍/横移/上摇/下摇/手持/俯冲
+- 景别从以下选择：大远景/远景/全景/中景/中近景/近景/特写/大特写
+- 光线从以下选择：黄金时刻/蓝色时刻/柔和窗光/霓虹光/月光/烛光/逆光/侧光/顶光
+- {"因为有首帧/尾帧参考图，画面构成已由图片决定，提示词重心放在【运动过程】和【动作变化】上（占80%篇幅），不要重复描述图中已有的静态信息" if has_first or has_last else "无参考图时，需要完整描述画面构成（主体外貌+场景环境+光线色调）"}
+
+每个时间段的描述按三层结构组织：
+1. 【镜头层】景别 + 镜头运动方式 + 速度（如"中景，镜头缓缓推进"）
+2. 【主体层】人物的一个核心动作 + 表情/姿态变化 + 速度副词（如"她缓缓转过头，微微一笑"）
+3. 【画面层】光线方向、环境氛围细节、自然元素微动（如"侧光打在脸上，背景花瓣缓缓飘落"）
+4. 如果剧情中有台词或对白，在对应时间段内写出台词内容（用引号标注），注明说话人和语气
+
+【禁止事项】
+- 不要堆砌华丽形容词（"美丽的""唯美的""电影级的""最佳质量"等对模型无效）
+- 不要在一个时间段内安排超过2个动作
+- 不要写否定句（"不要出现红色"会激活红色）
+- 不要在同一画面堆叠多种光源类型
 
 参考示例格式：
 {"@图片1 是主要人物·小明" + chr(10) + "@图片2 是场景·竹林" + chr(10) + chr(10) if has_any_ref else ""}{example_cuts}
 
-重要：full_text 总字数不得超过2000字，请精炼描述，突出关键画面和动作。
+重要：full_text 总字数不得超过2000字，信息密度优先，每个词都要对模型有明确的视觉指引作用。
 
 只输出JSON：{{"full_text": "完整提示词文本"}}"""
+    if drama_mode == "template" and story_template_image_urls:
+        st_ref_nums = "、".join([f"@图片{i}" for i in st_ref_indices]) if st_ref_indices else "故事模板图"
+        system_prompt += f"""
+
+【故事模板模式 · 极其严格的要求】
+本模式是「看图说话」模式。{st_ref_nums} 是已经生成好的故事模板设计图，它是视频的最终蓝图。
+
+你必须完成的任务是：**用文字精确描述故事模板图上的内容，不要自己编造任何与图不符的信息。**
+
+具体要求：
+1. **逐格对照**：故事模板图上每个分镜格里的画面你都必须在视频提示词中如实描述——图上画了什么人物、什么场景、什么动作、什么景别运镜，就写什么。图上没有的人物/场景/动作，一个字都不许编。
+2. **文字标注必读**：故事模板图上的所有文字标注（人物名、场景名、时长标注、分镜格编号、运镜提示、台词等）都是真实信息，必须读取并引用。
+3. **禁止瞎编**：不要根据剧本「推测」画面上应该有什么。你必须依据眼睛看到的图片实际内容来写。如果图上某个格没有人物，就说没有人物，不要编一个人出来。
+4. **时长/顺序**：按图上标注的分镜格顺序和时长来组织时间码。图上标了多少格就是多少格，每格标注的时长是多久就分配多久。严禁自行增减格数或改变时长。
+5. **景别/运镜**：图上写了什么景别和运镜就照写，没有写则根据画面构图如实推断（如远景/中景/特写）。
+6. **台词/对白**：如果故事板图上有台词或对白区域，必须如实写入对应时间段的描述中。
+
+记住：你的任务是「转译」——把图片内容精确转成视频提示词文字，不是「创作」。
+"""
+        if story_template_content:
+            system_prompt += f"""
+故事模板图上的文字内容供参考：
+{story_template_content[:2000]}
+"""
+    elif drama_mode == "template" and story_template_content:
+        system_prompt += f"""
+
+【故事模板模式 · 严格要求】
+本模式要求视频提示词**必须严格遵循已生成的故事模板内容**。
+以下是故事模板的文字内容，你必须完全按照其中已确定的镜头编排、时长分配、画面描述来写视频提示词，
+不得自行修改画面内容、改变时长分配、增减镜头。故事版上写了什么文字、什么分镜、什么景别运镜，都严格照写。
+
+故事模板内容：
+{story_template_content[:3000]}"""
 
     user_prompt = f"段落剧本：{segment_text}"
 
@@ -1990,6 +2506,14 @@ async def gen_video_prompt(body: dict):
     if has_last:
         b = load_ref_image_b64(last_frame.get("imageUrl", ""))
         if b: vision_images.append({"b64": b, "label": "尾帧画面"})
+    # Mode 3: 故事模板图加入视觉参考
+    if drama_mode == "template" and story_template_image_urls:
+        for st_url in story_template_image_urls:
+            if st_url and st_url not in seen_urls:
+                seen_urls.add(st_url)
+                st_b = load_ref_image_b64(st_url)
+                if st_b:
+                    vision_images.append({"b64": st_b, "label": "故事模板设计图（视频蓝图）"})
 
     if vision_images:
         result = await call_llm_vision_json(config, system_prompt, user_prompt, vision_images, max_tokens=32000)
@@ -2013,17 +2537,22 @@ async def gen_video_prompt_iterate(body: dict):
     if not user_message:
         raise HTTPException(status_code=400, detail="修改指令为空")
 
-    system_prompt = """你是一位资深的视频导演和AI视频提示词专家，拥有丰富的镜头语言和叙事节奏经验。
+    system_prompt = """你是一位资深的视频导演和AI视频提示词专家，精通镜头语言、叙事节奏和视频生成模型的工作原理。
+
+核心认知：视频生成模型是在训练数据分布里匹配最接近的视频片段，不是在"理解"指令。提示词越像训练标注的语法（主体特征+动作+环境+镜头语言），效果越稳定。
 
 你的任务：
-1. 仔细观察用户提供的参考图片（首帧、分镜图、尾帧，如有），结合剧情和当前提示词，以专业视角分析当前提示词存在的问题（镜头运动不合理、节奏拖沓、与画面不符、缺少细节等）
+1. 仔细观察用户提供的参考图片（首帧、分镜图、尾帧，如有），结合剧情和当前提示词，以专业视角分析问题
 2. 根据用户的修改指令和你的专业分析，输出修改后的完整提示词
 
-分析原则：
-- 镜头运动是否流畅自然，是否有助于叙事
+分析原则（按优先级排序）：
+- 每个时间段是否只有一个核心动作（多动作堆叠会导致模型无法执行）
+- 动作描述是否具体可执行（用"缓缓转头微笑"而非"展现优雅姿态"）
+- 镜头运动是否使用高频词（静止/缓推/拉远/环绕/跟拍/横移/上摇/下摇/手持）
+- 是否有无效的抽象词（"高级感""氛围感""史诗级"对模型无效，应删除）
 - 时间分配是否合理，关键动作是否有足够时长
-- 描述是否足够具体，能让AI视频模型准确还原
 - 画面与画面之间的过渡是否连贯
+- 如果有首帧/尾帧参考图，提示词是否把重心放在运动过程而非重复描述静态画面
 - 是否充分利用了参考图片中的视觉信息
 
 规则：
@@ -2031,8 +2560,9 @@ async def gen_video_prompt_iterate(body: dict):
 2. 保持原有的格式结构（@图片引用、【时间码】分段）
 3. 修改后的提示词必须完整输出，不要省略未修改的部分
 4. 如果用户的修改涉及时间分配变化，相应调整其他时间段
-5. full_text 是最终输出的视频提示词，总字数不得超过2000字，精炼描述
+5. full_text 是最终输出的视频提示词，总字数不得超过2000字，信息密度优先
 6. analysis 是你的专业分析，字数不限，尽可能详细说明问题和改进思路
+7. 删除所有对模型无效的词（"美丽的""唯美的""电影级的""最佳质量"等堆砌形容词）
 
 只输出JSON：{"analysis": "你的专业分析（不限字数，详细说明问题和改进方向）", "full_text": "修改后的完整提示词（不超过2000字）"}"""
 
@@ -2086,24 +2616,30 @@ async def gen_storyboard_iterate(body: dict):
 
     prompts_text = "\n".join(f"格{i+1}: {gp}" for i, gp in enumerate(grid_prompts)) if grid_prompts else description
 
-    system_prompt = """你是一位资深的视频编剧和导演，拥有丰富的分镜设计经验。
+    system_prompt = """你是一位资深的视频编剧和导演，精通视频生成模型的提示词原理。
+
+核心认知：分镜描述最终会作为视频生成的提示词输入，因此必须使用模型能响应的具体可视词汇，而非抽象感受词。
 
 你的任务：
-1. 仔细观察用户提供的上一次生成的分镜图片（如有），结合剧情和当前分镜描述，以专业视角分析这张分镜图存在的缺陷（构图问题、人物站位不合理、镜头衔接不流畅、与剧情不符等）
+1. 仔细观察用户提供的上一次生成的分镜图片（如有），结合剧情和当前分镜描述，以专业视角分析缺陷
 2. 根据用户的修改指令和你的专业分析，输出修改后的分镜描述
 
 分析原则：
-- 画面是否准确传达了剧情的情绪和节奏
+- 每格是否只有一个核心动作（多动作堆叠会导致视频生成失败）
+- 动作描述是否具体可执行，带速度副词（缓缓/轻轻/渐渐/微微）
+- 景别是否明确标注（特写/近景/中景/全景/远景），是否有景别变化（避免所有格同一景别）
+- 是否存在对模型无效的抽象词（"高级感""氛围感""唯美"等应替换为具体描述）
 - 人物的动作、表情是否与剧情匹配
-- 镜头景别和角度是否有助于叙事
+- 镜头景别和角度是否有助于叙事（推荐远→中→近或近→中→远的节奏变化）
 - 相邻格之间的视觉连贯性和节奏感
-- 构图是否有冲击力，是否避免了呆板的正面平拍
+- 构图是否使用了明确的构图法（居中/三分法/对称/引导线/越肩）
 
 规则：
 1. 只修改需要改进的部分，其余格保持不变
 2. 修改后的格数必须与原来一致
-3. 每格描述必须包含：人物站位、动作表情、背景环境、镜头景别和角度
+3. 每格描述必须包含：景别 + 人物一个核心动作（带速度副词）+ 背景环境 + 镜头运动方式
 4. 确保修改后相邻格之间的动作和情节仍然连贯
+5. 删除所有抽象形容词，替换为具体可视描述
 
 只输出JSON：{"analysis": "你的专业分析（不限字数，详细说明发现的问题和改进思路）", "grid_prompts": ["格1描述", "格2描述", ...], "description": "整体分镜描述"}"""
 
@@ -2150,6 +2686,8 @@ async def _gen_story_template_text(body: dict, preset: dict) -> JSONResponse:
     minor_characters = body.get("minor_characters", []) or []
     scenes = body.get("scenes", []) or []
     style = body.get("style", "")
+    style_template = body.get("style_template", "")
+    resolved_style = _resolve_style(style_template, style)
     prev_last_frame_desc = (body.get("prev_last_frame_desc", "") or "").strip()
     next_first_frame_desc = (body.get("next_first_frame_desc", "") or "").strip()
     extra_hint = (body.get("extra_hint", "") or "").strip()
@@ -2188,9 +2726,9 @@ async def _gen_story_template_text(body: dict, preset: dict) -> JSONResponse:
         "【本段场景】",
         scene_block,
     ]
-    if style:
+    if resolved_style:
         parts.append("")
-        parts.append(f"【风格】{style}")
+        parts.append(f"【风格】{resolved_style}")
     if prev_last_frame_desc or next_first_frame_desc:
         parts.append("")
         parts.append("【上下文（仅供理解，不要为前后段写镜头）】")
@@ -2240,14 +2778,17 @@ async def _gen_shot_list_image(body: dict, preset: dict, img_config: dict) -> JS
     minor_characters = body.get("minor_characters", []) or []
     scenes = body.get("scenes", []) or []
     style = body.get("style", "")
+    style_template = body.get("style_template", "")
+    resolved_style_sl = _resolve_style(style_template, style)
     wf_id = body.get("workflow_id", "")
     image_count = max(1, min(int(body.get("image_count", 1)), 4))
     extra_hint = (body.get("extra_hint") or "").strip()
+    ref_image_urls = body.get("ref_image_urls", [])
 
     all_chars = list(characters) + list(minor_characters)
     char_desc = "、".join(c.get("name", "") for c in all_chars) if all_chars else "无特定角色"
     scene_desc = "、".join(f"{s.get('name','')}：{(s.get('description','') or '')[:60]}" for s in scenes) if scenes else "无特定场景"
-    style_tag = f"\n整体画面风格：{style}" if (style and style.strip()) else ""
+    style_tag = f"\n整体画面风格：{resolved_style_sl}" if resolved_style_sl else ""
 
     prompt = (
         f"专业电影分镜表设计图，横版 16:9，4K 画质，纯白背景，整洁排版。\n"
@@ -2274,8 +2815,8 @@ async def _gen_shot_list_image(body: dict, preset: dict, img_config: dict) -> JS
     if extra_hint:
         prompt = prompt + f"\n【审核反馈（需在本次生成中解决）】：{extra_hint}"
 
-    ref_imgs = collect_ref_images(characters=all_chars, scenes=scenes)
-    ref_prefix = build_ref_index_prefix(characters=all_chars, scenes=scenes)
+    ref_imgs = collect_ref_images(characters=all_chars, scenes=scenes, extra_urls=ref_image_urls)
+    ref_prefix = build_ref_index_prefix(characters=all_chars, scenes=scenes, extra_labels=[(u, "故事模板参考图") for u in ref_image_urls])
     if ref_prefix:
         prompt = ref_prefix + prompt
 
@@ -2329,13 +2870,17 @@ async def gen_story_template(body: dict):
     storyboard_images = body.get("storyboard_images", [])
     storyboard_grid = body.get("storyboard_grid", 4)
     grid_prompts = body.get("grid_prompts", []) or []
+    ref_image_urls = body.get("ref_image_urls", [])
     style = body.get("style", "")
+    style_template = body.get("style_template", "")
+    resolved_style = _resolve_style(style_template, style)
     wf_id = body.get("workflow_id", "")
     image_count = max(1, min(int(body.get("image_count", 1)), 4))
     orientation = body.get("orientation", "horizontal")
     if orientation not in ("horizontal", "vertical"):
         orientation = "horizontal"
     extra_hint = (body.get("extra_hint") or "").strip()
+    organized_prompt = (body.get("organized_prompt") or "").strip()
 
     if storyboard_grid not in (4, 6, 9, 16):
         storyboard_grid = 4
@@ -2344,69 +2889,80 @@ async def gen_story_template(body: dict):
     char_desc = "、".join(f"{c.get('name','')}" for c in characters) if characters else "无特定角色"
     scene_desc = "、".join(f"{s.get('name','')}: {s.get('description','')[:60]}" for s in scenes) if scenes else "无特定场景"
 
-    # 用分镜节点给出的每格描述作为每格画面依据；缺失时才退化为"依据剧情自行拆分"
-    # 分镜节点的描述里自带"第X排第Y格"行列定位（按分镜图宫格比例规划），
-    # 但故事板的比例/排布不同，位置对不上会误导模型，所以这里剥掉行列定位，只保留画面描述本身。
-    cut_lines = []
-    effective_grid = storyboard_grid
-    if grid_prompts:
-        effective_grid = len(grid_prompts)
-        for i, gp in enumerate(grid_prompts):
-            text = _strip_grid_position_and_style((gp or "").strip(), style)
-            if len(text) > 280:
-                text = text[:280] + "…"
-            cut_lines.append(f"第{i+1}格：{text}")
+    # 模板模式：使用已组织的提示词，跳过模板构建
+    if organized_prompt:
+        prompt = organized_prompt
+        style_tag = f"\n整体画面风格：{resolved_style}" if resolved_style else ""
+        if style_tag:
+            prompt = prompt + style_tag
+        if orientation == "vertical":
+            resolutions = [(2160, 3840), (1080, 1920)]
+        else:
+            resolutions = [(3840, 2160), (2560, 1440)]
     else:
-        for i in range(storyboard_grid):
-            cut_lines.append(f"第{i+1}格：依据剧情自行拆分本格画面内容")
-    cut_block = "\n".join(cut_lines)
+        # 用分镜节点给出的每格描述作为每格画面依据；缺失时才退化为"依据剧情自行拆分"
+        # 分镜节点的描述里自带"第X排第Y格"行列定位（按分镜图宫格比例规划），
+        # 但故事板的比例/排布不同，位置对不上会误导模型，所以这里剥掉行列定位，只保留画面描述本身。
+        cut_lines = []
+        effective_grid = storyboard_grid
+        if grid_prompts:
+            effective_grid = len(grid_prompts)
+            for i, gp in enumerate(grid_prompts):
+                text = _strip_grid_position_and_style((gp or "").strip(), style)
+                if len(text) > 280:
+                    text = text[:280] + "…"
+                cut_lines.append(f"第{i+1}格：{text}")
+        else:
+            for i in range(storyboard_grid):
+                cut_lines.append(f"第{i+1}格：依据剧情自行拆分本格画面内容")
+        cut_block = "\n".join(cut_lines)
 
-    style_tag = f"\n整体画面风格：{style}" if (style and style.strip()) else ""
+        style_tag = f"\n整体画面风格：{resolved_style}" if resolved_style else ""
 
-    if orientation == "vertical":
-        prompt = (
-            f"故事板设计图，竖版9:16比例，电影分镜板布局。\n"
-            f"剧情：{segment_text[:300]}\n"
-            f"总时长：{duration}秒（时间在各分镜之间按画面信息量和叙事节奏自由分配，不要求等分，只需保证总和=总时长）。\n"
-            f"人物：{char_desc}。场景：{scene_desc}。\n"
-            f"分镜内容（共{effective_grid}格，必须按顺序逐格对应以下描述绘制，画面主体/动作/构图/景别必须与下述一致）：\n"
-            f"{cut_block}\n"
-            f"结构要求：\n"
-            f"【分镜板】画面上部，{effective_grid}个分镜从上到下竖直顺序单列排列，每一格占一行，占据画面主要面积。\n"
-            f"每格必须标注：格编号（第1格、第2格…，严禁使用第X排第Y格或行列坐标）、"
-            f"该格的持续时长（由你根据该格画面节奏自行决定，如第1格 3.2s）、"
-            f"分镜画面、主体描述、动作、画面描述、镜头景别与运镜、台词、音效。\n"
-            f"【场景图】分镜板下方，2张俯视角场景全景图横向并列，无人物。\n"
-            f"【光影与氛围】底部排列，灯光效果、色彩板、风格标注。\n"
-            f"整体排版清晰，竖向长屏故事板风格，适配手机/短视频竖屏阅读，中文标注。"
-            f"{style_tag}"
-        )
-        resolutions = [(2160, 3840), (1080, 1920)]
-    else:
-        prompt = (
-            f"故事板设计图，横版16:9比例，电影分镜板布局。\n"
-            f"剧情：{segment_text[:300]}\n"
-            f"总时长：{duration}秒（时间在各分镜之间按画面信息量和叙事节奏自由分配，不要求等分，只需保证总和=总时长）。\n"
-            f"人物：{char_desc}。场景：{scene_desc}。\n"
-            f"分镜内容（共{effective_grid}格，必须按顺序逐格对应以下描述绘制，画面主体/动作/构图/景别必须与下述一致）：\n"
-            f"{cut_block}\n"
-            f"结构要求：\n"
-            f"【分镜板】画面中央靠上，{grid_label}宫格图顺序排列，共{effective_grid}个分镜。\n"
-            f"每格必须标注：格编号（第1格、第2格…，严禁使用第X排第Y格或行列坐标）、"
-            f"该格的持续时长（由你根据该格画面节奏自行决定，如第1格 3.2s）、"
-            f"分镜画面、主体描述、动作、画面描述、镜头景别与运镜、台词、音效。\n"
-            f"【场景图】分镜板下方，2张俯视角场景全景图，无人物。\n"
-            f"【光影与氛围】底部排列，灯光效果、色彩板、风格标注。\n"
-            f"整体排版清晰，专业电影故事板风格，中文标注。"
-            f"{style_tag}"
-        )
-        resolutions = [(3840, 2160), (2560, 1440)]
+        if orientation == "vertical":
+            prompt = (
+                f"故事板设计图，竖版9:16比例，电影分镜板布局。\n"
+                f"剧情：{segment_text[:300]}\n"
+                f"总时长：{duration}秒（时间在各分镜之间按画面信息量和叙事节奏自由分配，不要求等分，只需保证总和=总时长）。\n"
+                f"人物：{char_desc}。场景：{scene_desc}。\n"
+                f"分镜内容（共{effective_grid}格，必须按顺序逐格对应以下描述绘制，画面主体/动作/构图/景别必须与下述一致）：\n"
+                f"{cut_block}\n"
+                f"结构要求：\n"
+                f"【分镜板】画面上部，{effective_grid}个分镜从上到下竖直顺序单列排列，每一格占一行，占据画面主要面积。\n"
+                f"每格必须标注：格编号（第1格、第2格…，严禁使用第X排第Y格或行列坐标）、"
+                f"该格的持续时长（由你根据该格画面节奏自行决定，如第1格 3.2s）、"
+                f"分镜画面、主体描述、动作、画面描述、镜头景别与运镜、台词、音效。\n"
+                f"【场景图】分镜板下方，2张俯视角场景全景图横向并列，无人物。\n"
+                f"【光影与氛围】底部排列，灯光效果、色彩板、风格标注。\n"
+                f"整体排版清晰，竖向长屏故事板风格，适配手机/短视频竖屏阅读，中文标注。"
+                f"{style_tag}"
+            )
+            resolutions = [(2160, 3840), (1080, 1920)]
+        else:
+            prompt = (
+                f"故事板设计图，横版16:9比例，电影分镜板布局。\n"
+                f"剧情：{segment_text[:300]}\n"
+                f"总时长：{duration}秒（时间在各分镜之间按画面信息量和叙事节奏自由分配，不要求等分，只需保证总和=总时长）。\n"
+                f"人物：{char_desc}。场景：{scene_desc}。\n"
+                f"分镜内容（共{effective_grid}格，必须按顺序逐格对应以下描述绘制，画面主体/动作/构图/景别必须与下述一致）：\n"
+                f"{cut_block}\n"
+                f"结构要求：\n"
+                f"【分镜板】画面中央靠上，{grid_label}宫格图顺序排列，共{effective_grid}个分镜。\n"
+                f"每格必须标注：格编号（第1格、第2格…，严禁使用第X排第Y格或行列坐标）、"
+                f"该格的持续时长（由你根据该格画面节奏自行决定，如第1格 3.2s）、"
+                f"分镜画面、主体描述、动作、画面描述、镜头景别与运镜、台词、音效。\n"
+                f"【场景图】分镜板下方，2张俯视角场景全景图，无人物。\n"
+                f"【光影与氛围】底部排列，灯光效果、色彩板、风格标注。\n"
+                f"整体排版清晰，专业电影故事板风格，中文标注。"
+                f"{style_tag}"
+            )
+            resolutions = [(3840, 2160), (2560, 1440)]
 
     if extra_hint:
         prompt = prompt + f"\n【审核反馈（需在本次生成中解决）】：{extra_hint}"
 
-    ref_imgs = collect_ref_images(characters=characters, scenes=scenes)
-    ref_prefix = build_ref_index_prefix(characters=characters, scenes=scenes)
+    ref_imgs = collect_ref_images(characters=characters, scenes=scenes, extra_urls=ref_image_urls)
+    ref_prefix = build_ref_index_prefix(characters=characters, scenes=scenes, extra_labels=[(u, "故事模板参考图") for u in ref_image_urls])
     if ref_prefix:
         prompt = ref_prefix + prompt
 
@@ -2447,28 +3003,39 @@ async def gen_frame_prompt(body: dict):
     last_frame_url = body.get("last_frame_url", "")
     wf_id = body.get("workflow_id", "")
 
-    system_prompt = f"""你是AI视频生成提示词专家。用户会提供一段视频的首帧画面和尾帧画面（图片），以及这段时间内发生的剧情描述。
+    system_prompt = f"""你是AI视频生成提示词专家，精通图生视频（I2V）和首尾帧参考的提示词写法。
 
-你的任务是根据这些信息，生成一段完整的视频提示词，时长{duration}秒。
+核心原理：首尾帧模式下，画面构成已由图片完全决定（主体外貌、场景环境、光线色调都被图锁死）。
+提示词的唯一有效作用是描述"从首帧到尾帧的过渡过程"——怎么动、怎么变化。
 
-提示词必须包含以下内容，分为两段：
+用户提供了首帧画面和/或尾帧画面（图片），以及这段{duration}秒内发生的剧情。
 
-第一段【画面与运镜】：
-- 从首帧画面开始，到尾帧画面结束
-- 详细描述画面中发生的动作、表情、姿态变化
-- 明确说明运镜方式（推/拉/摇/移/跟/升/降/环绕/手持等）
-- 说明镜头过渡方式（切/溶/淡入淡出/划等）
-- 描述景别变化（特写/近景/中景/全景/远景）
-- 描述光线、色调、氛围的变化
-- 注意首尾帧之间的连贯性和自然过渡
+你的任务：生成一段{duration}秒的视频提示词，重心放在【运动过程】和【变化描述】上。
+
+【写作原则】
+1. 不要描述图中已有的静态信息（人物外貌、服装、场景布置等图已决定的内容）
+2. 80%篇幅写运动：主体的具体动作 + 镜头怎么动 + 氛围细节变化
+3. 用"过渡动词"连接首尾状态（缓缓+起身/转身/走向；渐渐+变亮/变暗；逐步+张开/闭合）
+4. 写出关键的"中间状态"（如从坐到站，中间是"双手撑桌、半起身"）
+5. 速度副词非常关键（缓缓/轻轻/渐渐/微微），防止模型在中段加速导致崩坏
+6. 提示词越短越好（15-40词为佳），信息密度优先
+7. 不要用否定句，不要堆砌抽象形容词（"美丽的""唯美的"对模型无效）
+
+【输出格式】分为两段：
+
+第一段【画面与运镜】（核心，占主要篇幅）：
+- 主体动作：[谁][速度副词][具体动作过程]，写出从首帧到尾帧的完整过渡
+- 镜头运动：从高频词选择（静止/缓推/拉远/环绕/跟拍/横移/上摇/下摇/手持）
+- 氛围微变：自然元素的渐变（头发飘动/光线渐变/雾气流动等，可选）
+- 景深变化（可选）
 
 第二段【配音与音效】：
 - 配音内容（台词/旁白，含语气、情绪、语速描述）
 - 环境音（风声、雨声、人群声等）
-- 特效音（脚步声、门声、音乐节奏等）
+- 特效音（脚步声、门声等）
 - 音乐风格和节奏建议
 
-仔细观察首帧和尾帧图片的实际内容（人物、场景、光线、构图），确保提示词与图片内容一致。
+仔细观察首帧和尾帧图片，确保过渡描述与两端画面内容一致。
 
 只输出JSON：{{"full_text": "第一段...\\n\\n第二段..."}}"""
 
@@ -2653,15 +3220,23 @@ async def review_frame_plan(body: dict):
     points_text = "\n".join(review_points)
     json_structure = ", ".join(json_fields)
 
-    system_prompt = f"""你是一位资深电影分镜师。请审核以下帧画面规划中的 {target} 是否合理。
+    system_prompt = f"""你是一位资深电影分镜师，精通视频生成模型的提示词原理。请审核以下帧画面规划中的 {target} 是否合理。
 风格：{style}
 注意：用户只启用了 {target}，其他帧节点已跳过，不要评价未启用的部分。
 
 审核要点：
 {points_text}
+- 描述是否使用具体可视的词汇（训练标注语法），而非抽象感受词
+- 每格分镜是否只有一个核心动作（多动作堆叠会导致视频生成失败）
+- 景别是否明确标注（特写/近景/中景/全景/远景）
+- 是否有景别变化（避免所有格都是同一景别，推荐远→中→近或近→中→远的节奏）
+- 动作描述是否带速度副词（缓缓/轻轻/渐渐/微微）
 
 如果规划合理，返回 passed=true。
-如果有问题，返回 passed=false，并在 revised_data 中给出修改后的规划。
+如果有问题，返回 passed=false，并在 revised_data 中给出修改后的规划。修改时确保：
+- 每格只保留一个核心动作
+- 补充缺失的景别标注
+- 将抽象词替换为具体可视描述
 所有输出内容必须使用中文。
 
 只输出JSON：
@@ -2700,14 +3275,18 @@ async def review_image(body: dict):
 风格：{style}
 
 审核要点：
-1. 图片内容是否准确反映了描述中的画面
+1. 图片内容是否准确反映了描述中的画面（主体、动作、场景）
 2. 人物的动作、表情、站位是否与描述一致
-3. 场景环境、光线、氛围是否正确
-4. 构图和镜头角度是否合理
-5. 整体风格是否统一
+3. 场景环境、光线方向是否正确
+4. 构图和景别是否合理（中景和近景最稳定，大特写容易畸形，大远景容易糊主体）
+5. 如果是分镜图，各格之间的景别是否有变化（远→中→近 或 近→中→远），避免所有格都是同一景别
 
 如果图片合理，返回 passed=true。
-如果有问题，返回 passed=false，并给出修改后的 visual_prompt 用于重新生成。
+如果有问题，返回 passed=false，并给出修改后的 visual_prompt。修改时注意：
+- 用具体可视的描述词（训练标注语法），不要用抽象感受词
+- 景别明确写出（特写/近景/中景/全景/远景）
+- 光线明确写出（黄金时刻/侧光/逆光/柔和窗光等）
+- 构图明确写出（居中/三分法/对称/引导线等）
 所有输出内容必须使用中文。
 
 只输出JSON：
@@ -2746,23 +3325,29 @@ async def review_video_prompt(body: dict):
         b = load_ref_image_b64(last_frame_url)
         if b: vision_images.append({"b64": b, "label": "尾帧画面"})
 
-    system_prompt = f"""你是一位资深视频导演和AI视频提示词专家。请审核以下视频提示词是否存在会影响视频生成质量的明显错误。
+    system_prompt = f"""你是一位资深视频导演和AI视频提示词专家，精通视频生成模型的工作原理。请审核以下视频提示词是否存在会影响视频生成质量的问题。
 
-仔细观察提供的参考图片（首帧、分镜图、尾帧），逐格对照提示词中的动作描述进行审核。
+核心审核原则：视频生成模型在训练数据分布里匹配视频片段，提示词必须像训练标注的语法才有效。
 
-审核范围（只关注以下问题，其他方面不要评价）：
-1. 人物动作/姿态描述是否与参考图片中的实际画面一致（这是最重要的，仔细观察每张图中人物的手、脚、身体姿态）
-2. 运镜描述是否合理（推/拉/摇/移/跟等是否流畅、是否有助于叙事）
-3. 时间分配是否合理，关键动作是否有足够时长
-4. 画面之间的过渡是否连贯
+仔细观察提供的参考图片（首帧、分镜图、尾帧），逐格对照提示词中的描述进行审核。
+
+审核范围（按优先级排序）：
+1. 【动作可执行性】每个时间段是否只有一个核心动作？多动作堆叠会导致模型无法执行（最常见的错误）
+2. 【动作与画面一致】人物动作/姿态描述是否与参考图片中的实际画面一致（仔细观察手、脚、身体姿态）
+3. 【词汇有效性】是否使用了对模型无效的抽象词（"高级感""氛围感""史诗级""唯美""治愈系"等），这些词在训练标注中不存在，模型无法响应
+4. 【运镜合理性】镜头运动是否使用高频词（静止/缓推/拉远/环绕/跟拍/横移/上摇/下摇/手持），是否流畅、有助于叙事
+5. 【时间分配】关键动作是否有足够时长，是否有无意义的过渡占用时间
+6. 【画面过渡】相邻时间段之间的过渡是否连贯
+7. 【I2V原则】如果有首帧/尾帧参考图，提示词是否错误地重复描述了图中已有的静态信息（应该只写运动过程）
 
 不要审核的内容（以下问题直接忽略，不影响通过）：
 - 风格描述（风格会在生成时统一附加）
 - 背景场景细节（光线、天气、环境物体等）
 - 色调、氛围等美术方向
 
-如果提示词没有明显的动作描述错误和运镜问题，返回 passed=true。
-只有存在动作与画面明显不符、运镜逻辑错误等会直接影响视频生成的问题时，才返回 passed=false，并给出修改后的完整提示词。
+判定标准：
+- 如果提示词没有上述1-4项的明显问题，返回 passed=true
+- 如果存在动作堆叠、动作与画面不符、大量无效词汇、运镜逻辑错误等问题，返回 passed=false，并给出修改后的完整提示词
 所有输出内容必须使用中文。
 
 只输出JSON：
@@ -2823,21 +3408,22 @@ async def review_story_template(body: dict):
             "强调与分镜图对照一致的要求（例如补充景别、运镜、构图、场景、姿态等约束）。"
         )
 
-    system_prompt = f"""你是一位资深影视编导。请以专业编导的视角审核以下故事模板图片。
+    system_prompt = f"""你是一位资深影视编导，精通视频生成模型的提示词原理。请以专业编导的视角审核以下故事模板图片。
 风格：{style}
 
 审核要点：
 1. 故事模板中的分镜内容是否与剧情匹配
-2. 分镜的叙事节奏是否合理（起承转合）
-3. 画面构图是否专业，镜头语言是否丰富
-4. 人物动作和表情是否自然、有表现力
-5. 场景切换是否流畅，视觉连贯性如何
-6. 整体是否达到专业编导的制作标准{ref_section}
+2. 分镜的叙事节奏是否合理（铺垫→高潮→收尾，景别应有变化：远→中→近 或 近→中→远）
+3. 每格是否只有一个核心动作（多动作堆叠会导致后续视频生成失败）
+4. 画面构图是否使用了明确的景别（特写/近景/中景/全景/远景）和构图法（居中/三分法/对称/引导线）
+5. 人物动作描述是否具体可执行（带速度副词），而非抽象泛写
+6. 场景切换是否流畅，视觉连贯性如何
+7. 是否存在对视频模型无效的抽象词（"高级感""氛围感""史诗级"等应替换为具体可视描述）{ref_section}
 
 输出要求：
 - analysis 必填。无论 passed 是 true 还是 false，都必须给出详细的中文审核理由（至少 30 字），说明看到了什么、为什么通过或不通过。禁止返回空字符串。
 - 如果故事模板合理且与分镜图（若提供）一致，passed=true。
-- 如果有问题，passed=false，并在 revise_hint 中给出**简短具体的中文微调指令**（50~200字），用于在下一轮重新生成时叠加到原提示词末尾。revise_hint 必须是可执行的整改要点，例如"第2格改为俯拍全景，人物姿态改为抬头仰望"，而不是整篇提示词。
+- 如果有问题，passed=false，并在 revise_hint 中给出**简短具体的中文微调指令**（50~200字），用于在下一轮重新生成时叠加到原提示词末尾。revise_hint 必须是可执行的整改要点，例如"第2格改为俯拍全景，人物姿态改为抬头仰望；第4格动作拆分，只保留转身动作"，而不是整篇提示词。
 - revised_prompt 可选：如果你认为必须整段重写原提示词才能修复，再填入完整新提示词；否则保持空字符串。
 
 所有输出内容必须使用中文。
